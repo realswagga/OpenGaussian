@@ -76,7 +76,7 @@
     <div class="demo-card">
       <h2>Default (quality=auto, markers on)</h2>
       <gs-viewer
-        scene="demo-scene"
+        scene="your-scene-slug"
         height="520"
         quality="auto"
         show-markers="true"
@@ -88,7 +88,7 @@
     <div class="demo-card">
       <h2>Minimal (quality=low, locked, ui=minimal)</h2>
       <gs-viewer
-        scene="demo-scene"
+        scene="your-scene-slug"
         height="520"
         quality="low"
         show-markers="false"
@@ -104,7 +104,7 @@
 <script src="http://localhost:8080/widget/gs-viewer.js"></script>
 
 <gs-viewer
-  scene="demo-scene"
+  scene="your-scene-slug"
   height="520"
   quality="auto"
   show-markers="true"
@@ -115,7 +115,7 @@
     </div>
     <h2 style="font-size: 0.875rem; font-weight: 600; margin: 1.25rem 0 0.75rem;">Attributes</h2>
     <div class="code-block">
-scene          required  — scene slug
+scene          required  — scene slug (replace "your-scene-slug" with a published scene slug)
 height         optional  — CSS height, default 480px
 quality        optional  — auto | low | medium | high | ultra
 show-markers   optional  — true | false
