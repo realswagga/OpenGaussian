@@ -65,17 +65,6 @@ Once all services are healthy, open:
 
 Change these via `ADMIN_SEED_EMAIL` and `ADMIN_SEED_PASSWORD` in `.env`.
 
-## Demo Scene
-
-The seed script generates a **300,000-point Gaussian Splat PLY** of a modern living room with:
-- Floor, walls, ceiling
-- Sofa, coffee table, TV unit
-- Rug, plant, floor lamp
-
-It also creates **6 markers** (Sofa, TV Unit, Coffee Table, Dining Area, Plant Corner, Floor Lamp) with descriptions.
-
-Visit `http://localhost:8080/splats/demo-scene` to explore.
-
 ## Upload Your Own Splat
 
 1. Log into admin: `http://localhost:8080/admin`
@@ -115,7 +104,7 @@ curl -X POST http://localhost:8080/api/admin/splats/{id}/markers \
 <script src="http://localhost:8080/widget/gs-viewer.js"></script>
 
 <gs-viewer
-  scene="demo-scene"
+  scene="your-scene-slug"
   height="520"
   quality="auto"
   show-markers="true"
