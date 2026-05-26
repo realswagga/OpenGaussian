@@ -1,0 +1,10 @@
+node_modules
+dist
+*.tsbuildinfo
+.git
+.gitignore
+*.md
+.env
+.env.local
+plan.md
+rules.md

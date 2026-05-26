@@ -1,0 +1,19 @@
+{
+  "name": "gsplat-platform",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Web-hosted Gaussian Splat Viewer Platform",
+  "scripts": {
+    "dev": "pnpm -r run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "docker:build": "docker compose build",
+    "docker:up": "docker compose up --build",
+    "docker:down": "docker compose down"
+  },
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=9.0.0"
+  }
+}
