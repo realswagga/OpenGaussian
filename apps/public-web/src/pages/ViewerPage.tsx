@@ -22,13 +22,28 @@ interface DebugInfo {
   lodActive: boolean;
 }
 
-function detectFeatures() {
+function detectFeaturesSync() {
   const webgpu = typeof navigator !== 'undefined' && 'gpu' in navigator;
   const webxr = typeof navigator !== 'undefined' && 'xr' in navigator;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const vrSupported = webxr && typeof (navigator as any).xr?.isSessionSupported === 'function';
   const isMobile = typeof window !== 'undefined' && window.innerWidth < 768;
-  return { webgpu, webxr, vrSupported, isMobile };
+  return { webgpu, webxr, isMobile };
+}
+
+/**
+ * Probes real VR support by calling `navigator.xr.isSessionSupported('immersive-vr')`.
+ * Returns `null` while the async check is running, `true` when VR is available,
+ * or `false` when it is not.
+ */
+async function probeVrSupport(): Promise<boolean> {
+  if (typeof navigator === 'undefined') return false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const xr = (navigator as any).xr;
+  if (!xr || typeof xr.isSessionSupported !== 'function') return false;
+  try {
+    return await xr.isSessionSupported('immersive-vr');
+  } catch {
+    return false;
+  }
 }
 
 export default function ViewerPage() {
@@ -45,7 +60,9 @@ export default function ViewerPage() {
   const [cameraMode, setCameraMode] = useState<string>('orbit');
   const [showPoster, setShowPoster] = useState(true);
   const [loadProgress, setLoadProgress] = useState<ViewerRuntimeProgress | null>(null);
-  const [features] = useState(detectFeatures());
+  const [features] = useState(detectFeaturesSync);
+  const [vrSupported, setVrSupported] = useState<boolean | null>(null);
+  const [vrChecked, setVrChecked] = useState(false);
   const [showDebug, setShowDebug] = useState(() => localStorage.getItem(VIEWER_READY_KEY + '_debug') === 'true');
   const [debugInfo, setDebugInfo] = useState<DebugInfo>({
     fps: 0,
@@ -61,6 +78,19 @@ export default function ViewerPage() {
     assetFormat: '—',
     lodActive: false,
   });
+
+  // Probe real VR support asynchronously (required for secure-context check
+  // on mobile XR browsers like Quest Browser).
+  useEffect(() => {
+    let cancelled = false;
+    probeVrSupport().then((ok) => {
+      if (!cancelled) {
+        setVrSupported(ok);
+        setVrChecked(true);
+      }
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Fetch manifest and markers
   useEffect(() => {
@@ -289,7 +319,7 @@ export default function ViewerPage() {
             <option value="high">High</option>
             <option value="ultra">Ultra</option>
           </select>
-          {manifest.viewer?.enableVr && features.vrSupported && (
+          {manifest.viewer?.enableVr && vrSupported && (
             <button
               onClick={() => viewerRef.current?.enterVr()}
               style={styles.vrButton}
@@ -299,7 +329,7 @@ export default function ViewerPage() {
               VR
             </button>
           )}
-          {manifest.viewer?.enableVr && !features.vrSupported && (
+          {manifest.viewer?.enableVr && vrChecked && !vrSupported && (
             <span style={styles.vrUnavailable} title="WebXR VR not available in this browser">
               VR ✕
             </span>
