@@ -12,13 +12,13 @@ describe('chooseRendererMode', () => {
     expect(chooseRendererMode({ requested: 'webgpu', isVrRequested: false, webgpuSupported: true })).toBe('webgpu');
   });
 
-  it('returns webgpu in auto mode when supported', () => {
-    expect(chooseRendererMode({ requested: 'auto', isVrRequested: false, webgpuSupported: true })).toBe('webgpu');
+  it('prefers webgl2 in auto mode for visual stability', () => {
+    expect(chooseRendererMode({ requested: 'auto', isVrRequested: false, webgpuSupported: true })).toBe('webgl2');
+    expect(chooseRendererMode({ requested: 'auto', isVrRequested: false, webgpuSupported: false })).toBe('webgl2');
   });
 
   it('falls back to webgl2 when webgpu is not supported', () => {
     expect(chooseRendererMode({ requested: 'webgpu', isVrRequested: false, webgpuSupported: false })).toBe('webgl2');
-    expect(chooseRendererMode({ requested: 'auto', isVrRequested: false, webgpuSupported: false })).toBe('webgl2');
   });
 
   it('returns webgl2 when explicitly requested', () => {

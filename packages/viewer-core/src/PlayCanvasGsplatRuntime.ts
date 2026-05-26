@@ -173,9 +173,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.emitProgress('loading-metadata', 'Preparing PlayCanvas GSplat runtime');
 
     const requested = this.options.rendererMode || 'auto';
+    // When VR is enabled, force WebGL2 so the graphics device can be created
+    // with xrCompatible: true.  This follows the project rule: "VR requested
+    // or active -> prefer stable WebGL2 path".
+    const vrEnabled = this.manifest.viewer.enableVr !== false;
     this.rendererMode = chooseRendererMode({
       requested,
-      isVrRequested: false,
+      isVrRequested: vrEnabled,
       webgpuSupported: isWebGPUAvailable(),
     });
 

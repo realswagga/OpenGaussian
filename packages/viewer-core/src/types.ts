@@ -181,10 +181,9 @@ export function chooseRendererMode(input: {
     return 'webgpu';
   }
 
-  if (input.requested === 'auto' && input.webgpuSupported) {
-    return 'webgpu';
-  }
-
+  // Prefer WebGL2 by default — it is more visually stable across devices
+  // and avoids WebGPU rendering artifacts that are still being resolved
+  // upstream in the PlayCanvas GSplat pipeline.
   return 'webgl2';
 }
 
