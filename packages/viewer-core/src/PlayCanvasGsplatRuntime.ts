@@ -377,24 +377,33 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     });
   }
 
-  async enterVr(): Promise<void> {
+  enterVr(): Promise<void> {
     if (!this.app || !this.camera?.camera) {
-      this.options.onError?.(new Error('Viewer is not ready for VR'));
-      return;
+      return Promise.reject(new Error('Viewer is not ready for VR'));
     }
     if (this.rendererMode === 'webgpu') {
-      this.options.onError?.(new Error('VR uses the WebGL2 renderer path; reload with WebGL2 to enter VR'));
-      return;
+      return Promise.reject(new Error('VR requires the WebGL2 renderer. Switch to WebGL2 first.'));
     }
     if (!this.app.xr?.supported || !this.app.xr.isAvailable(XRTYPE_VR)) {
-      this.options.onError?.(new Error('Immersive VR not supported on this device/browser'));
-      return;
+      return Promise.reject(new Error('Immersive VR not supported on this device/browser'));
     }
 
-    this.app.xr.start(this.camera.camera, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
-      callback: (error?: Error | null) => {
-        if (error) this.options.onError?.(error);
-      },
+    // Wrap PlayCanvas' callback-based xr.start() into a Promise so the caller
+    // can await the XR session and catch errors (required by WebXR user-gesture flow).
+    return new Promise<void>((resolve, reject) => {
+      try {
+        this.app!.xr!.start(this.camera!.camera!, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
+          callback: (error?: Error | null) => {
+            if (error) {
+              reject(error);
+            } else {
+              resolve();
+            }
+          },
+        });
+      } catch (syncError) {
+        reject(syncError instanceof Error ? syncError : new Error(String(syncError)));
+      }
     });
   }
 

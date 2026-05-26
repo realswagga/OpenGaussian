@@ -7,6 +7,8 @@ const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const VIEWER_READY_KEY = 'gsplat_viewer_ready_v1';
 
+type RendererPref = 'webgl2' | 'webgpu';
+
 interface DebugInfo {
   fps: number;
   splats: number;
@@ -57,6 +59,11 @@ export default function ViewerPage() {
   const [viewerReady, setViewerReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [vrError, setVrError] = useState<string | null>(null);
+  const [rendererPref, setRendererPref] = useState<RendererPref>(() => {
+    const saved = localStorage.getItem(VIEWER_READY_KEY + '_renderer');
+    if (saved === 'webgpu') return 'webgpu';
+    return 'webgl2';
+  });
   const [quality, setQuality] = useState<string>(() => localStorage.getItem(VIEWER_READY_KEY + '_quality') || 'auto');
   const [cameraMode, setCameraMode] = useState<string>('orbit');
   const [showPoster, setShowPoster] = useState(true);
@@ -124,7 +131,20 @@ export default function ViewerPage() {
       });
   }, [slug]);
 
-  // Initialize viewer when manifest loads and canvas mounts
+  // Toggle renderer — destroys current viewer and recreates with new pref
+  const toggleRenderer = useCallback(() => {
+    setRendererPref((prev) => {
+      const next: RendererPref = prev === 'webgpu' ? 'webgl2' : 'webgpu';
+      localStorage.setItem(VIEWER_READY_KEY + '_renderer', next);
+      return next;
+    });
+    // Force viewer recreation by resetting ready flag
+    setViewerReady(false);
+    setShowPoster(true);
+    setVrError(null);
+  }, []);
+
+  // Initialize viewer when manifest loads and canvas mounts, or when rendererPref changes
   useEffect(() => {
     if (!manifest || !canvasRef.current) return;
 
@@ -135,7 +155,7 @@ export default function ViewerPage() {
       markers,
       cameraMode: 'orbit',
       quality: quality as 'auto' | 'low' | 'medium' | 'high' | 'ultra',
-      rendererMode: manifest.viewer?.enableWebGpu ? 'auto' : 'webgl2',
+      rendererMode: rendererPref,
       showMarkers: true,
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
@@ -182,7 +202,7 @@ export default function ViewerPage() {
       setViewerReady(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, markers]);
+  }, [manifest, markers, rendererPref]);
 
   // Sync markers to existing viewer
   useEffect(() => {
@@ -310,14 +330,19 @@ export default function ViewerPage() {
             ← Scenes
           </Link>
           <span style={styles.sceneTitle}>{manifest.title}</span>
-          {!features.webgpu && (
+          {/* Clickable renderer toggle — replaces static badges */}
+          {features.webgpu ? (
+            <button
+              onClick={toggleRenderer}
+              style={rendererPref === 'webgpu' ? styles.rendererBadgeActive : styles.rendererBadgeInactive}
+              title={`Click to switch to ${rendererPref === 'webgpu' ? 'WebGL2' : 'WebGPU'}`}
+              aria-label={`Renderer: ${rendererPref}. Click to switch.`}
+            >
+              {rendererPref === 'webgpu' ? 'WebGPU' : 'WebGL2'}
+            </button>
+          ) : (
             <span style={styles.featureBadgeOff} title="WebGPU not available in this browser">
               WebGL2
-            </span>
-          )}
-          {features.webgpu && (
-            <span style={styles.featureBadgeOn} title="WebGPU available">
-              WebGPU
             </span>
           )}
         </div>
@@ -742,6 +767,26 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #2a2a2a',
     borderRadius: 4,
     color: '#737373',
+  },
+  // Clickable renderer toggle button
+  rendererBadgeActive: {
+    fontSize: '0.625rem',
+    padding: '0.125rem 0.5rem',
+    background: '#0a2a0a',
+    border: '1px solid #22c55e',
+    borderRadius: 4,
+    color: '#22c55e',
+    fontWeight: 600,
+    cursor: 'pointer',
+  },
+  rendererBadgeInactive: {
+    fontSize: '0.625rem',
+    padding: '0.125rem 0.5rem',
+    background: '#111',
+    border: '1px solid #2a2a2a',
+    borderRadius: 4,
+    color: '#737373',
+    cursor: 'pointer',
   },
   vrUnavailable: {
     fontSize: '0.625rem',
