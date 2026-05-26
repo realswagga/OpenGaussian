@@ -155,6 +155,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   // Fly mode state
   private flyYaw = 0;
   private flyPitch = 0;
+  // VR locomotion state
+  private vrActive = false;
+  private readonly vrMoveSpeed = 3.0;
+  private readonly vrTurnSpeed = 2.5;
 
   constructor(options: ViewerOptions) {
     this.canvas = options.canvas;
@@ -397,6 +401,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
             if (error) {
               reject(error);
             } else {
+              // Capture the session for gamepad polling and bind end event
+              this.vrActive = true;
+              const session = (this.app!.xr as unknown as { _session?: XRSession })._session;
+              if (session) {
+                session.addEventListener('end', this.onVrSessionEnd, { once: true });
+              }
               resolve();
             }
           },
@@ -407,7 +417,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     });
   }
 
+  private onVrSessionEnd = (): void => {
+    this.vrActive = false;
+  };
+
   async exitVr(): Promise<void> {
+    this.vrActive = false;
     if (this.app?.xr?.active) {
       this.app.xr.end();
     }
@@ -726,6 +741,101 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.flyPitch = Math.max(-1.5, Math.min(1.5, this.flyPitch - dy * 0.003));
   };
 
+  private updateVrLocomotion(dt: number): void {
+    if (!this.vrActive || !this.app?.xr?.active || !this.camera) return;
+
+    // Access the underlying XRSession to poll gamepad states
+    const xrManager = this.app.xr as unknown as {
+      _session?: XRSession;
+    };
+    const session = xrManager._session;
+    if (!session?.inputSources) return;
+
+    const cameraEntity = this.camera;
+    const speed = this.vrMoveSpeed * dt;
+    const turnAmount = this.vrTurnSpeed * dt;
+
+    for (const source of session.inputSources) {
+      const gamepad = source.gamepad;
+      if (!gamepad) continue;
+
+      const axes = gamepad.axes;
+      if (axes.length < 4) continue;
+
+      // Left stick: axes[0]=left/right, axes[1]=up/down (Y is usually inverted: -1=up)
+      const lx = axes[0] ?? 0;
+      const ly = axes[1] ?? 0;
+
+      // Right stick: axes[2]=left/right, axes[3]=up/down
+      const rx = axes[2] ?? 0;
+      // ry (axes[3]) is unused for head rotation — right stick X controls yaw
+
+      // Determine if this is left or right hand based on handedness
+      const isRightHand = source.handedness === 'right';
+
+      if (isRightHand) {
+        // Right controller: right stick rotates head (yaw)
+        if (Math.abs(rx) > 0.1) {
+          // Rotate cameraRoot around world Y axis for smooth turning
+          const euler = cameraEntity.getEulerAngles().clone();
+          euler.y -= rx * turnAmount;
+          cameraEntity.setEulerAngles(euler);
+        }
+        // Left stick on right controller also moves
+        if (Math.abs(lx) > 0.1 || Math.abs(ly) > 0.1) {
+          this.applyVrMovement(lx, ly, isRightHand ? 'hand' : 'hand', speed);
+        }
+      } else {
+        // Left controller: left stick moves
+        if (Math.abs(lx) > 0.1 || Math.abs(ly) > 0.1) {
+          this.applyVrMovement(lx, ly, 'hand', speed);
+        }
+      }
+    }
+  }
+
+  /**
+   * Apply VR joystick movement relative to the controller or head orientation.
+   * Left stick: horizontal plane movement (forward/back/strafe).
+   */
+  private applyVrMovement(
+    stickX: number,
+    stickY: number,
+    _sourceType: string,
+    speed: number,
+  ): void {
+    if (!this.camera || !this.cameraRoot) return;
+
+    // Use camera forward/right projected onto horizontal plane for movement direction
+    const forward = this.camera.forward.clone();
+    forward.y = 0;
+    if (forward.lengthSq() < 0.0001) {
+      // Camera is looking straight up/down, fall back to cameraRoot forward
+      const rootForward = this.cameraRoot.forward.clone();
+      rootForward.y = 0;
+      if (rootForward.lengthSq() < 0.0001) return;
+      rootForward.normalize();
+      forward.copy(rootForward);
+    } else {
+      forward.normalize();
+    }
+
+    const right = this.camera.right.clone();
+    right.y = 0;
+    right.normalize();
+
+    // stickY: negative = forward (push stick up), positive = backward
+    // stickX: positive = right, negative = left
+    const moveVec = new Vec3();
+    moveVec.add(forward.mulScalar(-stickY * speed));
+    moveVec.add(right.mulScalar(stickX * speed));
+
+    // Move the cameraRoot entity
+    const pos = this.cameraRoot.getPosition().clone();
+    pos.add(moveVec);
+    this.cameraRoot.setPosition(pos);
+  }
+
   private onUpdate(dt: number): void {
     const now = performance.now();
     if (this.lastUpdateTime > 0) {
@@ -736,7 +846,11 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       }
     }
     this.lastUpdateTime = now;
-    if (this.currentCameraMode === 'fly') {
+
+    // VR locomotion takes priority — use gamepad joysticks
+    if (this.vrActive) {
+      this.updateVrLocomotion(dt);
+    } else if (this.currentCameraMode === 'fly') {
       this.updateFlyCamera(dt);
     } else if (this.currentCameraMode === 'orbit') {
       this.updateOrbitPan(dt);
