@@ -56,6 +56,7 @@ export default function ViewerPage() {
   const [loading, setLoading] = useState(true);
   const [viewerReady, setViewerReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [vrError, setVrError] = useState<string | null>(null);
   const [quality, setQuality] = useState<string>(() => localStorage.getItem(VIEWER_READY_KEY + '_quality') || 'auto');
   const [cameraMode, setCameraMode] = useState<string>('orbit');
   const [showPoster, setShowPoster] = useState(true);
@@ -145,6 +146,7 @@ export default function ViewerPage() {
       },
       onError: (err: Error) => {
         console.error('Viewer error:', err);
+        setVrError(err.message);
         setShowPoster(false);
       },
       onStats: (stats: ViewerStats) => {
@@ -203,6 +205,17 @@ export default function ViewerPage() {
       viewerRef.current.setCameraMode(cameraMode as 'orbit' | 'fly' | 'locked');
     }
   }, [cameraMode]);
+
+  // VR entry handler — surfaces errors to the user instead of swallowing them
+  const handleEnterVr = useCallback(async () => {
+    setVrError(null);
+    try {
+      await viewerRef.current?.enterVr();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'VR failed';
+      setVrError(message);
+    }
+  }, []);
 
   // Toggle debug overlay with ` key
   const toggleDebug = useCallback(() => {
@@ -276,6 +289,20 @@ export default function ViewerPage() {
         </div>
       )}
 
+      {/* VR error toast */}
+      {vrError && (
+        <div style={styles.vrErrorToast} role="alert">
+          <span>{vrError}</span>
+          <button
+            onClick={() => setVrError(null)}
+            style={styles.vrErrorClose}
+            aria-label="Dismiss VR error"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
       {/* Top bar */}
       <div style={styles.topBar}>
         <div style={styles.topBarLeft}>
@@ -321,7 +348,7 @@ export default function ViewerPage() {
           </select>
           {manifest.viewer?.enableVr && vrSupported && (
             <button
-              onClick={() => viewerRef.current?.enterVr()}
+              onClick={handleEnterVr}
               style={styles.vrButton}
               title="Enter VR mode"
               aria-label="Enter VR"
@@ -724,6 +751,35 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     color: '#737373',
     cursor: 'not-allowed',
+  },
+  // VR error toast
+  vrErrorToast: {
+    position: 'fixed' as const,
+    top: '3.5rem',
+    left: '50%',
+    transform: 'translateX(-50%)',
+    zIndex: 60,
+    display: 'flex',
+    alignItems: 'center',
+    gap: '0.5rem',
+    padding: '0.5rem 0.75rem',
+    background: 'rgba(239, 68, 68, 0.92)',
+    color: '#fff',
+    borderRadius: 6,
+    fontSize: '0.75rem',
+    fontWeight: 500,
+    maxWidth: '90vw',
+    animation: 'fadeIn 150ms ease',
+  },
+  vrErrorClose: {
+    background: 'none',
+    border: 'none',
+    color: '#fff',
+    cursor: 'pointer',
+    fontSize: '1rem',
+    padding: 0,
+    lineHeight: 1,
+    marginLeft: '0.25rem',
   },
   // Mobile bottom sheet
   bottomSheetOverlay: {

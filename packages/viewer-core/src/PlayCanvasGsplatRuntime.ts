@@ -407,6 +407,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private async createApp(rendererMode: RendererBackend): Promise<void> {
     const profile = qualityForPreset(this.currentQuality);
     const deviceTypes = rendererMode === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2'];
+    const vrRequested = this.manifest.viewer.enableVr !== false;
     const device = await createGraphicsDevice(this.canvas, {
       deviceTypes,
       antialias: profile.antialias,
@@ -415,7 +416,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       xrCompatible: rendererMode !== 'webgpu',
       powerPreference: 'high-performance',
     });
-    this.rendererMode = device.deviceType === 'webgpu' ? 'webgpu' : 'webgl2';
+    // When VR is enabled, lock to WebGL2 regardless of what the graphics
+    // device reports. Some PlayCanvas/browser builds may report 'webgpu'
+    // even when deviceTypes is restricted to ['webgl2'].
+    this.rendererMode = vrRequested
+      ? 'webgl2'
+      : (device.deviceType === 'webgpu' ? 'webgpu' : 'webgl2');
     device.maxPixelRatio = Math.min(window.devicePixelRatio || 1, profile.maxDevicePixelRatio);
 
     this.app = new GsplatApp(this.canvas, {
