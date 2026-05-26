@@ -345,6 +345,7 @@ export default function ViewerPage() {
               WebGL2
             </span>
           )}
+          <span style={styles.versionBadge}>v0.1.0</span>
         </div>
 
         <div style={styles.controlsGroup}>
@@ -787,6 +788,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     color: '#737373',
     cursor: 'pointer',
+  },
+  versionBadge: {
+    fontSize: '0.625rem',
+    padding: '0.125rem 0.5rem',
+    background: '#111',
+    border: '1px solid #2a2a2a',
+    borderRadius: 4,
+    color: '#555',
+    fontFamily: 'monospace',
+    letterSpacing: '0.02em',
+    userSelect: 'none' as const,
   },
   vrUnavailable: {
     fontSize: '0.625rem',
