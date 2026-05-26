@@ -1,0 +1,22 @@
+{
+  "name": "@gsplat/viewer-widget",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/gs-viewer.js",
+  "exports": {
+    ".": "./dist/gs-viewer.js"
+  },
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite build --watch",
+    "lint": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@gsplat/viewer-core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vite": "^5.4.0"
+  }
+}

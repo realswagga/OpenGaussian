@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>GSViewer Widget Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #050505;
+      color: #f5f5f5;
+      min-height: 100vh;
+    }
+    .demo-header {
+      padding: 1.5rem 2rem;
+      background: #0d0d0d;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .demo-header h1 { font-size: 1.25rem; font-weight: 600; }
+    .demo-header p {
+      color: #a3a3a3;
+      font-size: 0.8125rem;
+      margin-top: 0.25rem;
+    }
+    .demo-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.5rem;
+      padding: 1.5rem;
+      max-width: 1400px;
+      margin: 0 auto;
+    }
+    @media (max-width: 900px) {
+      .demo-grid { grid-template-columns: 1fr; }
+    }
+    .demo-card {
+      background: #0d0d0d;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      overflow: hidden;
+    }
+    .demo-card h2 {
+      padding: 0.75rem 1rem;
+      font-size: 0.875rem;
+      font-weight: 600;
+      border-bottom: 1px solid #2a2a2a;
+    }
+    .code-block {
+      margin: 1rem;
+      padding: 1rem;
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 8px;
+      font-family: monospace;
+      font-size: 0.75rem;
+      color: #a3a3a3;
+      overflow-x: auto;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    gs-viewer {
+      display: block;
+      min-height: 480px;
+    }
+  </style>
+</head>
+<body>
+  <div class="demo-header">
+    <h1>📦 GSViewer Widget Demo</h1>
+    <p>Embeddable Gaussian Splat viewer — framework-independent Web Component</p>
+  </div>
+
+  <div class="demo-grid">
+    <!-- Default widget -->
+    <div class="demo-card">
+      <h2>Default (quality=auto, markers on)</h2>
+      <gs-viewer
+        scene="demo-scene"
+        height="520"
+        quality="auto"
+        show-markers="true"
+        ui="full">
+      </gs-viewer>
+    </div>
+
+    <!-- Minimal widget -->
+    <div class="demo-card">
+      <h2>Minimal (quality=low, locked, ui=minimal)</h2>
+      <gs-viewer
+        scene="demo-scene"
+        height="520"
+        quality="low"
+        show-markers="false"
+        locked="true"
+        ui="minimal">
+      </gs-viewer>
+    </div>
+  </div>
+
+  <div style="padding: 0 1.5rem 2rem; max-width: 1400px; margin: 0 auto;">
+    <h2 style="font-size: 0.875rem; font-weight: 600; margin-bottom: 0.75rem;">Embed Snippet</h2>
+    <div class="code-block">
+<script src="http://localhost:8080/widget/gs-viewer.js"></script>
+
+<gs-viewer
+  scene="demo-scene"
+  height="520"
+  quality="auto"
+  show-markers="true"
+  vr="true"
+  locked="false"
+  ui="full">
+</gs-viewer>
+    </div>
+    <h2 style="font-size: 0.875rem; font-weight: 600; margin: 1.25rem 0 0.75rem;">Attributes</h2>
+    <div class="code-block">
+scene          required  — scene slug
+height         optional  — CSS height, default 480px
+quality        optional  — auto | low | medium | high | ultra
+show-markers   optional  — true | false
+vr             optional  — true | false
+locked         optional  — true | false
+ui             optional  — minimal | hidden | full
+    </div>
+  </div>
+
+  <script src="/widget/gs-viewer.js"></script>
+</body>
+</html>

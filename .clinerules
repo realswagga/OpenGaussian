@@ -1,0 +1,860 @@
+# Cursor Rules for Gaussian Splat Viewer Project
+
+These rules are mandatory for all agentic coding work in this repository.
+
+---
+
+## 1. Core mission
+
+Build a Dockerized, locally deployable web platform for Gaussian Splat viewing, streaming, annotation, and embedding.
+
+The project must support:
+
+- public scene list,
+- full-page Gaussian Splat viewer,
+- lightweight embeddable widget,
+- admin backend,
+- upload and processing pipeline,
+- 3D information markers,
+- adaptive LOD/quality settings,
+- WebGPU support where available,
+- VR/WebXR support where available,
+- local deployment through Docker Compose.
+
+Do not implement features that conflict with this mission.
+
+---
+
+## 2. Docker-first rule
+
+Everything required for local development and diploma demonstration must run with Docker Compose.
+
+The following command must remain the primary local startup path:
+
+```bash
+docker compose up --build
+```
+
+Do not add a required service that cannot run locally in Docker.
+
+Do not require paid cloud services for the core demo.
+
+Do not require local global installations except:
+
+- Docker,
+- Docker Compose,
+- optionally Node.js/pnpm for non-container development convenience.
+
+If a feature works outside Docker but not inside Docker, it is not done.
+
+---
+
+## 3. Required local services
+
+The local Docker environment must include:
+
+```txt
+nginx or caddy     reverse proxy/static routing
+public-web         public frontend
+admin-web          admin frontend
+api                backend API
+worker             background processing worker
+postgres           relational metadata database
+redis              job queue
+minio              S3-compatible object storage
+```
+
+Expected local URLs:
+
+```txt
+http://localhost:8080              public app
+http://localhost:8080/admin        admin app
+http://localhost:8080/api/health   API health
+http://localhost:9001              MinIO console
+```
+
+---
+
+## 4. Do not stream splat binaries through the API
+
+The API server must not act as the main transport for large splat files.
+
+Correct pattern:
+
+```txt
+API: metadata, manifests, permissions, annotations, jobs
+Static/object layer: .sog, .ply, LOD chunks, posters, previews
+```
+
+Heavy assets must be served through Nginx/Caddy/MinIO/S3-compatible storage.
+
+Use versioned immutable asset URLs.
+
+Use cache headers for published assets:
+
+```http
+Cache-Control: public, max-age=31536000, immutable
+Accept-Ranges: bytes
+```
+
+---
+
+## 5. Rendering foundation rule
+
+Do not build a Gaussian Splat renderer from scratch.
+
+Use the selected open-source rendering foundation:
+
+- PlayCanvas Engine concepts/APIs,
+- SuperSplat-compatible viewer behavior where practical,
+- optimized splat formats such as SOG or compatible compressed formats.
+
+All renderer-specific code must be isolated in:
+
+```txt
+packages/viewer-core
+```
+
+Frontend apps and widget must consume `viewer-core` instead of duplicating rendering logic.
+
+---
+
+## 6. WebGPU and VR rules
+
+WebGPU is an enhancement, not a hard requirement.
+
+VR is important and must remain stable.
+
+Renderer selection must follow this principle:
+
+```txt
+VR requested or active -> prefer stable WebGL2 path
+WebGPU available and not in VR -> allow WebGPU
+WebGPU unavailable -> WebGL2 fallback
+```
+
+Never make the whole viewer fail because WebGPU is unavailable.
+
+Never make VR depend exclusively on WebGPU.
+
+Always show graceful unsupported states for unavailable browser features.
+
+---
+
+## 7. TypeScript rule
+
+Use TypeScript for all application code.
+
+Required:
+
+- strict mode,
+- explicit public types for package exports,
+- Zod or equivalent runtime validation at API boundaries,
+- no `any` unless justified with a nearby comment.
+
+Avoid:
+
+- untyped API responses,
+- large implicit object shapes,
+- global mutable state,
+- duplicated type definitions across apps.
+
+Shared types belong in:
+
+```txt
+packages/shared
+```
+
+---
+
+## 8. Monorepo boundaries
+
+Respect package boundaries.
+
+```txt
+apps/public-web       public user-facing app only
+apps/admin-web        admin UI only
+apps/api              HTTP API only
+apps/worker           background jobs only
+packages/viewer-core  3D viewer logic
+packages/viewer-widget embeddable custom element
+packages/shared       shared types/schemas/constants
+packages/ui           reusable UI components
+```
+
+Do not import from one app into another app.
+
+Shared code must move to `packages/*`.
+
+---
+
+## 9. Database rules
+
+Use PostgreSQL and Prisma.
+
+Do not store binary splat data in PostgreSQL.
+
+Database stores:
+
+- users,
+- roles,
+- scene metadata,
+- asset object keys,
+- versions,
+- annotations,
+- job status,
+- viewer settings.
+
+Object storage stores:
+
+- original uploads,
+- converted splats,
+- LOD files,
+- posters,
+- previews,
+- temporary generated assets.
+
+Every public scene must have a clear status:
+
+```txt
+DRAFT
+PROCESSING
+READY
+PUBLISHED
+FAILED
+ARCHIVED
+```
+
+Public endpoints must only expose `PUBLISHED` splats.
+
+---
+
+## 10. Object storage rules
+
+Use MinIO locally.
+
+All object keys must be versioned and organized:
+
+```txt
+splats/{splatId}/originals/{version}/source.ext
+splats/{splatId}/versions/{version}/scene.sog
+splats/{splatId}/versions/{version}/scene.lod-meta.json
+splats/{splatId}/versions/{version}/poster.webp
+splats/{splatId}/versions/{version}/chunks/...
+```
+
+Never overwrite published version assets.
+
+Create a new version for each upload or conversion result.
+
+Original uploads must be preserved unless the admin explicitly deletes/archive-cleans them.
+
+---
+
+## 11. API rules
+
+Use REST endpoints with JSON responses.
+
+Use request validation for all body/query/params.
+
+Use consistent error shape:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Human readable message",
+    "details": {}
+  }
+}
+```
+
+Do not leak stack traces in production responses.
+
+Every admin endpoint must check authorization.
+
+Public endpoints must not reveal private upload paths, unpublished scenes, or internal logs.
+
+---
+
+## 12. Required API routes
+
+At minimum, keep these routes implemented or planned:
+
+```txt
+GET  /api/health
+GET  /api/splats
+GET  /api/splats/:slug
+GET  /api/splats/:slug/manifest
+GET  /api/splats/:slug/annotations
+GET  /api/widget/:slug/config
+
+POST /api/auth/login
+POST /api/auth/logout
+GET  /api/auth/me
+
+GET    /api/admin/splats
+POST   /api/admin/splats
+GET    /api/admin/splats/:id
+PATCH  /api/admin/splats/:id
+DELETE /api/admin/splats/:id
+
+POST /api/admin/splats/:id/upload
+POST /api/admin/splats/:id/process
+POST /api/admin/splats/:id/publish
+POST /api/admin/splats/:id/unpublish
+
+POST   /api/admin/splats/:id/annotations
+PATCH  /api/admin/annotations/:id
+DELETE /api/admin/annotations/:id
+
+GET /api/admin/jobs/:id
+GET /api/admin/jobs/:id/events
+```
+
+---
+
+## 13. Worker rules
+
+Long-running processing belongs in `apps/worker`, not in request handlers.
+
+The API may enqueue jobs but must not block upload requests while doing conversion.
+
+Worker jobs must:
+
+- log job ID,
+- update job status,
+- write readable failure messages,
+- clean temporary files,
+- preserve original uploads,
+- upload generated assets to MinIO,
+- update database rows transactionally where needed.
+
+Worker must be able to run locally in Docker.
+
+---
+
+## 14. Upload rules
+
+Admin upload flow must:
+
+1. Validate auth.
+2. Validate file extension.
+3. Validate size limit.
+4. Store original in MinIO private/original path.
+5. Create version row.
+6. Enqueue processing job.
+7. Return job/version info.
+
+Accepted source formats should be configurable.
+
+Initial target formats:
+
+```txt
+.sog
+.ply
+.compressed.ply
+.spz
+```
+
+Start by supporting direct load of already optimized assets if conversion tooling is not ready.
+
+---
+
+## 15. Viewer-core rules
+
+The `viewer-core` package must expose a clean API.
+
+Required operations:
+
+```txt
+start viewer
+destroy viewer
+load scene from manifest
+set quality
+set camera mode
+set annotations
+enter VR
+exit VR
+subscribe to marker selection
+subscribe to viewer stats/errors
+```
+
+Viewer must clean up resources on destroy.
+
+Do not let React lifecycle code directly manipulate low-level PlayCanvas internals outside `viewer-core`.
+
+---
+
+## 16. Quality and LOD rules
+
+Implement quality presets:
+
+```txt
+auto
+low
+medium
+high
+ultra
+```
+
+Also implement device-oriented defaults:
+
+```txt
+phoneLow
+phoneHigh
+desktopMedium
+desktopHigh
+vrQuest
+```
+
+Quality must affect at least:
+
+- splat budget or LOD budget,
+- device pixel ratio cap,
+- optional post-processing,
+- marker distance visibility.
+
+Auto mode must start conservative and adapt based on device and measured FPS.
+
+---
+
+## 17. Marker rules
+
+3D markers are a core feature.
+
+Markers must support:
+
+- title,
+- body/info content,
+- 3D position,
+- optional rotation/scale,
+- icon/kind,
+- click/tap selection,
+- VR ray selection where possible.
+
+Desktop info UI:
+
+- side panel.
+
+Mobile info UI:
+
+- bottom sheet.
+
+VR info UI:
+
+- floating world-space panel or simplified readable overlay.
+
+Sanitize marker body content before rendering.
+
+---
+
+## 18. Admin annotation editor rules
+
+Admin must be able to:
+
+- list annotations,
+- create annotation,
+- edit annotation,
+- delete annotation,
+- preview markers in scene.
+
+Do not block first implementation on perfect splat surface picking.
+
+Acceptable first implementation:
+
+- place marker using camera reticle/depth estimate,
+- allow numeric coordinate editing,
+- allow drag handles later.
+
+---
+
+## 19. Widget rules
+
+The widget must be framework-independent for host pages.
+
+Preferred implementation:
+
+```html
+<script src="/widget/gs-viewer.js"></script>
+<gs-viewer scene="example" quality="auto" show-markers="true"></gs-viewer>
+```
+
+Rules:
+
+- The widget must not require React on the host page.
+- The widget must not expose admin data.
+- The widget must only load published scenes.
+- The widget must clean up on DOM removal.
+- The widget should avoid leaking styles into the host page.
+- The widget should work from the same Docker local deployment.
+
+---
+
+## 20. UI design rules
+
+Use an ultra-minimal black/gray/white visual style.
+
+Required feel:
+
+- functional,
+- bold,
+- quiet,
+- modern,
+- stable,
+- Apple-like smoothness,
+- similar simplicity to ChatGPT-style UI.
+
+Use these design tokens unless a better centralized theme is created:
+
+```css
+:root {
+  --bg: #050505;
+  --bg-elevated: #0d0d0d;
+  --panel: #111111;
+  --panel-soft: #171717;
+  --border: #2a2a2a;
+  --text: #f5f5f5;
+  --text-muted: #a3a3a3;
+  --text-dim: #737373;
+  --focus: #ffffff;
+  --danger: #ef4444;
+  --success: #22c55e;
+}
+```
+
+Avoid:
+
+- bright random colors,
+- heavy gradients,
+- unnecessary charts,
+- busy dashboards,
+- excessive animation,
+- childish UI.
+
+Use:
+
+- fade transitions,
+- subtle slide panels,
+- soft marker pop-in,
+- subtle gray grid backgrounds,
+- clear typography,
+- obvious controls.
+
+Respect `prefers-reduced-motion`.
+
+---
+
+## 21. Accessibility rules
+
+Even though this is a 3D-heavy project, normal UI must remain accessible.
+
+Required:
+
+- keyboard-accessible buttons,
+- visible focus states,
+- semantic labels,
+- sufficient contrast,
+- reduced motion support,
+- meaningful error messages,
+- responsive mobile layout.
+
+Viewer canvas controls should have nearby textual alternatives where practical.
+
+---
+
+## 22. Error handling rules
+
+Every user-facing async operation needs loading, success, and error states.
+
+Examples:
+
+- scene loading failed,
+- WebGPU unavailable,
+- VR unavailable,
+- upload failed,
+- processing failed,
+- asset not found,
+- unauthorized admin request.
+
+Errors should be human-readable.
+
+Logs may include more detail, but UI should remain clean.
+
+---
+
+## 23. Testing rules
+
+Add tests for logic that can break silently.
+
+Required test categories:
+
+- renderer selection,
+- quality profile selection,
+- API validation,
+- authorization checks,
+- manifest shape validation,
+- annotation CRUD,
+- public/private scene visibility,
+- upload job enqueueing.
+
+Use Playwright for at least:
+
+- public scene list opens,
+- viewer route opens,
+- marker panel opens,
+- admin login works,
+- widget demo page loads.
+
+Docker-based tests are preferred for integration checks.
+
+---
+
+## 24. Code quality rules
+
+Use clean, boring, maintainable code.
+
+Prefer:
+
+- small modules,
+- explicit types,
+- clear names,
+- dependency injection for services,
+- pure functions for selection logic,
+- schema validation,
+- consistent error classes.
+
+Avoid:
+
+- premature abstraction,
+- hidden global state,
+- hard-coded localhost URLs outside config,
+- duplicated API client code,
+- unbounded memory loading for large files,
+- blocking request handlers with heavy processing.
+
+---
+
+## 25. Dependency rules
+
+Before adding a dependency, check whether it is truly needed.
+
+Allowed by default:
+
+```txt
+TypeScript
+React
+Vite
+Fastify
+Prisma
+Zod
+BullMQ
+ioredis
+AWS S3-compatible SDK
+PlayCanvas Engine
+Tailwind or simple CSS modules
+Vitest
+Playwright
+```
+
+Do not add large UI frameworks or rendering engines without strong reason.
+
+Do not mix multiple 3D engines unless necessary.
+
+Do not add cloud-provider-specific SDKs when S3-compatible APIs are enough.
+
+---
+
+## 26. Configuration rules
+
+No hard-coded secrets.
+
+No hard-coded absolute local paths.
+
+All configurable values must come from env or config files:
+
+- database URL,
+- Redis URL,
+- S3 endpoint,
+- bucket name,
+- public asset URL,
+- JWT secret,
+- upload size limit,
+- default LOD budgets.
+
+Keep `.env.example` updated whenever config changes.
+
+---
+
+## 27. Migration rules
+
+When changing Prisma schema:
+
+1. Update schema.
+2. Add migration.
+3. Update seed data if needed.
+4. Update affected API types.
+5. Update tests.
+6. Ensure Docker startup applies or documents migrations.
+
+Do not make breaking schema changes without updating code paths.
+
+---
+
+## 28. Seed data rules
+
+Local Docker demo should seed:
+
+- default admin user,
+- at least one demo splat metadata entry,
+- at least one demo annotation,
+- placeholder/demo asset if available.
+
+Default credentials must be documented in README and configurable through env.
+
+Never use production secrets in seed data.
+
+---
+
+## 29. Documentation rules
+
+Update README whenever setup or usage changes.
+
+README must include:
+
+- local Docker setup,
+- default URLs,
+- default admin credentials,
+- upload flow,
+- publish flow,
+- marker editing flow,
+- widget embed snippet,
+- supported formats,
+- WebGPU/VR notes,
+- troubleshooting.
+
+Keep `plan.md` aligned with major architecture changes.
+
+---
+
+## 30. Git/task discipline rules
+
+For agentic execution:
+
+- Complete one milestone-sized task at a time.
+- Keep changes cohesive.
+- Do not rewrite unrelated files.
+- Do not silently remove existing functionality.
+- Prefer additive implementation over destructive refactors.
+- After each major change, ensure Docker build still works or document the temporary break clearly.
+
+Before considering a task done, check:
+
+```bash
+docker compose build
+```
+
+or at minimum the affected service build.
+
+---
+
+## 31. Security rules
+
+Admin functionality must require authentication.
+
+Public endpoints must not expose:
+
+- unpublished splats,
+- private original upload URLs,
+- internal object keys when not needed,
+- job logs to non-admin users,
+- password hashes,
+- stack traces.
+
+Upload handling must:
+
+- validate size,
+- validate extension,
+- store outside public published path first,
+- never execute uploaded content,
+- sanitize any rendered text/HTML.
+
+---
+
+## 32. Performance rules
+
+Never load unnecessary heavy viewer code on simple pages.
+
+Rules:
+
+- Lazy-load viewer on viewer pages.
+- Lazy-load admin-only code in admin app.
+- Dispose viewer resources on navigation.
+- Use quality presets.
+- Cap device pixel ratio on mobile/VR.
+- Avoid post-processing on low-end devices.
+- Use immutable cache for published assets.
+- Avoid base64-embedding large binary files.
+
+---
+
+## 33. Compatibility rules
+
+The app should degrade gracefully.
+
+Required fallback behavior:
+
+```txt
+No WebGPU       -> use WebGL2
+No VR support   -> hide/disable VR button with explanation
+Low-end device  -> auto low quality
+Failed LOD      -> attempt direct scene load if possible
+Failed scene    -> show clear error and back link
+```
+
+Do not show raw crashes to users.
+
+---
+
+## 34. Final diploma demo rules
+
+The final demo must be possible from a fresh clone:
+
+```bash
+cp .env.example .env
+docker compose up --build
+```
+
+Then demonstrate:
+
+1. Open public app.
+2. View scene list.
+3. Open Gaussian Splat scene.
+4. Navigate scene.
+5. Click 3D marker.
+6. Log into admin.
+7. Add/edit marker.
+8. Publish scene.
+9. Open widget demo.
+10. Show WebGPU/VR controls where supported.
+
+If any of these steps require manual host-machine setup outside Docker, fix that before final submission.
+
+---
+
+## 35. Absolute prohibitions
+
+Do not:
+
+- store splat binaries in PostgreSQL,
+- stream large splat binaries through API request handlers,
+- require cloud services for local demo,
+- require CUDA/GPU processing for basic local demo,
+- make WebGPU mandatory,
+- make VR depend only on WebGPU,
+- build a custom splat renderer from scratch,
+- duplicate viewer logic between public app and widget,
+- expose admin routes without authorization,
+- render unsanitized annotation HTML,
+- break Docker local deployment.
+

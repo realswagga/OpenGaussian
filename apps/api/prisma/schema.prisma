@@ -1,0 +1,139 @@
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  EDITOR
+  VIEWER
+}
+
+enum SplatStatus {
+  DRAFT
+  PROCESSING
+  READY
+  PUBLISHED
+  FAILED
+  ARCHIVED
+}
+
+enum ProcessingStatus {
+  PENDING
+  RUNNING
+  READY
+  FAILED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  role         UserRole @default(VIEWER)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Splat {
+  id                  String      @id @default(uuid())
+  slug                String      @unique
+  title               String
+  description         String?
+  status              SplatStatus @default(DRAFT)
+
+  sourceFormat        String?
+  sourceObjectKey     String?
+  productionFormat    String?
+  productionObjectKey String?
+  lodManifestKey      String?
+  posterKey           String?
+  collisionKey        String?
+
+  splatCount          Int?
+  sizeBytes           BigInt?
+  boundingBoxJson     Json?
+  defaultCameraJson   Json?
+  globalSettingsJson  Json?
+
+  versions            SplatVersion[]
+  annotations         Annotation[]
+
+  createdAt           DateTime @default(now())
+  pretransformJson    Json?
+
+  updatedAt           DateTime @updatedAt
+  publishedAt         DateTime?
+}
+
+model SplatVersion {
+  id               String           @id @default(uuid())
+  splatId          String
+  splat            Splat            @relation(fields: [splatId], references: [id], onDelete: Cascade)
+  version          Int
+
+  sourceKey        String
+  convertedKey     String?
+  lodKey           String?
+  posterKey        String?
+
+  processingStatus ProcessingStatus @default(PENDING)
+  processingLog    String?
+  metricsJson      Json?
+
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model Annotation {
+  id                  String   @id @default(uuid())
+  splatId             String
+  splat               Splat    @relation(fields: [splatId], references: [id], onDelete: Cascade)
+
+  title               String
+  body                String?
+  kind                String   @default("info")
+
+  positionX           Float
+  positionY           Float
+  positionZ           Float
+  rotationX           Float    @default(0)
+  rotationY           Float    @default(0)
+  rotationZ           Float    @default(0)
+  scale               Float    @default(1)
+
+  icon                String?
+  color               String?
+  visibilityRulesJson Json?
+  mediaJson           Json?
+
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+}
+
+model ViewerPreset {
+  id                 String @id @default(uuid())
+  splatId            String
+  name               String
+
+  cameraMode         String @default("orbit")
+  lodBudget          Int    @default(1500000)
+  mobileLodBudget    Int    @default(500000)
+  vrLodBudget        Int    @default(700000)
+
+  enableVr           Boolean @default(true)
+  enableWebGpu       Boolean @default(true)
+  enableMarkers      Boolean @default(true)
+  lockScene          Boolean @default(false)
+  allowFly           Boolean @default(true)
+  allowOrbit         Boolean @default(true)
+
+  settingsJson       Json?
+
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
