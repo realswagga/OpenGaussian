@@ -12,6 +12,20 @@ export interface GesturePoint {
   y: number;
 }
 
+export interface DepthConsensusInput {
+  samples: readonly number[];
+  fallbackDepth: number;
+  minSamples?: number;
+  maxRelativeSpread?: number;
+}
+
+export interface DepthConsensus {
+  distance: number;
+  confidence: number;
+  sampleCount: number;
+  relativeSpread: number;
+}
+
 export interface TwoPointerGestureInput {
   previousDistance: number;
   currentDistance: number;
@@ -51,6 +65,46 @@ export function computeDepthAwareDollyStep(input: DepthAwareDollyInput): number 
 
   const magnitude = clamp(Math.abs(wheelUnits) * hitDepth * 0.1, minStep, maxStep);
   return Math.sign(wheelUnits) * magnitude;
+}
+
+function median(sorted: readonly number[]): number {
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? ((sorted[mid - 1] ?? 0) + (sorted[mid] ?? 0)) * 0.5
+    : (sorted[mid] ?? 0);
+}
+
+export function computeDepthConsensus(input: DepthConsensusInput): DepthConsensus {
+  const fallbackDepth = Number.isFinite(input.fallbackDepth) && input.fallbackDepth > 0 ? input.fallbackDepth : 1;
+  const minSamples = input.minSamples ?? 3;
+  const maxRelativeSpread = input.maxRelativeSpread ?? 0.65;
+  const samples = input.samples
+    .filter((sample) => Number.isFinite(sample) && sample > 0)
+    .slice()
+    .sort((a, b) => a - b);
+
+  if (samples.length === 0) {
+    return {
+      distance: fallbackDepth,
+      confidence: 0,
+      sampleCount: 0,
+      relativeSpread: Number.POSITIVE_INFINITY,
+    };
+  }
+
+  const distance = median(samples);
+  const q1 = samples[Math.floor((samples.length - 1) * 0.25)] ?? distance;
+  const q3 = samples[Math.ceil((samples.length - 1) * 0.75)] ?? distance;
+  const relativeSpread = distance > 0 ? Math.abs(q3 - q1) / distance : Number.POSITIVE_INFINITY;
+  const coverage = clamp(samples.length / Math.max(1, minSamples), 0, 1);
+  const stability = clamp(1 - relativeSpread / Math.max(0.01, maxRelativeSpread), 0, 1);
+
+  return {
+    distance,
+    confidence: coverage * stability,
+    sampleCount: samples.length,
+    relativeSpread,
+  };
 }
 
 export function distance2D(a: GesturePoint, b: GesturePoint): number {
