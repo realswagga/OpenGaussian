@@ -43,6 +43,10 @@ const redisConnection = new Redis(REDIS_URL, {
   maxRetriesPerRequest: null,
 });
 
+const splatQueue = new Queue<JobData>('splat-processing', {
+  connection: redisConnection,
+});
+
 function getSplatExtension(filename: string): string {
   const lower = filename.toLowerCase();
   if (lower === 'compressed.ply' || lower.endsWith('.compressed.ply')) return '.compressed.ply';
@@ -821,6 +825,23 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
 
         await job.updateProgress(100);
         await updateVersionLog(versionId, `Conversion complete: ${productionFormat}, ~${splatCount.toLocaleString()} splats`);
+
+        // Auto-enqueue preview generation after successful conversion
+        try {
+          await splatQueue.add('splat.generatePreview', {
+            splatId,
+            versionId,
+            sourceObjectKey: fullKey,
+            jobType: 'splat.generatePreview',
+          }, {
+            attempts: 3,
+            backoff: { type: 'exponential', delay: 5000 },
+          });
+          await updateVersionLog(versionId, 'Enqueued preview generation...');
+        } catch (enqueueErr) {
+          console.warn(`[worker] Failed to enqueue preview for splat ${splatId}: ${enqueueErr}`);
+        }
+
         return {
           productionObjectKey: fullKey,
           productionFormat,
@@ -835,19 +856,35 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
       }
 
       case 'splat.generatePreview': {
-        if (!sourceObjectKey) throw new Error('sourceObjectKey required for preview');
-
         await job.updateProgress(10);
-        await updateVersionLog(versionId, 'Downloading source for preview...');
-
-        const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
-
-        await job.updateProgress(40);
         await updateVersionLog(versionId, 'Generating poster image...');
 
-        // Generate poster: extract first N points, compute bounding box, create a minimal
-        // 256x256 PNG showing a top-down projection of the point cloud
-        const posterBuffer = await generatePoster(tmpFile);
+        // Try production key first (converted format is often PLY), then source key
+        const splatRecord = await prisma.splat.findUnique({
+          where: { id: splatId },
+          select: { productionObjectKey: true, sourceObjectKey: true },
+        });
+
+        let previewKey = splatRecord?.productionObjectKey || sourceObjectKey;
+        if (!previewKey) throw new Error('No source or production key available for preview');
+
+        let tmpFile: string;
+        let posterBuffer: Buffer;
+        try {
+          tmpFile = await downloadOriginal(splatId, versionId, previewKey);
+          posterBuffer = await generatePoster(tmpFile);
+        } catch (posterErr) {
+          // If production key fails, try source key
+          const fallbackKey = splatRecord?.sourceObjectKey || sourceObjectKey;
+          if (fallbackKey && fallbackKey !== previewKey) {
+            await updateVersionLog(versionId, `Production key failed for poster, trying source key...`);
+            previewKey = fallbackKey;
+            tmpFile = await downloadOriginal(splatId, versionId, previewKey);
+            posterBuffer = await generatePoster(tmpFile);
+          } else {
+            throw posterErr;
+          }
+        }
 
         await job.updateProgress(70);
 

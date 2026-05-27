@@ -1,10 +1,17 @@
-import { useEffect, useRef, useState, useCallback, type FormEvent } from 'react';
+import { useEffect, useRef, useState, useCallback, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
-import { extractGsplatPointCenters, pickMarkerPoint, type SplatAssetFormat, type ViewerManifest } from '@gsplat/viewer-core';
+import {
+  applyDeadzone,
+  computeDepthAwareDollyStep,
+  extractGsplatPointCenters,
+  pickMarkerPoint,
+  type SplatAssetFormat,
+  type ViewerManifest,
+} from '@gsplat/viewer-core';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const ASSET_BASE = import.meta.env.VITE_ASSET_BASE_URL || '/assets';
@@ -33,7 +40,7 @@ interface SplatInfo {
   productionObjectKey?: string;
   productionFormat?: string;
   boundingBoxJson?: { min: [number, number, number]; max: [number, number, number] };
-  defaultCameraJson?: { position: [number, number, number]; target: [number, number, number] };
+  defaultCameraJson?: { position: [number, number, number]; target: [number, number, number]; fov?: number };
   pretransformJson?: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] } | null;
 }
 
@@ -207,8 +214,21 @@ export default function Annotation3DEditorPage() {
   const flyYawRef = useRef(0);
   const flyPitchRef = useRef(0);
   const keysRef = useRef<Set<string>>(new Set());
+  const flyMoveStickRef = useRef({ pointerId: null as number | null, x: 0, y: 0 });
+  const flyLookStickRef = useRef({ pointerId: null as number | null, x: 0, y: 0 });
+  const canvasPointerRef = useRef({ x: 0, y: 0, moved: false });
+  const [coarsePointer, setCoarsePointer] = useState(false);
   // Sync ref for the animation loop closure
   useEffect(() => { flyModeRef.current = flyMode; }, [flyMode]);
+
+  useEffect(() => {
+    const media = window.matchMedia?.('(pointer: coarse)');
+    if (!media) return;
+    const update = () => setCoarsePointer(media.matches);
+    update();
+    media.addEventListener('change', update);
+    return () => media.removeEventListener('change', update);
+  }, []);
 
   // Pretransform state (live-editable, applied to the rendered point cloud)
   const [pretransform, setPretransform] = useState({
@@ -218,6 +238,9 @@ export default function Annotation3DEditorPage() {
   });
   const [ptSaving, setPtSaving] = useState(false);
   const [ptMessage, setPtMessage] = useState('');
+
+  const [cameraSaving, setCameraSaving] = useState(false);
+  const [cameraMessage, setCameraMessage] = useState('');
 
   // Track if initial pretransform load is done
   const ptLoadedRef = useRef(false);
@@ -555,49 +578,70 @@ export default function Annotation3DEditorPage() {
       RIGHT: THREE.MOUSE.PAN,
     };
     orbitRef.current = orbit;
-    orbit.enableZoom = false;
+    orbit.enableZoom = true;
+    orbit.zoomToCursor = true;
+    orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+
+    function setPointerFromClient(clientX: number, clientY: number) {
+      const rect = renderer.domElement.getBoundingClientRect();
+      pointerRef.current.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+      pointerRef.current.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      raycasterRef.current.setFromCamera(pointerRef.current, camera);
+      return raycasterRef.current.ray;
+    }
+
+    function getDepthAtClientPoint(clientX: number, clientY: number) {
+      const ray = setPointerFromClient(clientX, clientY);
+      const cloudPositions = splatCloudRef.current?.geometry.attributes.position as THREE.BufferAttribute | undefined;
+      const pointHit = cloudPositions
+        ? pickMarkerPoint({
+            positions: cloudPositions.array,
+            rayOrigin: [ray.origin.x, ray.origin.y, ray.origin.z],
+            rayDirection: [ray.direction.x, ray.direction.y, ray.direction.z],
+            sceneRadius: sceneRadiusRef.current,
+          })
+        : null;
+      if (pointHit) return pointHit.distanceAlongRay;
+
+      const sphere = splatCloudRef.current?.geometry.boundingSphere?.clone();
+      if (sphere && splatCloudRef.current) {
+        sphere.applyMatrix4(splatCloudRef.current.matrixWorld);
+        const hitPoint = new THREE.Vector3();
+        if (ray.intersectSphere(sphere, hitPoint)) {
+          return hitPoint.distanceTo(ray.origin);
+        }
+      }
+      return Math.max(camera.position.distanceTo(orbit.target), sceneRadiusRef.current, 0.25);
+    }
 
     function onCustomWheel(e: WheelEvent) {
       e.preventDefault();
-      e.stopPropagation();
+      e.stopImmediatePropagation();
       if (flyModeRef.current) {
         const zoomIn = e.deltaY < 0;
         const speedFactor = zoomIn ? 1.15 : 0.85;
         flyMoveSpeedRef.current = Math.max(0.5, Math.min(50, flyMoveSpeedRef.current * speedFactor));
         return;
       }
-      const zoomIn = e.deltaY < 0;
-      const currentDist = camera.position.distanceTo(orbit.target);
-      const scaleFactor = zoomIn ? 0.9 : 1.1;
-      const newDist = currentDist * scaleFactor;
-      const direction = zoomIn ? -1 : 1;
-      const minDelta = 0.05 * direction;
-      const targetDist = newDist + minDelta;
-      const clampedDist = Math.max(orbit.minDistance, Math.min(orbit.maxDistance, targetDist));
-
-      if (zoomIn) {
-        const camForward = new THREE.Vector3();
-        camera.getWorldDirection(camForward);
-        camForward.y = 0;
-        if (camForward.lengthSq() > 0.01) {
-          camForward.normalize();
-          const nudgeAmount = Math.min(0.02 * clampedDist, 0.1);
-          orbit.target.add(camForward.multiplyScalar(nudgeAmount));
-        }
-      }
-
-      const camForward = new THREE.Vector3();
-      camera.getWorldDirection(camForward);
-      camera.position.copy(orbit.target).add(camForward.multiplyScalar(-clampedDist));
+      const ray = setPointerFromClient(e.clientX, e.clientY);
+      const step = computeDepthAwareDollyStep({
+        deltaY: e.deltaY,
+        deltaMode: e.deltaMode,
+        hitDepth: getDepthAtClientPoint(e.clientX, e.clientY),
+        sceneRadius: sceneRadiusRef.current,
+      });
+      const delta = ray.direction.clone().multiplyScalar(step);
+      camera.position.add(delta);
+      orbit.target.add(delta);
       orbit.update();
     }
-    renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false });
+    renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false, capture: true });
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
     transform.setSize(1.5);
     transform.addEventListener('dragging-changed', (event) => {
-      orbit.enabled = !event.value;
+      orbit.enabled = !event.value && !flyModeRef.current;
     });
     transform.addEventListener('objectChange', () => {
       const obj = transform.object;
@@ -703,10 +747,21 @@ export default function Annotation3DEditorPage() {
       if (k.has('a')) move.sub(right);
       if (k.has('q')) move.sub(worldUp);
       if (k.has('e')) move.add(worldUp);
+      const moveStick = flyMoveStickRef.current;
+      if (moveStick.x !== 0 || moveStick.y !== 0) {
+        move.add(right.clone().multiplyScalar(moveStick.x));
+        move.add(forward.clone().multiplyScalar(-moveStick.y));
+      }
 
       if (move.lengthSq() > 0) {
         move.normalize().multiplyScalar(speed * dt);
         cam.position.add(move);
+      }
+
+      const lookStick = flyLookStickRef.current;
+      if (lookStick.x !== 0 || lookStick.y !== 0) {
+        flyYawRef.current -= lookStick.x * dt * 2.6;
+        flyPitchRef.current = Math.max(-1.5, Math.min(1.5, flyPitchRef.current - lookStick.y * dt * 2.2));
       }
 
       const cosP = Math.cos(flyPitchRef.current);
@@ -732,7 +787,12 @@ export default function Annotation3DEditorPage() {
     }
 
     function onFlyKeyDown(e: KeyboardEvent) {
-      keysRef.current.add(e.key.toLowerCase());
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
+      const key = e.key.toLowerCase();
+      if (flyModeRef.current && ['w', 'a', 's', 'd', 'q', 'e', 'shift'].includes(key)) {
+        e.preventDefault();
+      }
+      keysRef.current.add(key);
     }
     function onFlyKeyUp(e: KeyboardEvent) {
       keysRef.current.delete(e.key.toLowerCase());
@@ -756,8 +816,8 @@ export default function Annotation3DEditorPage() {
 
     function updateOrbitPan(dt: number) {
       const k = keysRef.current;
-      if (!k.has('w') && !k.has('s') && !k.has('a') && !k.has('d')) return;
-      const speed = 4;
+      if (!k.has('w') && !k.has('s') && !k.has('a') && !k.has('d') && !k.has('q') && !k.has('e')) return;
+      const speed = k.has('shift') ? 12 : 4;
       const cam = camera;
       const rawForward = new THREE.Vector3();
       cam.getWorldDirection(rawForward);
@@ -782,6 +842,8 @@ export default function Annotation3DEditorPage() {
       if (k.has('s')) move.sub(forward);
       if (k.has('d')) move.add(strafe);
       if (k.has('a')) move.sub(strafe);
+      if (k.has('q')) move.y -= 1;
+      if (k.has('e')) move.y += 1;
       if (move.lengthSq() > 0) {
         move.normalize().multiplyScalar(speed * dt);
         const t = orbit.target;
@@ -806,7 +868,7 @@ export default function Annotation3DEditorPage() {
       document.removeEventListener('mousemove', onFlyMouseMove);
       window.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onFlyKeyUp);
-      renderer.domElement.removeEventListener('wheel', onCustomWheel);
+      renderer.domElement.removeEventListener('wheel', onCustomWheel, { capture: true });
       document.exitPointerLock();
       renderer.dispose();
       if (splatCloudRef.current) {
@@ -822,9 +884,9 @@ export default function Annotation3DEditorPage() {
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return;
       switch (e.key.toLowerCase()) {
-        case 'w': if (!placeMode) { setGizmoMode('translate'); transformRef.current?.setMode('translate'); } break;
-        case 'e': if (!placeMode) { setGizmoMode('rotate'); transformRef.current?.setMode('rotate'); } break;
-        case 'r': if (!placeMode) { setGizmoMode('scale'); transformRef.current?.setMode('scale'); } break;
+        case '1': if (!placeMode && !flyModeRef.current) { setGizmoMode('translate'); transformRef.current?.setMode('translate'); } break;
+        case '2': if (!placeMode && !flyModeRef.current) { setGizmoMode('rotate'); transformRef.current?.setMode('rotate'); } break;
+        case '3': if (!placeMode && !flyModeRef.current) { setGizmoMode('scale'); transformRef.current?.setMode('scale'); } break;
         case 'g': setSnapEnabled((p) => !p); break;
         case 'p': setPlaceMode((p) => !p); break;
         case 'delete': if (selectedId) handleDelete(); break;
@@ -962,6 +1024,7 @@ export default function Annotation3DEditorPage() {
       const ground = groundRef.current;
       if (!renderer || !scene || !camera || !ground || !splat) return;
       if ((transformRef.current as unknown as { dragging?: boolean } | null)?.dragging) return;
+      if (canvasPointerRef.current.moved) return;
 
       const rect = renderer.domElement.getBoundingClientRect();
       pointerRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
@@ -982,8 +1045,6 @@ export default function Annotation3DEditorPage() {
         }
       }
 
-      if (!placeMode) return;
-
       const cloudPositions = splatCloudRef.current?.geometry.attributes.position as THREE.BufferAttribute | undefined;
       const pointHit = cloudPositions
         ? pickMarkerPoint({
@@ -994,6 +1055,17 @@ export default function Annotation3DEditorPage() {
             snapValue: snapEnabled ? snapValue : null,
           })
         : null;
+
+      if (!placeMode) {
+        const target = pointHit?.position
+          ? new THREE.Vector3(pointHit.position[0], pointHit.position[1], pointHit.position[2])
+          : null;
+        if (target) {
+          orbitRef.current?.target.copy(target);
+          orbitRef.current?.update();
+        }
+        return;
+      }
 
       const groundHits = pointHit ? [] : raycaster.intersectObject(ground);
       const position = pointHit?.position || (groundHits[0]
@@ -1170,9 +1242,80 @@ export default function Annotation3DEditorPage() {
     applyPretransformInPlace(pt);
   };
 
+  const handleCameraSave = async () => {
+    setCameraSaving(true);
+    setCameraMessage('');
+    try {
+      const cam = cameraRef.current!;
+      const orbit = orbitRef.current!;
+      const position: [number, number, number] = [
+        Math.round(cam.position.x * 100) / 100,
+        Math.round(cam.position.y * 100) / 100,
+        Math.round(cam.position.z * 100) / 100,
+      ];
+      const target: [number, number, number] = [
+        Math.round(orbit.target.x * 100) / 100,
+        Math.round(orbit.target.y * 100) / 100,
+        Math.round(orbit.target.z * 100) / 100,
+      ];
+      const r = await fetch(`${API_BASE}/admin/splats/${id}/camera`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ position, target }),
+      });
+      if (!r.ok) throw new Error('Save failed');
+      setCameraMessage('Camera saved ✓');
+      setSplat((prev) => prev ? { ...prev, defaultCameraJson: { position, target } } : prev);
+    } catch (err) {
+      setCameraMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+    } finally {
+      setCameraSaving(false);
+    }
+  };
+
+  const handleCameraReset = async () => {
+    setCameraSaving(true);
+    setCameraMessage('');
+    try {
+      const r = await fetch(`${API_BASE}/admin/splats/${id}/camera`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!r.ok) throw new Error('Reset failed');
+      setCameraMessage('Camera reset ✓');
+      setSplat((prev) => prev ? { ...prev, defaultCameraJson: undefined } : prev);
+    } catch (err) {
+      setCameraMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+    } finally {
+      setCameraSaving(false);
+    }
+  };
+
+  function updateFlyJoystick(ref: typeof flyMoveStickRef, element: HTMLDivElement, e: ReactPointerEvent<HTMLDivElement>) {
+    const rect = element.getBoundingClientRect();
+    const max = Math.max(1, rect.width * 0.34);
+    const dx = Math.max(-max, Math.min(max, e.clientX - (rect.left + rect.width * 0.5)));
+    const dy = Math.max(-max, Math.min(max, e.clientY - (rect.top + rect.height * 0.5)));
+    ref.current.x = applyDeadzone(dx / max, 0.08);
+    ref.current.y = applyDeadzone(dy / max, 0.08);
+    element.style.setProperty('--jx', `${dx}px`);
+    element.style.setProperty('--jy', `${dy}px`);
+    element.style.opacity = '0.82';
+  }
+
+  function resetFlyJoystick(ref: typeof flyMoveStickRef, element: HTMLDivElement, pointerId: number) {
+    if (ref.current.pointerId !== pointerId) return;
+    ref.current = { pointerId: null, x: 0, y: 0 };
+    element.style.setProperty('--jx', '0px');
+    element.style.setProperty('--jy', '0px');
+    element.style.opacity = '0.55';
+  }
+
   const isNewMarker = !selectedId || selectedId.startsWith('preview-') || selectedId.startsWith('temp-');
   const isPreview = selectedId ? selectedId.startsWith('preview-') : false;
   const hasSelection = selectedId || (editForm.positionX !== 0 || editForm.positionY !== 0 || editForm.positionZ !== 0);
+  const showFlyJoysticks = flyMode && coarsePointer;
 
   if (loading) {
     return <div style={{ padding: '4rem 0', display: 'flex', justifyContent: 'center' }}><Spinner size="md" /></div>;
@@ -1222,16 +1365,24 @@ export default function Annotation3DEditorPage() {
             onClick={() => {
               const next = !flyMode;
               setFlyMode(next);
+              flyModeRef.current = next;
+              keysRef.current.clear();
+              flyMoveStickRef.current = { pointerId: null, x: 0, y: 0 };
+              flyLookStickRef.current = { pointerId: null, x: 0, y: 0 };
               if (next) {
                 const cam = cameraRef.current!;
+                if (orbitRef.current) orbitRef.current.enabled = false;
                 const forward = new THREE.Vector3();
                 cam.getWorldDirection(forward);
                 flyYawRef.current = Math.atan2(forward.x, forward.z);
                 const horizontalLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
                 flyPitchRef.current = Math.atan2(forward.y, horizontalLen);
                 flyMoveSpeedRef.current = 4.0;
-                containerRef.current?.querySelector('canvas')?.requestPointerLock();
+                if (!coarsePointer) {
+                  containerRef.current?.querySelector('canvas')?.requestPointerLock();
+                }
               } else {
+                if (orbitRef.current) orbitRef.current.enabled = true;
                 document.exitPointerLock();
                 const cam = cameraRef.current!;
                 const orbit = orbitRef.current!;
@@ -1243,7 +1394,7 @@ export default function Annotation3DEditorPage() {
                 orbit.update();
               }
             }}
-            title="Fly mode (F) — WASD + mouse look, Shift=boost, Q/E=up/down"
+            title="Fly mode — WASD + mouse look, Shift=boost, Q/E=up/down"
             style={{
               padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
               background: flyMode ? '#3b82f6' : '#171717',
@@ -1253,6 +1404,21 @@ export default function Annotation3DEditorPage() {
             }}
           >
             {flyMode ? '◈ Flying' : '☁ Fly'}
+          </button>
+
+          <button
+            onClick={handleCameraSave}
+            title="Set initial camera position — saves current camera view as the default for client viewers"
+            disabled={cameraSaving}
+            style={{
+              padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
+              background: splat?.defaultCameraJson ? '#0a2a0a' : '#171717',
+              border: splat?.defaultCameraJson ? '1px solid #22c55e' : '1px solid #2a2a2a',
+              color: splat?.defaultCameraJson ? '#22c55e' : '#a3a3a3', cursor: 'pointer',
+              fontWeight: splat?.defaultCameraJson ? 600 : 400,
+            }}
+          >
+            {cameraSaving ? '...' : '📷 Set Camera'}
           </button>
 
           {hasSelection && (
@@ -1294,14 +1460,27 @@ export default function Annotation3DEditorPage() {
           )}
           <span style={{ marginLeft: 'auto' }}>
             {splatVertexCount > 0 && `${splatVertexCount.toLocaleString()} splats · `}
-            {annotations.length} markers · W/E/R=gizmo · G=snap · P=place · Del=delete
+            {annotations.length} markers · 1/2/3=gizmo · G=snap · P=place · Del=delete
           </span>
         </div>
       </div>
 
       <div style={editorContainerStyle}>
         {/* 3D Scene */}
-        <div ref={containerRef} style={viewerPaneStyle} onClick={handleCanvasClick}>
+        <div
+          ref={containerRef}
+          style={viewerPaneStyle}
+          onPointerDownCapture={(e) => {
+            canvasPointerRef.current = { x: e.clientX, y: e.clientY, moved: false };
+          }}
+          onPointerMoveCapture={(e) => {
+            const start = canvasPointerRef.current;
+            if (Math.hypot(e.clientX - start.x, e.clientY - start.y) > 4) {
+              start.moved = true;
+            }
+          }}
+          onClick={handleCanvasClick}
+        >
           {splatLoading && (
             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '0.5rem 1rem', background: 'rgba(13,13,13,0.85)', border: '1px solid #2a2a2a', borderRadius: 8, color: '#a3a3a3', fontSize: '0.75rem', zIndex: 20 }}>
               Loading point cloud...
@@ -1324,6 +1503,34 @@ export default function Annotation3DEditorPage() {
                   ? 'Click on the ground plane to place a new marker (XYZ gizmo appears)'
                   : 'Click "Place Marker" to add markers · Click existing markers to edit · Drag XYZ handles'}
               </span>
+            </div>
+          )}
+          {showFlyJoysticks && (
+            <div style={flyJoystickLayerStyle}>
+              {[
+                { key: 'move', side: 'left' as const, ref: flyMoveStickRef },
+                { key: 'look', side: 'right' as const, ref: flyLookStickRef },
+              ].map((joy) => (
+                <div
+                  key={joy.key}
+                  aria-label={`${joy.key} joystick`}
+                  style={{ ...flyJoystickBaseStyle, [joy.side]: 18 }}
+                  onPointerDown={(e) => {
+                    joy.ref.current.pointerId = e.pointerId;
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                    updateFlyJoystick(joy.ref, e.currentTarget, e);
+                  }}
+                  onPointerMove={(e) => {
+                    if (joy.ref.current.pointerId === e.pointerId) {
+                      updateFlyJoystick(joy.ref, e.currentTarget, e);
+                    }
+                  }}
+                  onPointerUp={(e) => resetFlyJoystick(joy.ref, e.currentTarget, e.pointerId)}
+                  onPointerCancel={(e) => resetFlyJoystick(joy.ref, e.currentTarget, e.pointerId)}
+                >
+                  <div style={flyJoystickKnobStyle} />
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -1485,6 +1692,42 @@ export default function Annotation3DEditorPage() {
             )}
           </div>
 
+          {/* ── Default Camera Panel ── */}
+          <div style={{ padding: '0.875rem', borderBottom: '1px solid #2a2a2a' }}>
+            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Initial Camera</h3>
+            <p style={{ fontSize: '0.625rem', color: '#737373', margin: '0 0 0.75rem 0' }}>
+              Set the camera position that clients will see when first opening the splat. Navigate to your desired view in the 3D scene and click "Save Camera" below.
+            </p>
+
+            {splat?.defaultCameraJson && (
+              <div style={{ marginBottom: '0.75rem', padding: '0.5rem', background: '#0a2a0a', border: '1px solid #22c55e', borderRadius: 4 }}>
+                <div style={{ fontSize: '0.625rem', color: '#22c55e', fontWeight: 600, marginBottom: '0.25rem' }}>Current camera saved:</div>
+                <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+                  pos: [{splat.defaultCameraJson.position.map((v: number) => v.toFixed(2)).join(', ')}]
+                </div>
+                <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+                  target: [{splat.defaultCameraJson.target.map((v: number) => v.toFixed(2)).join(', ')}]
+                </div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
+              <Button variant="primary" size="sm" onClick={handleCameraSave} disabled={cameraSaving}>
+                {cameraSaving ? 'Saving...' : 'Save Camera'}
+              </Button>
+              {splat?.defaultCameraJson && (
+                <Button variant="secondary" size="sm" onClick={handleCameraReset} disabled={cameraSaving}>
+                  Reset
+                </Button>
+              )}
+              {cameraMessage && (
+                <span style={{ fontSize: '0.6875rem', color: cameraMessage.startsWith('Error') ? '#ef4444' : '#22c55e', flexBasis: '100%', marginTop: '0.25rem' }}>
+                  {cameraMessage}
+                </span>
+              )}
+            </div>
+          </div>
+
           {/* ── Pretransform Panel ── */}
           <div style={{ padding: '0.875rem' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Pretransform</h3>
@@ -1574,6 +1817,34 @@ const backLinkStyle: React.CSSProperties = { color: '#a3a3a3', textDecoration: '
 const editorContainerStyle: React.CSSProperties = { flex: 1, display: 'flex', minHeight: 0 };
 const viewerPaneStyle: React.CSSProperties = { flex: 1, position: 'relative', cursor: 'crosshair', background: '#050505' };
 const hintOverlayStyle: React.CSSProperties = { position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', padding: '0.5rem 1rem', background: 'rgba(13,13,13,0.85)', border: '1px solid #2a2a2a', borderRadius: 8, color: '#a3a3a3', fontSize: '0.75rem', pointerEvents: 'none', zIndex: 10 };
+const flyJoystickLayerStyle: React.CSSProperties = { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 30 };
+const flyJoystickBaseStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 18,
+  width: 104,
+  height: 104,
+  borderRadius: '50%',
+  background: 'rgba(245,245,245,0.12)',
+  border: '1px solid rgba(255,255,255,0.22)',
+  backdropFilter: 'blur(8px)',
+  opacity: 0.55,
+  pointerEvents: 'auto',
+  touchAction: 'none',
+  ['--jx' as string]: '0px',
+  ['--jy' as string]: '0px',
+};
+const flyJoystickKnobStyle: React.CSSProperties = {
+  position: 'absolute',
+  left: '50%',
+  top: '50%',
+  width: 42,
+  height: 42,
+  borderRadius: '50%',
+  background: 'rgba(245,245,245,0.34)',
+  border: '1px solid rgba(255,255,255,0.28)',
+  transform: 'translate(calc(-50% + var(--jx)), calc(-50% + var(--jy)))',
+  boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+};
 const panelStyle: React.CSSProperties = { width: 340, background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' };
 const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: '0.125rem' };
 const labelTextStyle: React.CSSProperties = { fontSize: '0.625rem', color: '#737373' };

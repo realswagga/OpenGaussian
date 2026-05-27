@@ -5,6 +5,7 @@ export type {
   SplatAssetFormat,
   ViewerLoadPhase,
   ViewerManifest,
+  DefaultCamera,
   MarkerPoint,
   AnnotationPoint,
   ViewerOptions,
@@ -31,3 +32,19 @@ export {
 } from './gsplatCenters.js';
 export { pickMarkerPoint } from './markerPlacement.js';
 export type { MarkerPlacementHit, MarkerPlacementInput } from './markerPlacement.js';
+export {
+  applyDeadzone,
+  center2D,
+  classifyTwoPointerGesture,
+  computeDepthAwareDollyStep,
+  computePinchScale,
+  distance2D,
+  readGamepadStick,
+} from './navigationControls.js';
+export type {
+  DepthAwareDollyInput,
+  GamepadStick,
+  GesturePoint,
+  TwoPointerGesture,
+  TwoPointerGestureInput,
+} from './navigationControls.js';

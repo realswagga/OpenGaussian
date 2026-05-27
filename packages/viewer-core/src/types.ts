@@ -12,11 +12,17 @@ export type ViewerLoadPhase =
   | 'complete'
   | 'error';
 
+export interface DefaultCamera {
+  position: [number, number, number];
+  target: [number, number, number];
+  fov?: number;
+}
+
 export interface ViewerManifest {
   id: string;
   slug: string;
   title: string;
-assets: {
+  assets: {
     format: SplatAssetFormat;
     sceneUrl: string;
     lodManifestUrl?: string;
@@ -24,7 +30,7 @@ assets: {
     posterUrl?: string;
   };
   viewer: {
-    defaultCamera?: unknown;
+    defaultCamera?: DefaultCamera;
     enableVr: boolean;
     enableWebGpu: boolean;
     lockScene?: boolean;
@@ -75,6 +81,7 @@ export interface ViewerOptions {
   onReady?: () => void;
   onError?: (error: Error) => void;
   onStats?: (stats: ViewerStats) => void;
+  onVrSessionChange?: (active: boolean) => void;
 }
 
 export interface ViewerStats {

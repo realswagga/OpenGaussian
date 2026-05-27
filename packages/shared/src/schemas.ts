@@ -19,11 +19,18 @@ export const createSplatSchema = z.object({
   description: z.string().max(2000).optional(),
 });
 
+export const defaultCameraSchema = z.object({
+  position: z.tuple([z.number(), z.number(), z.number()]),
+  target: z.tuple([z.number(), z.number(), z.number()]),
+  fov: z.number().min(1).max(180).optional(),
+});
+
 export const updateSplatSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['DRAFT', 'READY', 'PUBLISHED', 'ARCHIVED']).optional(),
+  defaultCameraJson: defaultCameraSchema.optional().nullable(),
 });
 
 // ============================================================
