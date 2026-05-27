@@ -13,8 +13,8 @@ function manifestWithAssets(assets: ViewerManifest['assets']): ViewerManifest {
       quality: 'auto',
       budgets: {
         desktop: 1_500_000,
-        mobile: 500_000,
-        vr: 700_000,
+        mobile: 300_000,
+        vr: 200_000,
       },
     },
   };

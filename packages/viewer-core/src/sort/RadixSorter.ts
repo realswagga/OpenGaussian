@@ -45,26 +45,24 @@ function floatToSortKey(v: number): number {
 // ---------------------------------------------------------------------------
 
 export class RadixSorter {
-  /** Number of elements this sorter was initialized for. */
   readonly capacity: number;
 
-  // Ping-pong sort buffers: each holds N pairs [key0, val0, key1, val1, ...]
   private bufA: KVBuffer;
   private bufB: KVBuffer;
-
-  // 256-bin histogram + prefix-sum buffer (reused across passes)
   private histogram: Uint32Array;
-
-  // Scratch depth array for converting float→uint key
   private depths: Float32Array;
+  private visibilityMask: Uint8Array | null = null;
 
   constructor(capacity: number) {
     this.capacity = capacity;
-    // Each entry = 2 uint32s (key + index)
     this.bufA = new Uint32Array(capacity * 2);
     this.bufB = new Uint32Array(capacity * 2);
     this.histogram = new Uint32Array(256);
     this.depths = new Float32Array(capacity);
+  }
+
+  setVisibilityMask(mask: Uint8Array | null): void {
+    this.visibilityMask = mask;
   }
 
   /**
@@ -77,6 +75,7 @@ export class RadixSorter {
     this.bufA = new Uint32Array(newCapacity * 2);
     this.bufB = new Uint32Array(newCapacity * 2);
     this.depths = new Float32Array(newCapacity);
+    this.visibilityMask = new Uint8Array(newCapacity);
     // histogram is always 256 — no resize needed
   }
 
@@ -89,12 +88,27 @@ export class RadixSorter {
    * After this call, bufA contains [key₀, 0, key₁, 1, …] where keyᵢ is the
    * uint32 bit-cast of depthᵢ.
    */
-  buildPairs(depths: Float32Array, N: number): void {
-    for (let i = 0; i < N; i++) {
-      const off = i * 2;
-      this.bufA[off] = floatToSortKey(depths[i]);
-      this.bufA[off + 1] = i;
+  buildPairs(depths: Float32Array, N: number): number {
+    const mask = this.visibilityMask;
+    let visibleCount = 0;
+    if (mask) {
+      for (let i = 0; i < N; i++) {
+        if (!mask[i]) {
+          const off = visibleCount * 2;
+          this.bufA[off] = floatToSortKey(depths[i]);
+          this.bufA[off + 1] = i;
+          visibleCount++;
+        }
+      }
+    } else {
+      for (let i = 0; i < N; i++) {
+        const off = i * 2;
+        this.bufA[off] = floatToSortKey(depths[i]);
+        this.bufA[off + 1] = i;
+      }
+      visibleCount = N;
     }
+    return visibleCount;
   }
 
   /**
@@ -192,21 +206,47 @@ export class RadixSorter {
     camPosX: number,
     camPosY: number,
     camPosZ: number,
-  ): Uint32Array {
-    // Compute view-space depths (distance² — cheaper than sqrt)
+    frustumPlanes?: Float32Array,
+  ): { sortedIndices: Uint32Array; visibleCount: number } {
+    const mask = this.visibilityMask;
+
+    if (mask && frustumPlanes) {
+      mask.fill(0);
+      for (let i = 0; i < N; i++) {
+        const px = positions[i * 3];
+        const py = positions[i * 3 + 1];
+        const pz = positions[i * 3 + 2];
+        let inside = true;
+        for (let p = 0; p < 6; p++) {
+          const off = p * 4;
+          const dist = frustumPlanes[off] * px + frustumPlanes[off + 1] * py + frustumPlanes[off + 2] * pz + frustumPlanes[off + 3];
+          if (dist < 0) {
+            inside = false;
+            mask[i] = 1;
+            break;
+          }
+        }
+        if (!inside) {
+          const dx = px - camPosX;
+          const dy = py - camPosY;
+          const dz = pz - camPosZ;
+          this.depths[i] = dx * dx + dy * dy + dz * dz;
+        }
+      }
+    }
+
     for (let i = 0; i < N; i++) {
+      if (mask && mask[i]) continue;
       const dx = positions[i * 3] - camPosX;
       const dy = positions[i * 3 + 1] - camPosY;
       const dz = positions[i * 3 + 2] - camPosZ;
       this.depths[i] = dx * dx + dy * dy + dz * dz;
     }
 
-    this.buildPairs(this.depths, N);
-    this.sort(N);
+    const visibleCount = this.buildPairs(this.depths, N);
+    this.sort(visibleCount);
 
-    // Return the raw sorted key-value buffer so caller can read indices
-    // without another copy. Format: [key₀, idx₀, key₁, idx₁, …] far→near.
-    return this.bufA;
+    return { sortedIndices: this.bufA, visibleCount };
   }
 
   /**

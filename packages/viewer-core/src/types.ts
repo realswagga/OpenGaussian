@@ -2,7 +2,7 @@ export type RendererMode = 'auto' | 'webgl2' | 'webgpu';
 export type CameraMode = 'orbit' | 'fly' | 'locked';
 export type QualityPreset = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
-export type QualityProfileName = 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
+export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
 export type ViewerLoadPhase =
   | 'idle'
   | 'loading-metadata'
@@ -16,12 +16,13 @@ export interface ViewerManifest {
   id: string;
   slug: string;
   title: string;
-  assets: {
+assets: {
     format: SplatAssetFormat;
     sceneUrl: string;
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
+    transitionDistances?: number[];
   };
   viewer: {
     defaultCamera?: unknown;
@@ -68,6 +69,8 @@ export interface ViewerOptions {
   quality?: QualityPreset;
   locked?: boolean;
   showMarkers?: boolean;
+  budgetOverride?: number;
+  disablePostFx?: boolean;
   onMarkerSelect?: (marker: MarkerPoint) => void;
   onProgress?: (progress: ViewerRuntimeProgress) => void;
   onReady?: () => void;
@@ -128,22 +131,45 @@ export interface QualityProfile {
   enablePostFx: boolean;
   markerDistanceLimit: number;
   antialias: boolean;
+  targetFps: number;
+  adaptiveBudgetEnabled: boolean;
+  sigmaScale: number;
+  shaderPrecision: 'mediump' | 'highp';
 }
 
 export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
+  phoneUltraLow: {
+    splatBudget: 75_000,
+    maxDevicePixelRatio: 0.75,
+    enablePostFx: false,
+    markerDistanceLimit: 10,
+    antialias: false,
+    targetFps: 30,
+    adaptiveBudgetEnabled: true,
+    sigmaScale: 2.0,
+    shaderPrecision: 'mediump',
+  },
   phoneLow: {
-    splatBudget: 400_000,
+    splatBudget: 150_000,
     maxDevicePixelRatio: 1,
     enablePostFx: false,
     markerDistanceLimit: 20,
     antialias: false,
+    targetFps: 30,
+    adaptiveBudgetEnabled: true,
+    sigmaScale: 2.0,
+    shaderPrecision: 'mediump',
   },
   phoneHigh: {
-    splatBudget: 800_000,
+    splatBudget: 300_000,
     maxDevicePixelRatio: 1.25,
     enablePostFx: false,
     markerDistanceLimit: 30,
     antialias: false,
+    targetFps: 45,
+    adaptiveBudgetEnabled: true,
+    sigmaScale: 2.5,
+    shaderPrecision: 'mediump',
   },
   desktopMedium: {
     splatBudget: 1_500_000,
@@ -151,6 +177,10 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     enablePostFx: true,
     markerDistanceLimit: 60,
     antialias: false,
+    targetFps: 60,
+    adaptiveBudgetEnabled: false,
+    sigmaScale: 3.0,
+    shaderPrecision: 'highp',
   },
   desktopHigh: {
     splatBudget: 3_000_000,
@@ -158,13 +188,21 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     enablePostFx: true,
     markerDistanceLimit: 100,
     antialias: true,
+    targetFps: 60,
+    adaptiveBudgetEnabled: false,
+    sigmaScale: 3.0,
+    shaderPrecision: 'highp',
   },
   vrQuest: {
-    splatBudget: 700_000,
+    splatBudget: 200_000,
     maxDevicePixelRatio: 1,
     enablePostFx: false,
     markerDistanceLimit: 40,
     antialias: false,
+    targetFps: 72,
+    adaptiveBudgetEnabled: true,
+    sigmaScale: 2.0,
+    shaderPrecision: 'mediump',
   },
 };
 
@@ -195,9 +233,11 @@ export function detectDeviceProfile(): QualityProfileName {
 
   if (isMobile) {
     const nav = navigator as Navigator & { deviceMemory?: number };
-    const isHighEnd = (nav.deviceMemory && nav.deviceMemory >= 4) ||
-      (navigator.hardwareConcurrency && navigator.hardwareConcurrency >= 6);
-    return isHighEnd ? 'phoneHigh' : 'phoneLow';
+    const mem = nav.deviceMemory ?? 4;
+    const cores = navigator.hardwareConcurrency ?? 4;
+    if (mem < 2 || cores < 2) return 'phoneUltraLow';
+    if (mem >= 4 || cores >= 6) return 'phoneHigh';
+    return 'phoneLow';
   }
 
   return 'desktopMedium';

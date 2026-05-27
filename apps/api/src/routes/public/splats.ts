@@ -113,8 +113,8 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         quality: 'auto',
         budgets: {
           desktop: Number(process.env.DEFAULT_LOD_BUDGET) || 1_500_000,
-          mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 500_000,
-          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 700_000,
+          mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 300_000,
+          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 200_000,
         },
         pretransform: splat.pretransformJson || null,
       },
