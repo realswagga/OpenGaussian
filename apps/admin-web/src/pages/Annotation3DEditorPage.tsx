@@ -148,9 +148,9 @@ function buildEditorManifest(splat: SplatInfo): ViewerManifest | null {
       enableWebGpu: false,
       quality: 'auto',
       budgets: {
-        desktop: 1_500_000,
-        mobile: 500_000,
-        vr: 700_000,
+        desktop: 900_000,
+        mobile: 250_000,
+        vr: 120_000,
       },
       pretransform: splat.pretransformJson || null,
     },
@@ -202,6 +202,7 @@ export default function Annotation3DEditorPage() {
 
   // Fly mode
   const [flyMode, setFlyMode] = useState(false);
+  const flyMoveSpeedRef = useRef(4.0);
   const flyModeRef = useRef(false);
   const flyYawRef = useRef(0);
   const flyPitchRef = useRef(0);
@@ -554,6 +555,43 @@ export default function Annotation3DEditorPage() {
       RIGHT: THREE.MOUSE.PAN,
     };
     orbitRef.current = orbit;
+    orbit.enableZoom = false;
+
+    function onCustomWheel(e: WheelEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+      if (flyModeRef.current) {
+        const zoomIn = e.deltaY < 0;
+        const speedFactor = zoomIn ? 1.15 : 0.85;
+        flyMoveSpeedRef.current = Math.max(0.5, Math.min(50, flyMoveSpeedRef.current * speedFactor));
+        return;
+      }
+      const zoomIn = e.deltaY < 0;
+      const currentDist = camera.position.distanceTo(orbit.target);
+      const scaleFactor = zoomIn ? 0.9 : 1.1;
+      const newDist = currentDist * scaleFactor;
+      const direction = zoomIn ? -1 : 1;
+      const minDelta = 0.05 * direction;
+      const targetDist = newDist + minDelta;
+      const clampedDist = Math.max(orbit.minDistance, Math.min(orbit.maxDistance, targetDist));
+
+      if (zoomIn) {
+        const camForward = new THREE.Vector3();
+        camera.getWorldDirection(camForward);
+        camForward.y = 0;
+        if (camForward.lengthSq() > 0.01) {
+          camForward.normalize();
+          const nudgeAmount = Math.min(0.02 * clampedDist, 0.1);
+          orbit.target.add(camForward.multiplyScalar(nudgeAmount));
+        }
+      }
+
+      const camForward = new THREE.Vector3();
+      camera.getWorldDirection(camForward);
+      camera.position.copy(orbit.target).add(camForward.multiplyScalar(-clampedDist));
+      orbit.update();
+    }
+    renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false });
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -650,7 +688,7 @@ export default function Annotation3DEditorPage() {
     // ── Fly camera helpers ──
     function updateFlyCamera(dt: number) {
       const k = keysRef.current;
-      const speed = k.has('shift') ? 12 : 4;
+      const speed = k.has('shift') ? flyMoveSpeedRef.current * 3 : flyMoveSpeedRef.current;
       const cam = camera;
       const forward = new THREE.Vector3();
       cam.getWorldDirection(forward);
@@ -721,10 +759,21 @@ export default function Annotation3DEditorPage() {
       if (!k.has('w') && !k.has('s') && !k.has('a') && !k.has('d')) return;
       const speed = 4;
       const cam = camera;
+      const rawForward = new THREE.Vector3();
+      cam.getWorldDirection(rawForward);
+      rawForward.y = 0;
       const forward = new THREE.Vector3();
-      cam.getWorldDirection(forward);
-      forward.y = 0;
-      forward.normalize();
+      if (rawForward.lengthSq() > 0.01) {
+        forward.copy(rawForward.normalize());
+      } else {
+        const offset = cam.position.clone().sub(orbit.target);
+        offset.y = 0;
+        if (offset.lengthSq() > 0.01) {
+          forward.copy(offset.normalize());
+        } else {
+          forward.set(0, 0, -1);
+        }
+      }
       const strafe = new THREE.Vector3();
       strafe.crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
 
@@ -757,6 +806,7 @@ export default function Annotation3DEditorPage() {
       document.removeEventListener('mousemove', onFlyMouseMove);
       window.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onFlyKeyUp);
+      renderer.domElement.removeEventListener('wheel', onCustomWheel);
       document.exitPointerLock();
       renderer.dispose();
       if (splatCloudRef.current) {
@@ -1173,11 +1223,24 @@ export default function Annotation3DEditorPage() {
               const next = !flyMode;
               setFlyMode(next);
               if (next) {
-                flyYawRef.current = 0;
-                flyPitchRef.current = 0;
+                const cam = cameraRef.current!;
+                const forward = new THREE.Vector3();
+                cam.getWorldDirection(forward);
+                flyYawRef.current = Math.atan2(forward.x, forward.z);
+                const horizontalLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
+                flyPitchRef.current = Math.atan2(forward.y, horizontalLen);
+                flyMoveSpeedRef.current = 4.0;
                 containerRef.current?.querySelector('canvas')?.requestPointerLock();
               } else {
                 document.exitPointerLock();
+                const cam = cameraRef.current!;
+                const orbit = orbitRef.current!;
+                const pos = cam.position.clone();
+                const forward = new THREE.Vector3();
+                cam.getWorldDirection(forward);
+                const orbitDist = Math.max(1, Math.min(20, pos.distanceTo(orbit.target) || 4));
+                orbit.target.copy(pos.clone().add(forward.multiplyScalar(orbitDist)));
+                orbit.update();
               }
             }}
             title="Fly mode (F) — WASD + mouse look, Shift=boost, Q/E=up/down"

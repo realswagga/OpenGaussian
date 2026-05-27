@@ -6,6 +6,7 @@ import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { createPlayCanvasLodManifest, sampleLodVertices, type LodCellManifestInput, type LodSourceVertex } from './lodManifest.js';
 
 // Configuration from environment
 const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
@@ -217,9 +218,9 @@ async function markVersionReady(splatId: string, versionId: string, updates: {
   });
 }
 
-// ────────────────────────────────────────────
+// --------------------------------------------
 // Asset preview helpers
-// ────────────────────────────────────────────
+// --------------------------------------------
 
 async function writeTempBinary(data: Buffer): Promise<string> {
   const tmpDir = os.tmpdir();
@@ -282,6 +283,245 @@ function buildPlyHeader(vertexCount: number): Buffer {
   ].join('\n');
 
   return Buffer.from(header, 'ascii');
+}
+
+async function generatePlayCanvasLod(
+  job: Job<JobData>,
+  splatId: string,
+  versionId: string,
+  sourceObjectKey: string,
+): Promise<unknown> {
+  await job.updateProgress(5);
+  await updateVersionLog(versionId, 'Starting PlayCanvas octree LOD generation...');
+
+  const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
+  await job.updateProgress(15);
+
+  const ext = getSplatExtension(sourceObjectKey);
+  const format = formatFromExtension(ext);
+
+  if (format !== 'ply') {
+    await fs.promises.unlink(tmpFile).catch(() => {});
+    await updateVersionLog(versionId, `LOD generation skipped: format "${format}" not supported for octree LOD. Use standard binary PLY input.`);
+    await markVersionReady(splatId, versionId, {});
+    await job.updateProgress(100);
+    return { skipped: true, reason: `Unsupported format: ${format}` };
+  }
+
+  const fileBuffer = await fs.promises.readFile(tmpFile);
+  const headerStr = fileBuffer.toString('ascii', 0, Math.min(fileBuffer.length, 16_384));
+  const isAscii = /^ply\r?\nformat ascii/.test(headerStr);
+  const isBinary = /^ply\r?\nformat binary_little_endian/.test(headerStr);
+
+  if (isAscii) {
+    await fs.promises.unlink(tmpFile).catch(() => {});
+    await updateVersionLog(versionId, 'LOD skipped: ASCII PLY is not supported by the production LOD packer. Convert to binary PLY first.');
+    await markVersionReady(splatId, versionId, {});
+    await job.updateProgress(100);
+    return { skipped: true, reason: 'ASCII PLY is not supported for LOD generation' };
+  }
+
+  if (!isBinary) {
+    await fs.promises.unlink(tmpFile).catch(() => {});
+    await updateVersionLog(versionId, 'LOD skipped: unrecognized PLY format');
+    await markVersionReady(splatId, versionId, {});
+    await job.updateProgress(100);
+    return { skipped: true, reason: 'Unrecognized PLY format' };
+  }
+
+  const vMatch = /element vertex (\d+)/.exec(headerStr);
+  const totalVertices = vMatch?.[1] ? parseInt(vMatch[1], 10) : 0;
+  const headerEndLf = fileBuffer.indexOf('end_header\n');
+  const headerEndCrlf = fileBuffer.indexOf('end_header\r\n');
+  const dataStart = headerEndCrlf >= 0
+    ? headerEndCrlf + 'end_header\r\n'.length
+    : headerEndLf >= 0
+      ? headerEndLf + 'end_header\n'.length
+      : 0;
+  const vertexSize = 62 * 4;
+
+  if (totalVertices === 0 || dataStart === 0 || dataStart + vertexSize > fileBuffer.length) {
+    await fs.promises.unlink(tmpFile).catch(() => {});
+    await updateVersionLog(versionId, 'LOD skipped: could not parse binary PLY vertex payload');
+    await markVersionReady(splatId, versionId, {});
+    await job.updateProgress(100);
+    return { skipped: true, reason: 'Could not parse binary PLY payload' };
+  }
+
+  await updateVersionLog(versionId, `Parsed binary PLY: ${totalVertices.toLocaleString()} vertices`);
+
+  let minX = Infinity, maxX = -Infinity;
+  let minY = Infinity, maxY = -Infinity;
+  let minZ = Infinity, maxZ = -Infinity;
+  const vertices: LodSourceVertex[] = [];
+
+  for (let i = 0; i < totalVertices; i++) {
+    const offset = dataStart + i * vertexSize;
+    if (offset + vertexSize > fileBuffer.length) break;
+
+    const x = fileBuffer.readFloatLE(offset);
+    const y = fileBuffer.readFloatLE(offset + 4);
+    const z = fileBuffer.readFloatLE(offset + 8);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+
+    const rawOpacity = fileBuffer.readFloatLE(offset + 54 * 4);
+    const opacity = Number.isFinite(rawOpacity) ? 1 / (1 + Math.exp(-rawOpacity)) : 0;
+    const sx = Math.exp(Math.min(20, fileBuffer.readFloatLE(offset + 55 * 4)));
+    const sy = Math.exp(Math.min(20, fileBuffer.readFloatLE(offset + 56 * 4)));
+    const sz = Math.exp(Math.min(20, fileBuffer.readFloatLE(offset + 57 * 4)));
+    const maxScale = Math.max(
+      Number.isFinite(sx) ? sx : 0,
+      Number.isFinite(sy) ? sy : 0,
+      Number.isFinite(sz) ? sz : 0,
+      1e-6,
+    );
+    const importance = opacity * maxScale;
+
+    vertices.push({ x, y, z, offset, importance });
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (y < minY) minY = y; if (y > maxY) maxY = y;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
+  }
+
+  if (vertices.length === 0 || !Number.isFinite(minX)) {
+    await fs.promises.unlink(tmpFile).catch(() => {});
+    await updateVersionLog(versionId, 'LOD skipped: no valid splat positions found');
+    await markVersionReady(splatId, versionId, {});
+    await job.updateProgress(100);
+    return { skipped: true, reason: 'No valid splat positions found' };
+  }
+
+  await job.updateProgress(30);
+
+  const gridSize = 8;
+  const cellSizeX = (maxX - minX) / gridSize || 1;
+  const cellSizeY = (maxY - minY) / gridSize || 1;
+  const cellSizeZ = (maxZ - minZ) / gridSize || 1;
+
+  interface Cell {
+    cx: number;
+    cy: number;
+    cz: number;
+    vertices: LodSourceVertex[];
+  }
+
+  const cellMap = new Map<string, Cell>();
+  for (const vertex of vertices) {
+    const cx = Math.max(0, Math.min(gridSize - 1, Math.floor((vertex.x - minX) / cellSizeX)));
+    const cy = Math.max(0, Math.min(gridSize - 1, Math.floor((vertex.y - minY) / cellSizeY)));
+    const cz = Math.max(0, Math.min(gridSize - 1, Math.floor((vertex.z - minZ) / cellSizeZ)));
+    const key = `${cx}_${cy}_${cz}`;
+    const cell = cellMap.get(key);
+    if (cell) {
+      cell.vertices.push(vertex);
+    } else {
+      cellMap.set(key, { cx, cy, cz, vertices: [vertex] });
+    }
+  }
+
+  await updateVersionLog(versionId, `Built ${cellMap.size} LOD cells from ${vertices.length.toLocaleString()} valid positions`);
+  await job.updateProgress(45);
+
+  const lodLevels = [
+    { filename: 'lod-0.ply', ratio: 1 },
+    { filename: 'lod-1.ply', ratio: 0.2 },
+    { filename: 'lod-2.ply', ratio: 0.05 },
+    { filename: 'lod-3.ply', ratio: 0.01 },
+  ] as const;
+  const filenames = lodLevels.map((level) => level.filename);
+  const lodBodies: Buffer[][] = lodLevels.map(() => []);
+  const lodVertexCounts = lodLevels.map(() => 0);
+  const cellsForManifest: LodCellManifestInput[] = [];
+
+  for (const cell of cellMap.values()) {
+    const lods: LodCellManifestInput['lods'] = [];
+    const cellBound = {
+      min: [
+        minX + cell.cx * cellSizeX,
+        minY + cell.cy * cellSizeY,
+        minZ + cell.cz * cellSizeZ,
+      ] as [number, number, number],
+      max: [
+        minX + (cell.cx + 1) * cellSizeX,
+        minY + (cell.cy + 1) * cellSizeY,
+        minZ + (cell.cz + 1) * cellSizeZ,
+      ] as [number, number, number],
+    };
+
+    for (let lodIndex = 0; lodIndex < lodLevels.length; lodIndex++) {
+      const level = lodLevels[lodIndex]!;
+      const sampleCount = Math.max(1, Math.round(cell.vertices.length * level.ratio));
+      const sampled = level.ratio >= 1
+        ? cell.vertices.slice()
+        : sampleLodVertices(cell.vertices, sampleCount);
+      const offset = lodVertexCounts[lodIndex]!;
+      const count = sampled.length;
+      const lodData = Buffer.alloc(count * vertexSize);
+
+      for (let sampleIndex = 0; sampleIndex < count; sampleIndex++) {
+        const srcOffset = sampled[sampleIndex]!.offset;
+        fileBuffer.copy(lodData, sampleIndex * vertexSize, srcOffset, srcOffset + vertexSize);
+      }
+
+      lodBodies[lodIndex]!.push(lodData);
+      lodVertexCounts[lodIndex] = offset + count;
+      lods[lodIndex] = { file: lodIndex, offset, count };
+    }
+
+    cellsForManifest.push({ bound: cellBound, lods });
+  }
+
+  await job.updateProgress(65);
+
+  for (let lodIndex = 0; lodIndex < lodLevels.length; lodIndex++) {
+    const body = Buffer.concat(lodBodies[lodIndex]!, lodVertexCounts[lodIndex]! * vertexSize);
+    const lodBuffer = Buffer.concat([buildPlyHeader(lodVertexCounts[lodIndex]!), body]);
+    const lodKey = `splats/${splatId}/versions/${versionId}/${filenames[lodIndex]!}`;
+    await writeBuffer(lodKey, lodBuffer);
+  }
+
+  const lodMeta = createPlayCanvasLodManifest({
+    bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
+    filenames,
+    cells: cellsForManifest,
+  });
+  const lodMetaBuf = Buffer.from(JSON.stringify(lodMeta), 'utf-8');
+  const lodMetaKey = `splats/${splatId}/versions/${versionId}/lod-meta.json`;
+  await writeBuffer(lodMetaKey, lodMetaBuf);
+
+  const fullSceneKey = `splats/${splatId}/versions/${versionId}/scene.ply`;
+  const fullData = Buffer.alloc(vertices.length * vertexSize);
+  for (let i = 0; i < vertices.length; i++) {
+    const srcOffset = vertices[i]!.offset;
+    fileBuffer.copy(fullData, i * vertexSize, srcOffset, srcOffset + vertexSize);
+  }
+  await writeBuffer(fullSceneKey, Buffer.concat([buildPlyHeader(vertices.length), fullData]));
+
+  await fs.promises.unlink(tmpFile).catch(() => {});
+
+  await job.updateProgress(90);
+  await updateVersionLog(
+    versionId,
+    `LOD generation complete: ${filenames.length} packed files, ${cellMap.size} cells, counts ${lodVertexCounts.join(' / ')}`,
+  );
+
+  await markVersionReady(splatId, versionId, {
+    convertedKey: lodMetaKey,
+    productionFormat: 'lod-meta',
+    lodKey: lodMetaKey,
+    splatCount: vertices.length,
+    sizeBytes: lodMetaBuf.length,
+  });
+
+  await job.updateProgress(100);
+  await updateVersionLog(versionId, `LOD ready: PlayCanvas lod-meta.json with ${vertices.length.toLocaleString()} source splats`);
+  return {
+    cellCount: cellMap.size,
+    splatCount: vertices.length,
+    lodLevels: lodLevels.length,
+    filenames,
+    fallbackObjectKey: fullSceneKey,
+  };
 }
 
 async function generatePoster(plyPath: string): Promise<Buffer> {
@@ -589,234 +829,10 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         };
       }
 
-          case 'splat.generateLod': {
-              if (!sourceObjectKey) throw new Error('sourceObjectKey required for LOD generation');
-      
-              await job.updateProgress(5);
-              await updateVersionLog(versionId, 'Starting LOD generation...');
-      
-              const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
-              await job.updateProgress(15);
-      
-              const ext = getSplatExtension(sourceObjectKey);
-              const format = formatFromExtension(ext);
-      
-              // Only generate LOD for PLY files
-              if (format !== 'ply' && format !== 'compressed-ply') {
-                await fs.promises.unlink(tmpFile).catch(() => {});
-                await updateVersionLog(versionId, `LOD generation skipped: format "${format}" not supported for LOD. Only PLY files can be auto-chunked.`);
-                await markVersionReady(splatId, versionId, {});
-                await job.updateProgress(100);
-                return { skipped: true, reason: `Unsupported format: ${format}` };
-              }
-      
-              // Read PLY to extract vertex positions
-              const fileBuffer = await fs.promises.readFile(tmpFile);
-              const headerStr = fileBuffer.toString('ascii', 0, Math.min(fileBuffer.length, 8192));
-              const isAscii = headerStr.startsWith('ply\nformat ascii');
-              const isBinary = headerStr.startsWith('ply\nformat binary_little_endian');
-      
-              if (!isAscii && !isBinary) {
-                await fs.promises.unlink(tmpFile).catch(() => {});
-                await updateVersionLog(versionId, 'LOD skipped: unrecognized PLY format');
-                await markVersionReady(splatId, versionId, {});
-                await job.updateProgress(100);
-                return { skipped: true, reason: 'Unrecognized PLY format' };
-              }
-      
-              const vMatch = /element vertex (\d+)/.exec(headerStr);
-              const totalVertices = vMatch?.[1] ? parseInt(vMatch[1], 10) : 0;
-              const headerEnd = fileBuffer.indexOf('end_header\n');
-              const dataStart = headerEnd >= 0 ? headerEnd + 'end_header\n'.length : 0;
-      
-              if (totalVertices === 0 || dataStart === 0) {
-                await fs.promises.unlink(tmpFile).catch(() => {});
-                await updateVersionLog(versionId, 'LOD skipped: could not parse vertex count');
-                await markVersionReady(splatId, versionId, {});
-                await job.updateProgress(100);
-                return { skipped: true, reason: 'Could not parse PLY header' };
-              }
-      
-              await updateVersionLog(versionId, `Parsed PLY: ${totalVertices.toLocaleString()} vertices, format=${isAscii ? 'ascii' : 'binary'}`);
-      
-              // For binary PLY, extract positions using known vertex size (62 floats)
-              const vertexSize = isBinary ? 62 * 4 : 0; // 62 floats × 4 bytes
-      
-              // Build spatial octree
-              // Read all positions first pass: find bounds
-              let minX = Infinity, maxX = -Infinity;
-              let minY = Infinity, maxY = -Infinity;
-              let minZ = Infinity, maxZ = -Infinity;
-      
-              const positions: { x: number; y: number; z: number; offset: number }[] = [];
-      
-              if (isBinary) {
-                for (let i = 0; i < totalVertices; i++) {
-                  const off = dataStart + i * vertexSize;
-                  if (off + 12 > fileBuffer.length) break;
-                  const x = fileBuffer.readFloatLE(off);
-                  const y = fileBuffer.readFloatLE(off + 4);
-                  const z = fileBuffer.readFloatLE(off + 8);
-                  if (!isNaN(x) && !isNaN(y) && !isNaN(z)) {
-                    positions.push({ x, y, z, offset: off });
-                    if (x < minX) minX = x; if (x > maxX) maxX = x;
-                    if (y < minY) minY = y; if (y > maxY) maxY = y;
-                    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
-                  }
-                }
-              }
-      
-              if (!isFinite(minX)) { minX = -4; maxX = 4; minY = -2; maxY = 2; minZ = -4; maxZ = 4; }
-              await job.updateProgress(30);
-      
-              // Build octree cells
-              const gridSize = 8; // 8×8×8 = 512 cells
-              const cellSizeX = (maxX - minX) / gridSize || 1;
-              const cellSizeY = (maxY - minY) / gridSize || 1;
-              const cellSizeZ = (maxZ - minZ) / gridSize || 1;
-      
-              interface Cell {
-                cx: number; cy: number; cz: number;
-                vertices: { x: number; y: number; z: number; offset: number }[];
-              }
-              const cellMap = new Map<string, Cell>();
-      
-              for (const v of positions) {
-                const cx = Math.min(gridSize - 1, Math.floor((v.x - minX) / cellSizeX));
-                const cy = Math.min(gridSize - 1, Math.floor((v.y - minY) / cellSizeY));
-                const cz = Math.min(gridSize - 1, Math.floor((v.z - minZ) / cellSizeZ));
-                const key = `${cx}_${cy}_${cz}`;
-                if (!cellMap.has(key)) {
-                  cellMap.set(key, { cx, cy, cz, vertices: [] });
-                }
-                cellMap.get(key)!.vertices.push(v);
-              }
-      
-              await updateVersionLog(versionId, `Built ${cellMap.size} octree cells from ${positions.length} positions`);
-              await job.updateProgress(45);
-      
-              // LOD levels: 100%, 25%, 6%, 1.5%
-              const lodLevels = [
-                { name: 'lod-0', ratio: 1.0 },
-                { name: 'lod-25', ratio: 0.25 },
-                { name: 'lod-6', ratio: 0.06 },
-                { name: 'lod-1-5', ratio: 0.015 },
-              ];
-      
-              const chunkManifest: Record<string, unknown>[] = [];
-              const cells = Array.from(cellMap.values());
-      
-              // Track how many cells actually produce files
-              let filesWritten = 0;
-      
-              for (const cell of cells) {
-                const cellName = `cell-${cell.cx}_${cell.cy}_${cell.cz}`;
-      
-                for (const lod of lodLevels) {
-                  if (cell.vertices.length === 0) continue;
-                  const sampleCount = Math.max(1, Math.round(cell.vertices.length * lod.ratio));
-      
-                  // Importance-sampled: pick evenly spaced vertices for distribution
-                  const stride = Math.max(1, Math.floor(cell.vertices.length / sampleCount));
-                  const sampled = [];
-                  for (let s = 0; s < Math.min(sampleCount, cell.vertices.length); s++) {
-                    const idx = Math.min(s * stride, cell.vertices.length - 1);
-                    sampled.push(cell.vertices[idx]!);
-                  }
-      
-                  if (sampled.length < 10) continue; // Skip trivial chunks
-      
-                  // Build a minimal binary PLY chunk
-                  const chunkHeader = buildPlyHeader(sampled.length);
-                  const chunkData = Buffer.alloc(sampled.length * vertexSize);
-                  for (let s = 0; s < sampled.length; s++) {
-                    const srcOff = sampled[s]!.offset;
-                    const dstOff = s * vertexSize;
-                    if (srcOff + vertexSize <= fileBuffer.length) {
-                      fileBuffer.copy(chunkData, dstOff, srcOff, srcOff + vertexSize);
-                    }
-                  }
-      
-                  const chunkBuf = Buffer.concat([chunkHeader, chunkData]);
-                  const chunkKey = `splats/${splatId}/versions/${versionId}/chunks/${cellName}_${lod.name}.ply`;
-      
-                  await writeBuffer(chunkKey, chunkBuf);
-                  filesWritten++;
-      
-                  chunkManifest.push({
-                    cell: cellName,
-                    lod: lod.name,
-                    vertexCount: sampled.length,
-                    key: chunkKey,
-                    bounds: {
-                      min: [minX + cell.cx * cellSizeX, minY + cell.cy * cellSizeY, minZ + cell.cz * cellSizeZ],
-                      max: [minX + (cell.cx + 1) * cellSizeX, minY + (cell.cy + 1) * cellSizeY, minZ + (cell.cz + 1) * cellSizeZ],
-                    },
-                  });
-                }
-              }
-      
-              const boundsRadius = Math.sqrt(
-                ((maxX - minX) / 2) ** 2 +
-                ((maxY - minY) / 2) ** 2 +
-                ((maxZ - minZ) / 2) ** 2
-              ) || 4;
-
-              const transitionDistances = [
-                0.3 * boundsRadius,
-                1.0 * boundsRadius,
-                3.0 * boundsRadius,
-              ];
-
-              // Build lod-meta.json manifest
-              const lodMeta = {
-                version: 1,
-                gridSize,
-                bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
-                cellCount: cellMap.size,
-                format: 'ply',
-                transitionDistances,
-                chunks: chunkManifest,
-              };
-      
-              const lodMetaJson = JSON.stringify(lodMeta);
-              const lodMetaBuf = Buffer.from(lodMetaJson, 'utf-8');
-              const lodMetaKey = `splats/${splatId}/versions/${versionId}/scene.lod-meta.json`;
-              await writeBuffer(lodMetaKey, lodMetaBuf);
-      
-              // Write a full scene PLY for direct load fallback
-              const fullSceneKey = `splats/${splatId}/versions/${versionId}/scene.ply`;
-              const fullHeader = buildPlyHeader(positions.length);
-              const fullData = Buffer.alloc(positions.length * vertexSize);
-              for (let i = 0; i < positions.length; i++) {
-                const srcOff = positions[i]!.offset;
-                const dstOff = i * vertexSize;
-                if (srcOff + vertexSize <= fileBuffer.length) {
-                  fileBuffer.copy(fullData, dstOff, srcOff, srcOff + vertexSize);
-                }
-              }
-              await writeBuffer(fullSceneKey, Buffer.concat([fullHeader, fullData]));
-      
-              await fs.promises.unlink(tmpFile).catch(() => {});
-      
-              await job.updateProgress(85);
-              await updateVersionLog(versionId, `LOD generation complete: ${filesWritten} chunk files, ${chunkManifest.length} manifest entries`);
-      
-              const stats = await fs.promises.stat(await writeTempBinary(lodMetaBuf));
-      
-              // Mark version as ready with LOD info
-              await markVersionReady(splatId, versionId, {
-                convertedKey: fullSceneKey,
-                productionFormat: 'ply',
-                lodKey: lodMetaKey,
-                splatCount: positions.length,
-                sizeBytes: stats.size,
-              });
-      
-              await job.updateProgress(100);
-              await updateVersionLog(versionId, `LOD complete: ${positions.length.toLocaleString()} splats in ${cellMap.size} cells, ${lodLevels.length} LOD levels`);
-              return { cellCount: cellMap.size, splatCount: positions.length, lodLevels: lodLevels.length };
-            }
+      case 'splat.generateLod': {
+        if (!sourceObjectKey) throw new Error('sourceObjectKey required for LOD generation');
+        return generatePlayCanvasLod(job, splatId, versionId, sourceObjectKey);
+      }
 
       case 'splat.generatePreview': {
         if (!sourceObjectKey) throw new Error('sourceObjectKey required for preview');

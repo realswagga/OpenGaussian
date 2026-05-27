@@ -112,9 +112,9 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         enableWebGpu: true,
         quality: 'auto',
         budgets: {
-          desktop: Number(process.env.DEFAULT_LOD_BUDGET) || 1_500_000,
-          mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 300_000,
-          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 200_000,
+          desktop: Number(process.env.DEFAULT_LOD_BUDGET) || 900_000,
+          mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 250_000,
+          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 120_000,
         },
         pretransform: splat.pretransformJson || null,
       },

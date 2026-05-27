@@ -269,13 +269,16 @@ class GsViewerElement extends HTMLElement {
     this.currentCameraMode = locked ? 'locked' : 'orbit';
     this.buildControls();
 
+    const viewerManifest = manifest as import('@gsplat/viewer-core').ViewerManifest;
+    viewerManifest.viewer.enableVr = enableVr;
+
     this.viewer = new GsplatViewer({
       canvas: this.canvas,
-      manifest: manifest as import('@gsplat/viewer-core').ViewerManifest,
+      manifest: viewerManifest,
       markers,
       quality: this.currentQuality,
       cameraMode: this.currentCameraMode,
-      rendererMode: enableVr ? 'webgl2' : requestedRenderer,
+      rendererMode: requestedRenderer,
       locked,
       showMarkers,
       budgetOverride: this.getAttribute('budget') ? Number(this.getAttribute('budget')) : undefined,

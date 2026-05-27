@@ -22,7 +22,6 @@ assets: {
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
-    transitionDistances?: number[];
   };
   viewer: {
     defaultCamera?: unknown;
@@ -81,14 +80,26 @@ export interface ViewerOptions {
 export interface ViewerStats {
   fps: number;
   rendererMode: 'webgl2' | 'webgpu';
+  gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
   totalSplats?: number;
   activeSplats?: number;
+  actualRenderedSplats?: number;
   sortTimeMs?: number;
   canvasPixels?: number;
+  frameTimeMs?: number;
+  devicePixelRatio?: number;
+  minPixelSize?: number;
+  minContribution?: number;
+  alphaClip?: number;
+  lodBaseDistance?: number;
+  lodMultiplier?: number;
+  lodRange?: [number, number];
+  adaptiveQualityScale?: number;
+  renderOnDemand?: boolean;
   loadPhase?: ViewerLoadPhase;
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;
@@ -128,98 +139,156 @@ export interface ViewerRuntime {
 export interface QualityProfile {
   splatBudget: number;
   maxDevicePixelRatio: number;
+  maxPixelDim: number;
   enablePostFx: boolean;
   markerDistanceLimit: number;
   antialias: boolean;
   targetFps: number;
-  adaptiveBudgetEnabled: boolean;
-  sigmaScale: number;
-  shaderPrecision: 'mediump' | 'highp';
+  adaptiveQualityEnabled: boolean;
+  minPixelSize: number;
+  minContribution: number;
+  alphaClip: number;
+  lodBaseDistanceScale: number;
+  lodMultiplier: number;
+  lodRange: [number, number];
+  highQualitySH: boolean;
+  renderOnDemand: boolean;
+  preferredRenderer: RendererMode;
 }
 
 export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
   phoneUltraLow: {
-    splatBudget: 75_000,
-    maxDevicePixelRatio: 0.75,
+    splatBudget: 40_000,
+    maxDevicePixelRatio: 0.6,
+    maxPixelDim: 720,
     enablePostFx: false,
     markerDistanceLimit: 10,
     antialias: false,
     targetFps: 30,
-    adaptiveBudgetEnabled: true,
-    sigmaScale: 2.0,
-    shaderPrecision: 'mediump',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 4,
+    minContribution: 12,
+    alphaClip: 1 / 48,
+    lodBaseDistanceScale: 0.12,
+    lodMultiplier: 2.25,
+    lodRange: [3, 3],
+    highQualitySH: false,
+    renderOnDemand: true,
+    preferredRenderer: 'webgl2',
   },
   phoneLow: {
-    splatBudget: 150_000,
-    maxDevicePixelRatio: 1,
+    splatBudget: 75_000,
+    maxDevicePixelRatio: 0.75,
+    maxPixelDim: 900,
     enablePostFx: false,
     markerDistanceLimit: 20,
     antialias: false,
     targetFps: 30,
-    adaptiveBudgetEnabled: true,
-    sigmaScale: 2.0,
-    shaderPrecision: 'mediump',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 3.25,
+    minContribution: 8,
+    alphaClip: 1 / 64,
+    lodBaseDistanceScale: 0.15,
+    lodMultiplier: 2.5,
+    lodRange: [2, 3],
+    highQualitySH: false,
+    renderOnDemand: true,
+    preferredRenderer: 'webgl2',
   },
   phoneHigh: {
-    splatBudget: 300_000,
-    maxDevicePixelRatio: 1.25,
+    splatBudget: 250_000,
+    maxDevicePixelRatio: 1,
+    maxPixelDim: 1080,
     enablePostFx: false,
     markerDistanceLimit: 30,
     antialias: false,
     targetFps: 45,
-    adaptiveBudgetEnabled: true,
-    sigmaScale: 2.5,
-    shaderPrecision: 'mediump',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 2,
+    minContribution: 4,
+    alphaClip: 1 / 255,
+    lodBaseDistanceScale: 0.3,
+    lodMultiplier: 3,
+    lodRange: [1, 3],
+    highQualitySH: false,
+    renderOnDemand: true,
+    preferredRenderer: 'auto',
   },
   desktopMedium: {
-    splatBudget: 1_500_000,
+    splatBudget: 900_000,
     maxDevicePixelRatio: 1.5,
+    maxPixelDim: 1440,
     enablePostFx: true,
     markerDistanceLimit: 60,
     antialias: false,
     targetFps: 60,
-    adaptiveBudgetEnabled: false,
-    sigmaScale: 3.0,
-    shaderPrecision: 'highp',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 1.25,
+    minContribution: 2,
+    alphaClip: 1 / 255,
+    lodBaseDistanceScale: 0.6,
+    lodMultiplier: 3,
+    lodRange: [0, 3],
+    highQualitySH: true,
+    renderOnDemand: true,
+    preferredRenderer: 'webgpu',
   },
   desktopHigh: {
     splatBudget: 3_000_000,
     maxDevicePixelRatio: 2,
+    maxPixelDim: 2160,
     enablePostFx: true,
     markerDistanceLimit: 100,
     antialias: true,
     targetFps: 60,
-    adaptiveBudgetEnabled: false,
-    sigmaScale: 3.0,
-    shaderPrecision: 'highp',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 0.75,
+    minContribution: 1,
+    alphaClip: 1 / 255,
+    lodBaseDistanceScale: 1,
+    lodMultiplier: 3,
+    lodRange: [0, 3],
+    highQualitySH: true,
+    renderOnDemand: true,
+    preferredRenderer: 'webgpu',
   },
   vrQuest: {
-    splatBudget: 200_000,
+    splatBudget: 120_000,
     maxDevicePixelRatio: 1,
+    maxPixelDim: 1440,
     enablePostFx: false,
     markerDistanceLimit: 40,
     antialias: false,
     targetFps: 72,
-    adaptiveBudgetEnabled: true,
-    sigmaScale: 2.0,
-    shaderPrecision: 'mediump',
+    adaptiveQualityEnabled: true,
+    minPixelSize: 3,
+    minContribution: 8,
+    alphaClip: 1 / 64,
+    lodBaseDistanceScale: 0.15,
+    lodMultiplier: 2.5,
+    lodRange: [2, 3],
+    highQualitySH: false,
+    renderOnDemand: false,
+    preferredRenderer: 'webgl2',
   },
 };
 
 export function chooseRendererMode(input: {
   requested: 'auto' | 'webgl2' | 'webgpu';
-  isVrRequested: boolean;
+  isVrActive?: boolean;
   webgpuSupported: boolean;
+  preferred?: 'auto' | 'webgl2' | 'webgpu';
 }): 'webgl2' | 'webgpu' {
-  if (input.isVrRequested) {
+  if (input.isVrActive) {
     return 'webgl2';
   }
 
-  if (input.requested === 'webgpu' && input.webgpuSupported) {
+  const desired = input.requested === 'auto' ? (input.preferred ?? 'auto') : input.requested;
+  if (desired === 'webgpu' && input.webgpuSupported) {
     return 'webgpu';
   }
 
-  // Prefer WebGL2 by default — it is more visually stable across devices
+  // Prefer WebGL2 by default because it is more visually stable across devices
   // and avoids WebGPU rendering artifacts that are still being resolved
   // upstream in the PlayCanvas GSplat pipeline.
   return 'webgl2';

@@ -84,10 +84,10 @@ export const allowedMimeTypes = [
 
 export const viewerPresetSchema = z.object({
   name: z.string().min(1).max(100),
-  cameraMode: z.enum(['orbit', 'fly', 'walk', 'locked']).default('orbit'),
-  lodBudget: z.number().int().positive().default(1500000),
-  mobileLodBudget: z.number().int().positive().default(300000),
-  vrLodBudget: z.number().int().positive().default(200000),
+  cameraMode: z.enum(['orbit', 'fly', 'locked']).default('orbit'),
+  lodBudget: z.number().int().positive().default(900000),
+  mobileLodBudget: z.number().int().positive().default(250000),
+  vrLodBudget: z.number().int().positive().default(120000),
   enableVr: z.boolean().default(true),
   enableWebGpu: z.boolean().default(true),
   enableMarkers: z.boolean().default(true),
