@@ -8,7 +8,7 @@ export type SplatStatus = 'DRAFT' | 'PROCESSING' | 'READY' | 'PUBLISHED' | 'FAIL
 
 export type ProcessingStatus = 'PENDING' | 'RUNNING' | 'READY' | 'FAILED';
 
-export type CameraMode = 'orbit' | 'fly' | 'walk' | 'locked';
+export type CameraMode = 'orbit' | 'fly' | 'locked';
 
 export type RendererMode = 'auto' | 'webgl2' | 'webgpu';
 
@@ -109,7 +109,6 @@ export interface ViewerManifest {
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
-    transitionDistances?: number[];
   };
   viewer: {
     defaultCamera?: unknown;
@@ -148,14 +147,26 @@ export type AnnotationPoint = MarkerPoint;
 export interface ViewerStats {
   fps: number;
   rendererMode: 'webgl2' | 'webgpu';
+  gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
   totalSplats?: number;
   activeSplats?: number;
+  actualRenderedSplats?: number;
   sortTimeMs?: number;
   canvasPixels?: number;
+  frameTimeMs?: number;
+  devicePixelRatio?: number;
+  minPixelSize?: number;
+  minContribution?: number;
+  alphaClip?: number;
+  lodBaseDistance?: number;
+  lodMultiplier?: number;
+  lodRange?: [number, number];
+  adaptiveQualityScale?: number;
+  renderOnDemand?: boolean;
   loadPhase?: ViewerLoadPhase;
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;
@@ -220,13 +231,21 @@ export interface LoginResponse {
 export interface QualityProfile {
   splatBudget: number;
   maxDevicePixelRatio: number;
+  maxPixelDim: number;
   enablePostFx: boolean;
   markerDistanceLimit: number;
   antialias: boolean;
   targetFps: number;
-  adaptiveBudgetEnabled: boolean;
-  sigmaScale: number;
-  shaderPrecision: 'mediump' | 'highp';
+  adaptiveQualityEnabled: boolean;
+  minPixelSize: number;
+  minContribution: number;
+  alphaClip: number;
+  lodBaseDistanceScale: number;
+  lodMultiplier: number;
+  lodRange: [number, number];
+  highQualitySH: boolean;
+  renderOnDemand: boolean;
+  preferredRenderer: RendererMode;
 }
 
 // ============================================================

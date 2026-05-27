@@ -19,9 +19,16 @@ interface DebugInfo {
   drawCalls: number;
   activeSplats: number;
   budget: number;
+  minPixelSize: number;
+  minContribution: number;
+  alphaClip: number;
+  lodRange: string;
+  adaptiveQualityScale: number;
+  devicePixelRatio: number;
   loadPhase: ViewerLoadPhase | string;
   assetFormat: string;
   lodActive: boolean;
+  renderOnDemand: boolean;
 }
 
 function detectFeaturesSync() {
@@ -52,6 +59,7 @@ export default function ViewerPage() {
   const { slug } = useParams<{ slug: string }>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<GsplatViewer | null>(null);
+  const benchmarkSamplesRef = useRef<Record<string, Array<{ fps: number; frameTimeMs: number; activeSplats: number; budget: number }>>>({});
   const [manifest, setManifest] = useState<ViewerManifest | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [selectedMarker, setSelectedMarker] = useState<MarkerPoint | null>(null);
@@ -60,8 +68,11 @@ export default function ViewerPage() {
   const [error, setError] = useState<string | null>(null);
   const [vrError, setVrError] = useState<string | null>(null);
   const [rendererPref, setRendererPref] = useState<RendererPref>(() => {
-    const saved = localStorage.getItem(VIEWER_READY_KEY + '_renderer');
+    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEWER_READY_KEY + '_renderer') : null;
     if (saved === 'webgpu') return 'webgpu';
+    if (saved === 'webgl2') return 'webgl2';
+    const detected = detectFeaturesSync();
+    if (detected.webgpu && !detected.isMobile) return 'webgpu';
     return 'webgl2';
   });
   const [quality, setQuality] = useState<string>(() => localStorage.getItem(VIEWER_READY_KEY + '_quality') || 'auto');
@@ -72,19 +83,27 @@ export default function ViewerPage() {
   const [vrSupported, setVrSupported] = useState<boolean | null>(null);
   const [vrChecked, setVrChecked] = useState(false);
   const [showDebug, setShowDebug] = useState(() => localStorage.getItem(VIEWER_READY_KEY + '_debug') === 'true');
+  const benchmarkEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('benchmark') === '1';
   const [debugInfo, setDebugInfo] = useState<DebugInfo>({
     fps: 0,
     splats: 0,
-    rendererMode: '—',
-    quality: '—',
+    rendererMode: '-',
+    quality: '-',
     frameTimeMs: 0,
     gpuMemoryMB: 0,
     drawCalls: 0,
     activeSplats: 0,
     budget: 0,
-    loadPhase: '—',
-    assetFormat: '—',
+    minPixelSize: 0,
+    minContribution: 0,
+    alphaClip: 0,
+    lodRange: '-',
+    adaptiveQualityScale: 1,
+    devicePixelRatio: 1,
+    loadPhase: '-',
+    assetFormat: '-',
     lodActive: false,
+    renderOnDemand: false,
   });
 
   // Probe real VR support asynchronously (required for secure-context check
@@ -131,7 +150,7 @@ export default function ViewerPage() {
       });
   }, [slug]);
 
-  // Toggle renderer — destroys current viewer and recreates with new pref
+  // Toggle renderer, then recreate the viewer with the new preference.
   const toggleRenderer = useCallback(() => {
     setRendererPref((prev) => {
       const next: RendererPref = prev === 'webgpu' ? 'webgl2' : 'webgpu';
@@ -170,21 +189,40 @@ export default function ViewerPage() {
         setShowPoster(false);
       },
       onStats: (stats: ViewerStats) => {
+        if (benchmarkEnabled && stats.loadPhase !== 'loading-asset' && stats.loadPhase !== 'loading-metadata') {
+          const key = stats.quality;
+          const samples = benchmarkSamplesRef.current[key] ?? [];
+          samples.push({
+            fps: stats.fps,
+            frameTimeMs: stats.frameTimeMs ?? (stats.fps > 0 ? 1000 / stats.fps : 0),
+            activeSplats: stats.actualRenderedSplats ?? stats.activeSplats ?? 0,
+            budget: stats.splatBudget,
+          });
+          benchmarkSamplesRef.current[key] = samples.slice(-12);
+        }
+
         setDebugInfo({
           fps: stats.fps,
           splats: stats.approximateLoadedSplats ?? 0,
-          rendererMode: stats.rendererMode,
+          rendererMode: stats.gsplatRenderer ? `${stats.rendererMode}/${stats.gsplatRenderer}` : stats.rendererMode,
           quality: stats.quality,
-          frameTimeMs: stats.fps > 0 ? Math.round(1000 / stats.fps) : 0,
+          frameTimeMs: stats.frameTimeMs ? Math.round(stats.frameTimeMs) : stats.fps > 0 ? Math.round(1000 / stats.fps) : 0,
           gpuMemoryMB: (performance as any).memory?.usedJSHeapSize
             ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)
             : 0,
           drawCalls: 0,
-          activeSplats: stats.activeSplats || stats.approximateLoadedSplats || 0,
+          activeSplats: stats.actualRenderedSplats ?? stats.activeSplats ?? stats.approximateLoadedSplats ?? 0,
           budget: stats.splatBudget,
-          loadPhase: stats.loadPhase || '—',
-          assetFormat: stats.assetFormat || manifest.assets.format || '—',
+          minPixelSize: stats.minPixelSize ?? 0,
+          minContribution: stats.minContribution ?? 0,
+          alphaClip: stats.alphaClip ?? 0,
+          lodRange: stats.lodRange ? `${stats.lodRange[0]}-${stats.lodRange[1]}` : '-',
+          adaptiveQualityScale: stats.adaptiveQualityScale ?? 1,
+          devicePixelRatio: stats.devicePixelRatio ?? 1,
+          loadPhase: stats.loadPhase || '-',
+          assetFormat: stats.assetFormat || manifest.assets.format || '-',
           lodActive: Boolean(stats.lodActive),
+          renderOnDemand: Boolean(stats.renderOnDemand),
         });
       },
     });
@@ -219,6 +257,40 @@ export default function ViewerPage() {
     localStorage.setItem(VIEWER_READY_KEY + '_quality', quality);
   }, [quality]);
 
+  useEffect(() => {
+    if (!benchmarkEnabled || !viewerReady || !viewerRef.current) return;
+
+    const qualities: Array<'low' | 'medium' | 'high' | 'ultra'> = ['low', 'medium', 'high', 'ultra'];
+    let index = 0;
+    benchmarkSamplesRef.current = {};
+    setQuality(qualities[index]!);
+
+    const intervalId = window.setInterval(() => {
+      index += 1;
+      if (index < qualities.length) {
+        setQuality(qualities[index]!);
+        return;
+      }
+
+      window.clearInterval(intervalId);
+      const summary = Object.fromEntries(
+        Object.entries(benchmarkSamplesRef.current).map(([name, samples]) => {
+          const count = Math.max(1, samples.length);
+          return [name, {
+            avgFps: Math.round(samples.reduce((sum, sample) => sum + sample.fps, 0) / count),
+            avgFrameMs: Math.round(samples.reduce((sum, sample) => sum + sample.frameTimeMs, 0) / count),
+            avgActiveSplats: Math.round(samples.reduce((sum, sample) => sum + sample.activeSplats, 0) / count),
+            budget: samples[samples.length - 1]?.budget ?? 0,
+          }];
+        }),
+      );
+      console.table(summary);
+      window.dispatchEvent(new CustomEvent('gsplat-benchmark-complete', { detail: summary }));
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [benchmarkEnabled, viewerReady]);
+
   // Sync camera mode changes
   useEffect(() => {
     if (viewerRef.current) {
@@ -226,7 +298,7 @@ export default function ViewerPage() {
     }
   }, [cameraMode]);
 
-  // VR entry handler — surfaces errors to the user instead of swallowing them
+  // VR entry handler surfaces errors to the user instead of swallowing them.
   const handleEnterVr = useCallback(async () => {
     setVrError(null);
     try {
@@ -330,7 +402,7 @@ export default function ViewerPage() {
             ← Scenes
           </Link>
           <span style={styles.sceneTitle}>{manifest.title}</span>
-          {/* Clickable renderer toggle — replaces static badges */}
+          {/* Clickable renderer toggle replaces static badges. */}
           {features.webgpu ? (
             <button
               onClick={toggleRenderer}
@@ -357,7 +429,7 @@ export default function ViewerPage() {
           >
             <option value="orbit">Orbit</option>
             <option value="fly">Fly</option>
-            <option value="walk">Walk</option>
+
             {manifest.viewer?.lockScene && <option value="locked">Locked</option>}
           </select>
           <select
@@ -397,7 +469,7 @@ export default function ViewerPage() {
           <canvas ref={canvasRef} style={styles.canvas} />
         </div>
 
-        {/* Annotation side panel (desktop) — hidden on mobile */}
+        {/* Annotation side panel (desktop), hidden on mobile. */}
         {false && selectedMarker && (
           <div style={styles.annotationPanel} role="complementary" aria-label="Marker information">
             <div style={styles.annotationPanelHeader}>
@@ -474,7 +546,7 @@ export default function ViewerPage() {
           </div>
         </>
       )}
-      {/* Debug overlay — toggle with ` key */}
+      {/* Debug overlay, toggle with ` key. */}
       {showDebug && (
         <div style={styles.debugOverlay} aria-label="Debug info" role="region">
           <div style={styles.debugHeader}>
@@ -517,6 +589,34 @@ export default function ViewerPage() {
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Quality</span>
               <span style={styles.debugValue}>{debugInfo.quality}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>DPR</span>
+              <span style={styles.debugValue}>{debugInfo.devicePixelRatio.toFixed(2)}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Min px</span>
+              <span style={styles.debugValue}>{debugInfo.minPixelSize.toFixed(2)}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Contrib</span>
+              <span style={styles.debugValue}>{debugInfo.minContribution.toFixed(1)}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Alpha</span>
+              <span style={styles.debugValue}>{debugInfo.alphaClip.toFixed(4)}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>LOD</span>
+              <span style={styles.debugValue}>{debugInfo.lodRange}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Scale</span>
+              <span style={styles.debugValue}>{debugInfo.adaptiveQualityScale.toFixed(2)}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>On demand</span>
+              <span style={styles.debugValue}>{debugInfo.renderOnDemand ? 'yes' : 'no'}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>JS Heap</span>

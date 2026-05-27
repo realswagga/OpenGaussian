@@ -18,14 +18,12 @@ export function detectBestQuality(
     if (preset === 'ultra') return 'desktopHigh';
   }
 
-  // Auto detection
   if (isMobile) {
     const memory = deviceMemory ?? 4;
     if (memory < 2) return 'phoneUltraLow';
     return memory >= 6 ? 'phoneHigh' : 'phoneLow';
   }
 
-  // Desktop auto
   const memory = deviceMemory ?? 8;
   return memory >= 8 ? 'desktopHigh' : 'desktopMedium';
 }
@@ -35,13 +33,13 @@ export function getQualityProfile(name: QualityProfileName): QualityProfile {
 }
 
 describe('qualityProfiles', () => {
-  it('has correct recalibrated budget values', () => {
-    expect(qualityProfiles.phoneUltraLow.splatBudget).toBe(75_000);
-    expect(qualityProfiles.phoneLow.splatBudget).toBe(150_000);
-    expect(qualityProfiles.phoneHigh.splatBudget).toBe(300_000);
-    expect(qualityProfiles.desktopMedium.splatBudget).toBe(1_500_000);
+  it('has aggressive production budget values', () => {
+    expect(qualityProfiles.phoneUltraLow.splatBudget).toBe(40_000);
+    expect(qualityProfiles.phoneLow.splatBudget).toBe(75_000);
+    expect(qualityProfiles.phoneHigh.splatBudget).toBe(250_000);
+    expect(qualityProfiles.desktopMedium.splatBudget).toBe(900_000);
     expect(qualityProfiles.desktopHigh.splatBudget).toBe(3_000_000);
-    expect(qualityProfiles.vrQuest.splatBudget).toBe(200_000);
+    expect(qualityProfiles.vrQuest.splatBudget).toBe(120_000);
   });
 
   it('phone profiles have no post processing', () => {
@@ -80,40 +78,48 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopHigh.antialias).toBe(true);
   });
 
-  it('mobile profiles use mediump shader precision', () => {
-    expect(qualityProfiles.phoneUltraLow.shaderPrecision).toBe('mediump');
-    expect(qualityProfiles.phoneLow.shaderPrecision).toBe('mediump');
-    expect(qualityProfiles.phoneHigh.shaderPrecision).toBe('mediump');
-    expect(qualityProfiles.vrQuest.shaderPrecision).toBe('mediump');
+  it('low profiles use aggressive PlayCanvas culling knobs', () => {
+    expect(qualityProfiles.phoneUltraLow.minPixelSize).toBe(4);
+    expect(qualityProfiles.phoneLow.minPixelSize).toBe(3.25);
+    expect(qualityProfiles.phoneUltraLow.minContribution).toBe(12);
+    expect(qualityProfiles.phoneLow.minContribution).toBe(8);
+    expect(qualityProfiles.phoneUltraLow.alphaClip).toBeCloseTo(1 / 48);
+    expect(qualityProfiles.phoneLow.alphaClip).toBeCloseTo(1 / 64);
   });
 
-  it('desktop profiles use highp shader precision', () => {
-    expect(qualityProfiles.desktopMedium.shaderPrecision).toBe('highp');
-    expect(qualityProfiles.desktopHigh.shaderPrecision).toBe('highp');
+  it('desktop profiles retain higher quality culling thresholds', () => {
+    expect(qualityProfiles.desktopMedium.minPixelSize).toBe(1.25);
+    expect(qualityProfiles.desktopHigh.minPixelSize).toBe(0.75);
+    expect(qualityProfiles.desktopMedium.minContribution).toBe(2);
+    expect(qualityProfiles.desktopHigh.minContribution).toBe(1);
+    expect(qualityProfiles.desktopMedium.alphaClip).toBeCloseTo(1 / 255);
+    expect(qualityProfiles.desktopHigh.alphaClip).toBeCloseTo(1 / 255);
   });
 
-  it('mobile and VR profiles use 2σ or 2.5σ quad expansion', () => {
-    expect(qualityProfiles.phoneUltraLow.sigmaScale).toBe(2.0);
-    expect(qualityProfiles.phoneLow.sigmaScale).toBe(2.0);
-    expect(qualityProfiles.phoneHigh.sigmaScale).toBe(2.5);
-    expect(qualityProfiles.vrQuest.sigmaScale).toBe(2.0);
+  it('low profiles bias toward coarse LOD levels early', () => {
+    expect(qualityProfiles.phoneUltraLow.lodBaseDistanceScale).toBe(0.12);
+    expect(qualityProfiles.phoneUltraLow.lodMultiplier).toBe(2.25);
+    expect(qualityProfiles.phoneUltraLow.lodRange).toEqual([3, 3]);
+    expect(qualityProfiles.phoneLow.lodBaseDistanceScale).toBe(0.15);
+    expect(qualityProfiles.phoneLow.lodMultiplier).toBe(2.5);
+    expect(qualityProfiles.phoneLow.lodRange).toEqual([2, 3]);
   });
 
-  it('desktop profiles use 3σ quad expansion', () => {
-    expect(qualityProfiles.desktopMedium.sigmaScale).toBe(3.0);
-    expect(qualityProfiles.desktopHigh.sigmaScale).toBe(3.0);
+  it('high profiles allow full LOD range and high quality SH', () => {
+    expect(qualityProfiles.phoneHigh.lodRange).toEqual([1, 3]);
+    expect(qualityProfiles.desktopMedium.lodRange).toEqual([0, 3]);
+    expect(qualityProfiles.desktopHigh.lodRange).toEqual([0, 3]);
+    expect(qualityProfiles.desktopMedium.highQualitySH).toBe(true);
+    expect(qualityProfiles.desktopHigh.highQualitySH).toBe(true);
   });
 
-  it('adaptive budget is enabled for constrained profiles', () => {
-    expect(qualityProfiles.phoneUltraLow.adaptiveBudgetEnabled).toBe(true);
-    expect(qualityProfiles.phoneLow.adaptiveBudgetEnabled).toBe(true);
-    expect(qualityProfiles.phoneHigh.adaptiveBudgetEnabled).toBe(true);
-    expect(qualityProfiles.vrQuest.adaptiveBudgetEnabled).toBe(true);
-  });
-
-  it('adaptive budget is disabled for desktop profiles', () => {
-    expect(qualityProfiles.desktopMedium.adaptiveBudgetEnabled).toBe(false);
-    expect(qualityProfiles.desktopHigh.adaptiveBudgetEnabled).toBe(false);
+  it('adaptive quality is enabled across presets', () => {
+    expect(qualityProfiles.phoneUltraLow.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.phoneLow.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.phoneHigh.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.desktopMedium.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.desktopHigh.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.vrQuest.adaptiveQualityEnabled).toBe(true);
   });
 
   it('target FPS matches expected values', () => {
@@ -123,6 +129,17 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.targetFps).toBe(60);
     expect(qualityProfiles.desktopHigh.targetFps).toBe(60);
     expect(qualityProfiles.vrQuest.targetFps).toBe(72);
+  });
+
+  it('uses render-on-demand outside VR and prefers WebGPU on desktop', () => {
+    expect(qualityProfiles.phoneUltraLow.renderOnDemand).toBe(true);
+    expect(qualityProfiles.phoneLow.renderOnDemand).toBe(true);
+    expect(qualityProfiles.desktopMedium.renderOnDemand).toBe(true);
+    expect(qualityProfiles.desktopHigh.renderOnDemand).toBe(true);
+    expect(qualityProfiles.vrQuest.renderOnDemand).toBe(false);
+    expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgpu');
+    expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgpu');
+    expect(qualityProfiles.vrQuest.preferredRenderer).toBe('webgl2');
   });
 });
 
