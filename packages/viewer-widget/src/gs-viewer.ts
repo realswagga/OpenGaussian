@@ -184,7 +184,7 @@ class GsViewerElement extends HTMLElement {
     const qualityBtn = document.createElement('button');
     qualityBtn.textContent = `Quality: ${this.currentQuality}`;
     qualityBtn.addEventListener('click', () => {
-      const qualities: QualityPreset[] = ['auto', 'low', 'medium', 'high', 'ultra'];
+      const qualities: QualityPreset[] = ['auto', 'low', 'medium', 'high'];
       const currentIndex = qualities.indexOf(this.currentQuality);
       this.currentQuality = qualities[(currentIndex + 1) % qualities.length] || 'auto';
       this.viewer?.setQuality(this.currentQuality);

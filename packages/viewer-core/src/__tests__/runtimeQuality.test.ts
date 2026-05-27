@@ -62,22 +62,22 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(component.highQualitySH).toBe(false);
   });
 
-  it('applies ultra quality to real scene.gsplat knobs', () => {
-    const { gsplat, component } = applyQuality('ultra');
+  it('applies high quality to real scene.gsplat knobs', () => {
+    const { gsplat, component } = applyQuality('high');
 
-    expect(gsplat.splatBudget).toBe(3_000_000);
-    expect(gsplat.minPixelSize).toBe(0.75);
-    expect(gsplat.minContribution).toBe(1);
+    expect(gsplat.splatBudget).toBe(900_000);
+    expect(gsplat.minPixelSize).toBe(1.25);
+    expect(gsplat.minContribution).toBe(2);
     expect(gsplat.alphaClip).toBeCloseTo(1 / 255);
     expect(gsplat.lodRangeMin).toBe(0);
     expect(gsplat.lodRangeMax).toBe(3);
-    expect(component.lodBaseDistance).toBe(10);
+    expect(component.lodBaseDistance).toBe(6);
     expect(component.lodMultiplier).toBe(3);
     expect(component.highQualitySH).toBe(true);
   });
 
   it('applies nofx by disabling expensive quality extras', () => {
-    const { gsplat, component } = applyQuality('ultra', { disablePostFx: true });
+    const { gsplat, component } = applyQuality('high', { disablePostFx: true });
 
     expect(gsplat.antiAlias).toBe(false);
     expect(component.highQualitySH).toBe(false);

@@ -15,7 +15,6 @@ export function detectBestQuality(
     if (preset === 'low') return 'phoneLow';
     if (preset === 'medium') return 'phoneHigh';
     if (preset === 'high') return 'desktopMedium';
-    if (preset === 'ultra') return 'desktopHigh';
   }
 
   if (isMobile) {
@@ -137,8 +136,8 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.renderOnDemand).toBe(true);
     expect(qualityProfiles.desktopHigh.renderOnDemand).toBe(true);
     expect(qualityProfiles.vrQuest.renderOnDemand).toBe(false);
-    expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgpu');
-    expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgpu');
+    expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgl2');
+    expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgl2');
     expect(qualityProfiles.vrQuest.preferredRenderer).toBe('webgl2');
   });
 });
@@ -146,7 +145,7 @@ describe('qualityProfiles', () => {
 describe('detectBestQuality', () => {
   it('returns vrQuest for VR regardless of other flags', () => {
     expect(detectBestQuality('auto', false, true, 8)).toBe('vrQuest');
-    expect(detectBestQuality('ultra', false, true, 16)).toBe('vrQuest');
+    expect(detectBestQuality('high', false, true, 8)).toBe('vrQuest');
     expect(detectBestQuality('auto', true, true, 2)).toBe('vrQuest');
   });
 
@@ -177,7 +176,6 @@ describe('detectBestQuality', () => {
     expect(detectBestQuality('low', false, false)).toBe('phoneLow');
     expect(detectBestQuality('medium', false, false)).toBe('phoneHigh');
     expect(detectBestQuality('high', false, false)).toBe('desktopMedium');
-    expect(detectBestQuality('ultra', false, false)).toBe('desktopHigh');
   });
 });
 

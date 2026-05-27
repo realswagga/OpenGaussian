@@ -27,7 +27,12 @@ describe('chooseRendererMode', () => {
     expect(chooseRendererMode({ requested: 'webgl2', isVrActive: false, webgpuSupported: false })).toBe('webgl2');
   });
 
-  it('does not let inactive VR availability block WebGPU', () => {
+  it('defaults to webgl2 in auto mode regardless of WebGPU support', () => {
+    expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: true })).toBe('webgl2');
+    expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: false })).toBe('webgl2');
+  });
+
+  it('does not let inactive VR availability block WebGPU when explicitly requested', () => {
     expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: true, preferred: 'webgpu' })).toBe('webgpu');
     expect(chooseRendererMode({ requested: 'webgpu', isVrActive: false, webgpuSupported: true })).toBe('webgpu');
   });
