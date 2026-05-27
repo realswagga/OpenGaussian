@@ -1,6 +1,6 @@
 export type RendererMode = 'auto' | 'webgl2' | 'webgpu';
 export type CameraMode = 'orbit' | 'fly' | 'locked';
-export type QualityPreset = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
+export type QualityPreset = 'auto' | 'low' | 'medium' | 'high';
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
 export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
 export type ViewerLoadPhase =
@@ -231,7 +231,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgpu',
+    preferredRenderer: 'webgl2',
   },
   desktopHigh: {
     splatBudget: 3_000_000,
@@ -250,7 +250,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgpu',
+    preferredRenderer: 'webgl2',
   },
   vrQuest: {
     splatBudget: 120_000,

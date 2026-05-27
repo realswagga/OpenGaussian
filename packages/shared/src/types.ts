@@ -12,7 +12,7 @@ export type CameraMode = 'orbit' | 'fly' | 'locked';
 
 export type RendererMode = 'auto' | 'webgl2' | 'webgpu';
 
-export type QualityPreset = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
+export type QualityPreset = 'auto' | 'low' | 'medium' | 'high';
 
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
 

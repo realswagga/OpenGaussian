@@ -71,8 +71,7 @@ export default function ViewerPage() {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEWER_READY_KEY + '_renderer') : null;
     if (saved === 'webgpu') return 'webgpu';
     if (saved === 'webgl2') return 'webgl2';
-    const detected = detectFeaturesSync();
-    if (detected.webgpu && !detected.isMobile) return 'webgpu';
+    // Default to WebGL2 for visual stability. WebGPU is opt-in via the toggle button.
     return 'webgl2';
   });
   const [quality, setQuality] = useState<string>(() => localStorage.getItem(VIEWER_READY_KEY + '_quality') || 'auto');
@@ -173,7 +172,7 @@ export default function ViewerPage() {
       manifest,
       markers,
       cameraMode: 'orbit',
-      quality: quality as 'auto' | 'low' | 'medium' | 'high' | 'ultra',
+      quality: quality as 'auto' | 'low' | 'medium' | 'high',
       rendererMode: rendererPref,
       showMarkers: true,
       onProgress: (progress: ViewerRuntimeProgress) => {
@@ -252,7 +251,7 @@ export default function ViewerPage() {
   // Sync quality changes
   useEffect(() => {
     if (viewerRef.current) {
-      viewerRef.current.setQuality(quality as 'auto' | 'low' | 'medium' | 'high' | 'ultra');
+      viewerRef.current.setQuality(quality as 'auto' | 'low' | 'medium' | 'high');
     }
     localStorage.setItem(VIEWER_READY_KEY + '_quality', quality);
   }, [quality]);
@@ -260,7 +259,7 @@ export default function ViewerPage() {
   useEffect(() => {
     if (!benchmarkEnabled || !viewerReady || !viewerRef.current) return;
 
-    const qualities: Array<'low' | 'medium' | 'high' | 'ultra'> = ['low', 'medium', 'high', 'ultra'];
+    const qualities: Array<'low' | 'medium' | 'high'> = ['low', 'medium', 'high'];
     let index = 0;
     benchmarkSamplesRef.current = {};
     setQuality(qualities[index]!);
@@ -442,7 +441,6 @@ export default function ViewerPage() {
             <option value="low">Low</option>
             <option value="medium">Medium</option>
             <option value="high">High</option>
-            <option value="ultra">Ultra</option>
           </select>
           {manifest.viewer?.enableVr && vrSupported && (
             <button

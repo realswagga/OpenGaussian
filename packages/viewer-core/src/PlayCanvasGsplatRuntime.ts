@@ -111,7 +111,6 @@ function qualityForPreset(quality: QualityPreset): QualityProfile {
   if (quality === 'low') return qualityProfiles.phoneLow;
   if (quality === 'medium') return qualityProfiles.phoneHigh;
   if (quality === 'high') return qualityProfiles.desktopMedium;
-  if (quality === 'ultra') return qualityProfiles.desktopHigh;
   return qualityProfiles[detectDeviceProfile()];
 }
 
@@ -220,6 +219,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private vrActive = false;
   private readonly vrMoveSpeed = 3.0;
   private readonly vrTurnSpeed = 2.5;
+  private pendingQualityMarkerUpdate = false;
 
   constructor(options: ViewerOptions) {
     this.canvas = options.canvas;
@@ -292,8 +292,24 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.splatEntity = null;
     this.camera = null;
     this.cameraRoot = null;
+
+    // Release GPU context before destroying the app so a subsequent
+    // start() on the same canvas can acquire a fresh context cleanly.
+    // WebGL contexts are released via the WEBGL_lose_context extension;
+    // WebGPU contexts are released implicitly when the app destroys the device.
+    const gl = this.canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false }) as WebGL2RenderingContext | null;
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_lose_context');
+      ext?.loseContext();
+    }
+
     this.app?.destroy();
     this.app = null;
+
+    // Reset canvas dimensions to force clean GPU context state
+    this.canvas.width = 0;
+    this.canvas.height = 0;
+    this.pendingQualityMarkerUpdate = false;
   }
 
   setQuality(quality: QualityPreset): void {
@@ -301,6 +317,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.adaptiveQualityScale = 1;
     this.frameTimeSamples.length = 0;
     this.applyQualitySettings();
+    // Defer marker position update by one frame so PlayCanvas's postUpdate
+    // has rebuilt the camera projection matrix after the DPR / canvas resize.
+    // Without this, updateMarkerPositions() runs in the current frame's
+    // onUpdate (before postUpdate) with a stale projection → wrong positions.
+    this.pendingQualityMarkerUpdate = true;
+    this.requestRender();
   }
 
   setCameraMode(mode: CameraMode): void {
@@ -512,7 +534,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private async createApp(rendererMode: RendererBackend): Promise<void> {
     const profile = qualityForPreset(this.currentQuality);
-    const deviceTypes = rendererMode === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2'];
+    // Always include both backends so PlayCanvas can fall through if the
+    // canvas retains a stale GPU context binding from a previous instance.
+    const deviceTypes = rendererMode === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2', 'webgpu'];
     const device = await createGraphicsDevice(this.canvas, {
       deviceTypes,
       antialias: profile.antialias,
@@ -706,9 +730,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     gsplat.lodUpdateAngle = 60;
     gsplat.lodUpdateDistance = Math.max(0.1, this.sceneRadius * 0.02);
     gsplat.debug = GSPLAT_DEBUG_NONE;
-    gsplat.renderer = this.rendererMode === 'webgpu'
-      ? GSPLAT_RENDERER_RASTER_GPU_SORT
-      : GSPLAT_RENDERER_RASTER_CPU_SORT;
+    // Always use CPU sort. GPU radix sort (GSPLAT_RENDERER_RASTER_GPU_SORT)
+    // introduces a billboard effect where splats incorrectly rotate relative
+    // to the camera. CPU sort runs in a dedicated Web Worker and preserves
+    // world-space rotation quaternions correctly. At the maximum user-facing
+    // budget of 900K splats, CPU sort takes 3–8ms in the worker thread,
+    // which fits comfortably within a 60 fps frame budget.
+    gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
 
     const component = (this.splatEntity as unknown as {
       gsplat?: {
@@ -767,9 +795,35 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const height = Math.max(1, this.canvas.clientHeight);
     const screenMin = Math.max(1, Math.min(window.screen?.width || width, window.screen?.height || height));
     const ratio = Math.min(settings.maxPixelDim / screenMin, window.devicePixelRatio || 1, settings.maxDevicePixelRatio);
-    this.canvas.width = Math.ceil(width * ratio);
-    this.canvas.height = Math.ceil(height * ratio);
-    this.app.resizeCanvas(this.canvas.width, this.canvas.height);
+    const bufferW = Math.ceil(width * ratio);
+    const bufferH = Math.ceil(height * ratio);
+
+    // Use graphicsDevice.setResolution to set buffer dimensions and fire
+    // PlayCanvas' internal resizecanvas event, which triggers viewport and
+    // projection matrix rebuilds. Do NOT call app.resizeCanvas — its default
+    // FILLMODE_KEEP_ASPECT overrides canvas.style.width/height with absolute
+    // pixel values computed to fill the window, breaking our responsive
+    // 100%-of-container CSS sizing and inflating clientWidth via a
+    // ResizeObserver cascade.
+    this.app.graphicsDevice.setResolution(bufferW, bufferH);
+
+    // Ensure the canvas CSS dimensions remain responsive (100% of parent
+    // container) rather than absolute pixel values that app.resizeCanvas
+    // would set. This keeps clientWidth/clientHeight aligned with the
+    // container, which is what device.clientRect (used by worldToScreen)
+    // reads via getBoundingClientRect().
+    this.canvas.style.width = '100%';
+    this.canvas.style.height = '100%';
+
+    // Synchronously update the camera aspect ratio so marker screen-space
+    // positions computed in the same frame use the correct projection matrix.
+    // Without this, PlayCanvas defers the projection rebuild to the next
+    // render pass, and markers appear at incorrect positions after quality
+    // switches (which change DPR / canvas resolution).
+    if (this.camera?.camera) {
+      this.camera.camera.aspectRatio = bufferW / Math.max(1, bufferH);
+    }
+
     this.app.renderNextFrame = true;
   }
 
@@ -1022,7 +1076,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     } else if (this.currentCameraMode === 'orbit') {
       this.updateOrbitPan(dt);
     }
-    this.updateMarkerPositions();
+
+    // On the frame immediately after a quality change, skip marker update.
+    // PlayCanvas's postUpdate has not yet rebuilt the projection matrix
+    // when onUpdate fires, so screen-space positions would be wrong.
+    // The deferred update fires in the next frame when projection is ready.
+    if (this.pendingQualityMarkerUpdate) {
+      this.pendingQualityMarkerUpdate = false;
+    } else {
+      this.updateMarkerPositions();
+    }
   }
 
   private updateAdaptiveQuality(now: number): void {
@@ -1137,9 +1200,20 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private updateMarkerPositions(): void {
     if (!this.camera?.camera || !this.markerLayer || this.markerButtons.size === 0) return;
+
+    // PlayCanvas CameraComponent.worldToScreen passes device.clientRect
+    // (CSS layout dimensions from getBoundingClientRect) as cw/ch to the
+    // underlying Camera.worldToScreen. The output coordinates are therefore
+    // in CSS layout pixel space — NOT canvas buffer pixel space.
+    //
+    // Previously the code computed scaleX/scaleY = CSS / buffer and
+    // multiplied, which double-converted: markers ended up at
+    //   screenCSS * (CSS / buffer) instead of just screenCSS.
+    // This was invisible when buffer ≈ CSS (Medium/High on DPR-1 devices,
+    // where maxDevicePixelRatio ≥ 1 → ratio ≈ 1 → scaleX ≈ 1), but
+    // Low's maxDevicePixelRatio 0.75 makes buffer < CSS → scaleX > 1 →
+    // markers amplify away from center.
     const canvasRect = this.canvas.getBoundingClientRect();
-    const scaleX = canvasRect.width / Math.max(1, this.canvas.width);
-    const scaleY = canvasRect.height / Math.max(1, this.canvas.height);
     const tmp = new Vec3();
 
     for (const point of this.markers) {
@@ -1149,11 +1223,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         new Vec3(point.position[0], point.position[1], point.position[2]),
         tmp,
       );
-      const visible = screen.z > 0 && screen.x >= -64 && screen.y >= -64 && screen.x <= this.canvas.width + 64 && screen.y <= this.canvas.height + 64;
+      // Visibility bounds must use CSS dimensions (same coordinate space
+      // as worldToScreen output), not canvas buffer dimensions.
+      const visible = screen.z > 0 && screen.x >= -64 && screen.y >= -64 && screen.x <= canvasRect.width + 64 && screen.y <= canvasRect.height + 64;
       button.style.display = visible ? 'flex' : 'none';
       if (visible) {
-        button.style.left = `${screen.x * scaleX}px`;
-        button.style.top = `${screen.y * scaleY}px`;
+        // worldToScreen output is already in CSS layout pixel space;
+        // the marker layer (position:absolute, inset:0) is aligned with
+        // the canvas CSS box, so coordinates map directly.
+        button.style.left = `${screen.x}px`;
+        button.style.top = `${screen.y}px`;
       }
     }
   }
@@ -1166,19 +1245,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private updateRenderPolicy(): void {
     if (!this.app) return;
-    const settings = this.getEffectiveQualitySettings();
-    const shouldRenderContinuously =
-      !settings.renderOnDemand ||
-      this.vrActive ||
-      this.isDragging ||
-      this.currentCameraMode === 'fly' ||
-      this.loadPhase === 'loading-metadata' ||
-      this.loadPhase === 'loading-asset' ||
-      this.loadPhase === 'renderable' ||
-      this.lodLoadingCount > 0;
-
-    if (this.app.autoRender !== shouldRenderContinuously) {
-      this.app.autoRender = shouldRenderContinuously;
+    // Always keep the render loop alive. Stopping autoRender and restarting
+    // on interaction causes a cold-start GPU pipeline penalty (shader
+    // recompilation, GPU clock ramp-up, driver state revalidation) that
+    // manifests as a visible frame drop. PlayCanvas's own rAF loop naturally
+    // throttles when nothing changes, so keeping autoRender=true has
+    // negligible power cost while eliminating the stutter.
+    if (!this.app.autoRender) {
+      this.app.autoRender = true;
       this.requestRender();
     }
   }
@@ -1190,6 +1264,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.app.graphicsDevice.maxPixelRatio = Math.min(window.devicePixelRatio || 1, settings.maxDevicePixelRatio);
     this.applyGsplatSettings();
     this.resize();
+    // resize() synchronously updates camera.aspectRatio and sets buffer
+    // dimensions via graphicsDevice.setResolution (without overriding
+    // CSS sizing). Marker positions in updateMarkerPositions() use
+    // worldToScreen output (CSS-space) directly — no buffer/CSS scaling.
     this.updateRenderPolicy();
   }
 

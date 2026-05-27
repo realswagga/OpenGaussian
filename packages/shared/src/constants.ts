@@ -75,7 +75,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgpu',
+    preferredRenderer: 'webgl2',
   },
   desktopHigh: {
     splatBudget: 3_000_000,
@@ -94,7 +94,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgpu',
+    preferredRenderer: 'webgl2',
   },
   vrQuest: {
     splatBudget: 120_000,
@@ -122,7 +122,6 @@ export const qualityPresetLabels: Record<string, string> = {
   low: 'Low',
   medium: 'Medium',
   high: 'High',
-  ultra: 'Ultra',
 };
 
 export const acceptedExtensions = ['.ply', '.spz', '.sog', '.meta.json', '.lod-meta.json', '.compressed.ply'];
