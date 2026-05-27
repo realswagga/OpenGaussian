@@ -18,6 +18,7 @@ import {
   Mouse,
   RenderComponentSystem,
   ScriptComponentSystem,
+  StandardMaterial,
   TextureHandler,
   TouchDevice,
   Vec3,
@@ -39,8 +40,62 @@ import type {
   ViewerStats,
 } from './types.js';
 import { chooseRendererMode, detectDeviceProfile, qualityProfiles, resolveViewerAsset } from './types.js';
+import {
+  applyDeadzone,
+  center2D,
+  classifyTwoPointerGesture,
+  computeDepthAwareDollyStep,
+  computePinchScale,
+  distance2D,
+  readGamepadStick,
+} from './navigationControls.js';
 
 type RendererBackend = 'webgl2' | 'webgpu';
+type PointerGestureMode = 'none' | 'orbit' | 'pan';
+
+interface TrackedPointer {
+  x: number;
+  y: number;
+  startX: number;
+  startY: number;
+  pointerType: string;
+  button: number;
+  moved: boolean;
+}
+
+interface TouchGestureState {
+  distance: number;
+  center: { x: number; y: number };
+}
+
+interface VirtualJoystickState {
+  pointerId: number | null;
+  x: number;
+  y: number;
+}
+
+interface RuntimeXrSessionLike {
+  addEventListener(type: 'end', listener: () => void, options?: AddEventListenerOptions): void;
+}
+
+interface RuntimeXrInputSource {
+  id?: number;
+  handedness?: string;
+  gamepad?: Gamepad | null;
+  selecting?: boolean;
+  getPosition?: () => Vec3 | null;
+  getOrigin?: () => Vec3;
+  getDirection?: () => Vec3;
+}
+
+interface VrScaleGestureState {
+  leftId: number | undefined;
+  rightId: number | undefined;
+  initialDistance: number;
+  initialMidpoint: Vec3;
+  initialHeadPosition: Vec3;
+  initialRootPosition: Vec3;
+}
 
 interface RuntimeAppOptions {
   graphicsDevice: GraphicsDevice;
@@ -169,6 +224,36 @@ function readAabbRadius(value: unknown, depth = 0): number | undefined {
   return undefined;
 }
 
+function readAabbCenter(value: unknown, depth = 0): Vec3 | undefined {
+  if (!value || typeof value !== 'object' || depth > 4) return undefined;
+  const record = value as Record<string, unknown>;
+  const aabb = record.aabb;
+  if (aabb && typeof aabb === 'object') {
+    const center = (aabb as Record<string, unknown>).center as { x?: number; y?: number; z?: number } | undefined;
+    if (center && Number.isFinite(center.x) && Number.isFinite(center.y) && Number.isFinite(center.z)) {
+      return new Vec3(center.x!, center.y!, center.z!);
+    }
+  }
+
+  const bound = record.bound;
+  if (bound && typeof bound === 'object') {
+    const b = bound as { min?: number[]; max?: number[] };
+    if (Array.isArray(b.min) && Array.isArray(b.max) && b.min.length >= 3 && b.max.length >= 3) {
+      return new Vec3(
+        (b.min[0]! + b.max[0]!) * 0.5,
+        (b.min[1]! + b.max[1]!) * 0.5,
+        (b.min[2]! + b.max[2]!) * 0.5,
+      );
+    }
+  }
+
+  for (const key of ['resource', 'data', 'splatData', 'gsplat', 'lodResource', 'octree']) {
+    const nested = readAabbCenter(record[key], depth + 1);
+    if (nested) return nested;
+  }
+  return undefined;
+}
+
 export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private readonly canvas: HTMLCanvasElement;
   private readonly manifest: ViewerManifest;
@@ -198,8 +283,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private pitch = -0.2;
   private distance = 4;
   private target = new Vec3(0, 0.3, 0);
+  private sceneCenter = new Vec3(0, 0, 0);
   private isDragging = false;
   private isRightDrag = false;
+  private pointerGestureMode: PointerGestureMode = 'none';
+  private primaryPointerId: number | null = null;
+  private readonly activePointers = new Map<number, TrackedPointer>();
+  private touchGestureState: TouchGestureState | null = null;
   private lastPointerX = 0;
   private lastPointerY = 0;
   private fpsSamples: number[] = [];
@@ -215,10 +305,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private flyYaw = 0;
   private flyPitch = 0;
   private flyMoveSpeed = 4.0;
+  private flyJoystickLayer: HTMLDivElement | null = null;
+  private flyMoveJoystick: VirtualJoystickState = { pointerId: null, x: 0, y: 0 };
+  private flyLookJoystick: VirtualJoystickState = { pointerId: null, x: 0, y: 0 };
   // VR locomotion state
   private vrActive = false;
   private readonly vrMoveSpeed = 3.0;
-  private readonly vrTurnSpeed = 2.5;
+  private readonly vrVerticalSpeed = 2.0;
+  private vrTurnLatch = 0;
+  private vrExitButtonPressed = false;
+  private vrScaleGesture: VrScaleGestureState | null = null;
+  private vrExitEntity: Entity | null = null;
+  private vrExitMaterial: StandardMaterial | null = null;
   private pendingQualityMarkerUpdate = false;
 
   constructor(options: ViewerOptions) {
@@ -288,6 +386,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.markerLayer = null;
     this.markerButtons.clear();
     this.selectedMarkerId = null;
+    this.removeFlyJoysticks();
+    this.removeVrExitAffordance();
     this.splatAsset = null;
     this.splatEntity = null;
     this.camera = null;
@@ -328,6 +428,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   setCameraMode(mode: CameraMode): void {
     const previousMode = this.currentCameraMode;
     this.currentCameraMode = mode;
+    this.activePointers.clear();
+    this.touchGestureState = null;
+    this.primaryPointerId = null;
+    this.isDragging = false;
     if (mode === 'fly') {
       if (this.camera) {
         const forward = this.camera.forward.clone();
@@ -337,19 +441,26 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       }
       this.flyMoveSpeed = 4.0;
       this.canvas.style.cursor = 'none';
-      this.canvas.requestPointerLock();
+      if (this.isCoarsePointer()) {
+        this.createFlyJoysticks();
+      } else {
+        this.canvas.requestPointerLock();
+      }
     } else if (mode === 'locked') {
+      this.removeFlyJoysticks();
       this.canvas.style.cursor = 'default';
       document.exitPointerLock();
     } else {
+      this.removeFlyJoysticks();
       if (this.camera && previousMode === 'fly') {
         const pos = this.camera.getPosition().clone();
         const forward = this.camera.forward.clone();
-        const orbitDistance = Math.max(1, Math.min(20, this.distance || 4));
+        const orbitDistance = Math.max(0.25, Math.min(200, this.distance || this.sceneRadius || 4));
         this.target = pos.clone().add(forward.mulScalar(orbitDistance));
-        this.yaw = Math.atan2(forward.x, forward.z);
-        const horizontalLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
-        this.pitch = Math.atan2(forward.y, horizontalLen);
+        const offset = pos.clone().sub(this.target);
+        this.yaw = Math.atan2(offset.x, offset.z);
+        const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
+        this.pitch = Math.atan2(offset.y, horizontalLen);
         this.distance = orbitDistance;
         this.updateCamera();
       }
@@ -505,7 +616,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
               // Capture the session for gamepad polling and bind end event
               this.vrActive = true;
               this.updateRenderPolicy();
-              const session = (this.app!.xr as unknown as { _session?: XRSession })._session;
+              this.createVrExitAffordance();
+              this.options.onVrSessionChange?.(true);
+              const session = (this.app!.xr as unknown as { _session?: RuntimeXrSessionLike })._session;
               if (session) {
                 session.addEventListener('end', this.onVrSessionEnd, { once: true });
               }
@@ -521,14 +634,23 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private onVrSessionEnd = (): void => {
     this.vrActive = false;
+    this.vrScaleGesture = null;
+    this.vrTurnLatch = 0;
+    this.vrExitButtonPressed = false;
+    this.removeVrExitAffordance();
+    this.options.onVrSessionChange?.(false);
     this.updateRenderPolicy();
   };
 
   async exitVr(): Promise<void> {
     this.vrActive = false;
+    this.vrScaleGesture = null;
+    this.vrExitButtonPressed = false;
     if (this.app?.xr?.active) {
       this.app.xr.end();
     }
+    this.removeVrExitAffordance();
+    this.options.onVrSessionChange?.(false);
     this.updateRenderPolicy();
   }
 
@@ -577,7 +699,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       fov: 60,
     });
 
-    const defaultCamera = this.manifest.viewer.defaultCamera as { position?: [number, number, number]; target?: [number, number, number]; fov?: number } | undefined;
+    const defaultCamera = this.manifest.viewer.defaultCamera;
     if (defaultCamera?.target) {
       this.target.set(defaultCamera.target[0], defaultCamera.target[1], defaultCamera.target[2]);
     }
@@ -629,6 +751,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       asset.on('load', () => {
         if (this.destroyed) return;
         this.sceneRadius = readAabbRadius(asset.resource) || readAabbRadius(asset) || this.sceneRadius;
+        const rawCenter = readAabbCenter(asset.resource) || readAabbCenter(asset) || new Vec3(0, 0, 0);
         const settings = this.getEffectiveQualitySettings();
         this.splatEntity = new Entity('gsplat');
         this.splatEntity.addComponent('gsplat', {
@@ -656,6 +779,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
             this.splatEntity.setLocalScale(scl[0]!, scl[1]!, scl[2]!);
           }
         }
+        const worldCenter = rawCenter.clone();
+        this.splatEntity.getWorldTransform().transformPoint(rawCenter, worldCenter);
+        this.sceneCenter.copy(worldCenter);
 
         this.applyGsplatSettings();
         this.loadedSplats = readPossibleCount(asset.resource) || readPossibleCount(asset) || this.manifestHasCount();
@@ -828,39 +954,73 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private setupInput(): void {
-    this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.canvas.addEventListener('contextmenu', this.onContextMenu);
     this.canvas.addEventListener('pointerdown', this.onPointerDown);
     this.canvas.addEventListener('pointermove', this.onPointerMove);
     window.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pointercancel', this.onPointerUp);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
     // Pointer lock change handler for fly mode
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
 
   private removeInput(): void {
-    this.canvas.removeEventListener('contextmenu', (e) => e.preventDefault());
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu);
     this.canvas.removeEventListener('pointerdown', this.onPointerDown);
     this.canvas.removeEventListener('pointermove', this.onPointerMove);
     window.removeEventListener('pointerup', this.onPointerUp);
+    window.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     document.exitPointerLock();
   }
 
+  private onContextMenu = (event: MouseEvent): void => {
+    event.preventDefault();
+  };
+
   private onPointerDown = (event: PointerEvent): void => {
     if (this.currentCameraMode === 'locked') return;
 
     if (this.currentCameraMode === 'fly') {
-      this.canvas.requestPointerLock();
+      if (event.pointerType !== 'touch') {
+        this.canvas.requestPointerLock();
+      }
       return;
     }
 
-    // Left click = orbit, right click = pan
+    event.preventDefault();
+    const tracked: TrackedPointer = {
+      x: event.clientX,
+      y: event.clientY,
+      startX: event.clientX,
+      startY: event.clientY,
+      pointerType: event.pointerType,
+      button: event.button,
+      moved: false,
+    };
+    this.activePointers.set(event.pointerId, tracked);
+    this.canvas.setPointerCapture?.(event.pointerId);
+
+    if (event.pointerType === 'touch') {
+      this.isDragging = true;
+      this.isRightDrag = false;
+      this.primaryPointerId = this.primaryPointerId ?? event.pointerId;
+      this.pointerGestureMode = 'orbit';
+      this.resetTouchGestureState();
+      this.canvas.style.cursor = 'grabbing';
+      this.updateRenderPolicy();
+      this.requestRender();
+      return;
+    }
+
+    // Left click = orbit, right click = pan.
     this.isDragging = true;
     this.isRightDrag = event.button === 2;
+    this.pointerGestureMode = this.isRightDrag ? 'pan' : 'orbit';
+    this.primaryPointerId = event.pointerId;
     this.lastPointerX = event.clientX;
     this.lastPointerY = event.clientY;
-    this.canvas.setPointerCapture?.(event.pointerId);
     this.canvas.style.cursor = this.isRightDrag ? 'grabbing' : 'grabbing';
     this.updateRenderPolicy();
     this.requestRender();
@@ -868,6 +1028,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private onPointerMove = (event: PointerEvent): void => {
     if (!this.isDragging || this.currentCameraMode === 'locked' || this.currentCameraMode === 'fly') return;
+    const tracked = this.activePointers.get(event.pointerId);
+    const touchDx = tracked ? event.clientX - tracked.x : 0;
+    const touchDy = tracked ? event.clientY - tracked.y : 0;
+    if (tracked) {
+      tracked.moved = tracked.moved || distance2D({ x: tracked.startX, y: tracked.startY }, { x: event.clientX, y: event.clientY }) > 4;
+      tracked.x = event.clientX;
+      tracked.y = event.clientY;
+    }
+
+    if (event.pointerType === 'touch') {
+      this.handleTouchPointerMove(touchDx, touchDy);
+      return;
+    }
 
     const dx = event.clientX - this.lastPointerX;
     const dy = event.clientY - this.lastPointerY;
@@ -875,33 +1048,191 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.lastPointerY = event.clientY;
 
     if (this.isRightDrag) {
-      // Right-drag: pan the target
-      if (!this.camera) return;
-      const right = this.camera.right.clone();
-      const up = this.camera.up.clone();
-      right.normalize();
-      up.normalize();
-      const d = Math.max(0.1, this.distance);
-      const panSpeed = d * 0.003;
-      this.target.sub(right.mulScalar(dx * panSpeed));
-      this.target.add(up.mulScalar(dy * panSpeed));
-      this.updateCamera();
+      this.panOrbitTarget(dx, dy);
     } else {
-      // Left-drag: orbit
-      this.yaw -= dx * 0.006;
-      this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
-      this.updateCamera();
+      this.orbitByPointerDelta(dx, dy);
     }
     this.requestRender();
   };
 
-  private onPointerUp = (): void => {
-    this.isDragging = false;
-    this.isRightDrag = false;
+  private onPointerUp = (event: PointerEvent): void => {
+    const tracked = this.activePointers.get(event.pointerId);
+    const wasTap = tracked && !tracked.moved && distance2D({ x: tracked.startX, y: tracked.startY }, { x: event.clientX, y: event.clientY }) <= 4;
+    const canSetTarget = Boolean(
+      tracked &&
+      wasTap &&
+      this.currentCameraMode === 'orbit' &&
+      this.activePointers.size <= 1 &&
+      (tracked.pointerType === 'mouse' ? tracked.button === 0 : true),
+    );
+
+    if (canSetTarget && tracked) {
+      this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
+    }
+
+    this.activePointers.delete(event.pointerId);
+    if (this.primaryPointerId === event.pointerId) {
+      this.primaryPointerId = null;
+    }
+    if (this.activePointers.size === 0) {
+      this.isDragging = false;
+      this.isRightDrag = false;
+      this.pointerGestureMode = 'none';
+      this.touchGestureState = null;
+    } else if (event.pointerType === 'touch') {
+      this.resetTouchGestureState();
+    }
+
     this.canvas.style.cursor = this.currentCameraMode === 'locked' ? 'default' : this.currentCameraMode === 'fly' ? 'none' : 'grab';
     this.updateRenderPolicy();
     this.requestRender();
   };
+
+  private handleTouchPointerMove(dx: number, dy: number): void {
+    const pointers = Array.from(this.activePointers.values());
+    if (pointers.length >= 2) {
+      const a = pointers[0]!;
+      const b = pointers[1]!;
+      const center = center2D(a, b);
+      const distance = distance2D(a, b);
+
+      if (!this.touchGestureState) {
+        this.touchGestureState = { center, distance };
+        return;
+      }
+
+      const gesture = classifyTwoPointerGesture({
+        previousDistance: this.touchGestureState.distance,
+        currentDistance: distance,
+        previousCenter: this.touchGestureState.center,
+        currentCenter: center,
+      });
+
+      if (gesture === 'dolly') {
+        const factor = distance / Math.max(1, this.touchGestureState.distance);
+        const hitDepth = this.getDepthAtClientPoint(center.x, center.y);
+        const maxStep = Math.max(this.sceneRadius * 0.25, 0.5);
+        const step = Math.max(-maxStep, Math.min(maxStep, (factor - 1) * hitDepth));
+        this.dollyAlongClientPoint(center.x, center.y, step);
+      } else if (gesture === 'pan') {
+        this.panOrbitTarget(center.x - this.touchGestureState.center.x, center.y - this.touchGestureState.center.y);
+      }
+
+      this.touchGestureState = { center, distance };
+      this.requestRender();
+      return;
+    }
+
+    if (pointers.length === 1) {
+      this.orbitByPointerDelta(dx, dy);
+      this.requestRender();
+    }
+  }
+
+  private resetTouchGestureState(): void {
+    const pointers = Array.from(this.activePointers.values());
+    if (pointers.length >= 2) {
+      const a = pointers[0]!;
+      const b = pointers[1]!;
+      this.touchGestureState = {
+        center: center2D(a, b),
+        distance: distance2D(a, b),
+      };
+    } else {
+      this.touchGestureState = null;
+    }
+  }
+
+  private orbitByPointerDelta(dx: number, dy: number): void {
+    this.yaw -= dx * 0.006;
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
+    this.updateCamera();
+  }
+
+  private panOrbitTarget(dx: number, dy: number): void {
+    if (!this.camera) return;
+    const right = this.camera.right.clone();
+    const up = this.camera.up.clone();
+    right.normalize();
+    up.normalize();
+    const d = Math.max(0.1, this.distance);
+    const panSpeed = d * 0.003;
+    this.target.sub(right.mulScalar(dx * panSpeed));
+    this.target.add(up.mulScalar(dy * panSpeed));
+    this.updateCamera();
+  }
+
+  private getRayFromClientPoint(clientX: number, clientY: number): { origin: Vec3; direction: Vec3 } | null {
+    if (!this.camera?.camera) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+    const origin = this.camera.getPosition().clone();
+    const far = this.camera.camera.farClip || 1000;
+    const end = this.camera.camera.screenToWorld(x, y, far, new Vec3());
+    const direction = end.clone().sub(origin);
+    if (direction.lengthSq() <= 1e-8) return null;
+    direction.normalize();
+    return { origin, direction };
+  }
+
+  private intersectRaySceneSphere(origin: Vec3, direction: Vec3): { point: Vec3; distance: number } | null {
+    const center = this.sceneCenter || this.target;
+    let radius = Math.max(this.sceneRadius, 0.5);
+    const scale = this.splatEntity?.getLocalScale();
+    if (scale) {
+      radius *= Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z), 0.01);
+    }
+
+    const ox = origin.x - center.x;
+    const oy = origin.y - center.y;
+    const oz = origin.z - center.z;
+    const b = ox * direction.x + oy * direction.y + oz * direction.z;
+    const c = ox * ox + oy * oy + oz * oz - radius * radius;
+    const disc = b * b - c;
+    if (disc < 0) return null;
+
+    const sqrtDisc = Math.sqrt(disc);
+    let t = -b - sqrtDisc;
+    if (t <= 0) t = -b + sqrtDisc;
+    if (t <= 0 || !Number.isFinite(t)) return null;
+
+    return { point: origin.clone().add(direction.clone().mulScalar(t)), distance: t };
+  }
+
+  private getDepthAtClientPoint(clientX: number, clientY: number): number {
+    const ray = this.getRayFromClientPoint(clientX, clientY);
+    if (!ray) return Math.max(this.distance, 0.25);
+    return this.intersectRaySceneSphere(ray.origin, ray.direction)?.distance ?? Math.max(this.distance, this.sceneRadius, 0.25);
+  }
+
+  private dollyAlongClientPoint(clientX: number, clientY: number, step: number): void {
+    if (!Number.isFinite(step) || Math.abs(step) < 1e-8) return;
+    const ray = this.getRayFromClientPoint(clientX, clientY);
+    const direction = ray?.direction ?? this.camera?.forward.clone();
+    if (!direction) return;
+    const delta = direction.clone().mulScalar(step);
+    this.target.add(delta);
+    this.updateCamera();
+  }
+
+  private setOrbitTargetFromClientPoint(clientX: number, clientY: number): void {
+    const ray = this.getRayFromClientPoint(clientX, clientY);
+    if (!ray || !this.camera) return;
+    const hit = this.intersectRaySceneSphere(ray.origin, ray.direction);
+    if (!hit) return;
+    const pos = this.camera.getPosition().clone();
+    const offset = pos.sub(hit.point);
+    const distance = offset.length();
+    if (!Number.isFinite(distance) || distance <= 0.05) return;
+
+    this.target.copy(hit.point);
+    this.distance = Math.max(0.2, Math.min(200, distance));
+    this.yaw = Math.atan2(offset.x, offset.z);
+    const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
+    this.pitch = Math.max(-1.5, Math.min(1.5, Math.atan2(offset.y, horizontalLen)));
+    this.updateCamera();
+  }
 
   private onWheel = (event: WheelEvent): void => {
     if (this.currentCameraMode === 'locked') return;
@@ -914,25 +1245,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       return;
     }
 
-    const zoomIn = event.deltaY < 0;
-    const scaleFactor = zoomIn ? 0.9 : 1.1;
-    const newDist = this.distance * scaleFactor;
-    const direction = zoomIn ? -1 : 1;
-    const minDelta = 0.05 * direction;
-    const targetDist = newDist + minDelta;
-    this.distance = Math.max(0.2, Math.min(200, targetDist));
-
-    if (zoomIn && this.camera) {
-      const forward = this.camera.forward.clone();
-      forward.y = 0;
-      if (forward.lengthSq() > 0.01) {
-        forward.normalize();
-        const nudgeAmount = Math.min(0.02 * this.distance, 0.1);
-        this.target.add(forward.mulScalar(nudgeAmount));
-      }
-    }
-
-    this.updateCamera();
+    const step = computeDepthAwareDollyStep({
+      deltaY: event.deltaY,
+      deltaMode: event.deltaMode,
+      hitDepth: this.getDepthAtClientPoint(event.clientX, event.clientY),
+      sceneRadius: this.sceneRadius,
+    });
+    this.dollyAlongClientPoint(event.clientX, event.clientY, step);
     this.requestRender();
   };
 
@@ -959,52 +1278,37 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateVrLocomotion(dt: number): void {
     if (!this.vrActive || !this.app?.xr?.active || !this.camera) return;
 
-    // Access the underlying XRSession to poll gamepad states
-    const xrManager = this.app.xr as unknown as {
-      _session?: XRSession;
-    };
-    const session = xrManager._session;
-    if (!session?.inputSources) return;
+    const inputSources = ((this.app.xr as unknown as {
+      input?: { inputSources?: RuntimeXrInputSource[] };
+    }).input?.inputSources) ?? [];
+    if (inputSources.length === 0) return;
 
-    const cameraEntity = this.camera;
     const speed = this.vrMoveSpeed * dt;
-    const turnAmount = this.vrTurnSpeed * dt;
+    this.updateVrExitAffordance(inputSources);
+    if (this.updateVrScaleGesture(inputSources)) {
+      this.requestRender();
+      return;
+    }
 
-    for (const source of session.inputSources) {
-      const gamepad = source.gamepad;
-      if (!gamepad) continue;
-
-      const axes = gamepad.axes;
-      if (axes.length < 4) continue;
+    for (const source of inputSources) {
+      const stick = readGamepadStick(source.gamepad);
+      if (stick.x === 0 && stick.y === 0) continue;
 
       // Left stick: axes[0]=left/right, axes[1]=up/down (Y is usually inverted: -1=up)
-      const lx = axes[0] ?? 0;
-      const ly = axes[1] ?? 0;
+      const lx = stick.x;
+      const ly = stick.y;
 
       // Right stick: axes[2]=left/right, axes[3]=up/down
-      const rx = axes[2] ?? 0;
+      const rx = stick.x;
       // ry (axes[3]) is unused for head rotation — right stick X controls yaw
 
       // Determine if this is left or right hand based on handedness
       const isRightHand = source.handedness === 'right';
 
       if (isRightHand) {
-        // Right controller: right stick rotates head (yaw)
-        if (Math.abs(rx) > 0.1) {
-          // Rotate cameraRoot around world Y axis for smooth turning
-          const euler = cameraEntity.getEulerAngles().clone();
-          euler.y -= rx * turnAmount;
-          cameraEntity.setEulerAngles(euler);
-        }
-        // Left stick on right controller also moves
-        if (Math.abs(lx) > 0.1 || Math.abs(ly) > 0.1) {
-          this.applyVrMovement(lx, ly, isRightHand ? 'hand' : 'hand', speed);
-        }
+        this.applyVrTurnAndVertical(rx, ly, dt);
       } else {
-        // Left controller: left stick moves
-        if (Math.abs(lx) > 0.1 || Math.abs(ly) > 0.1) {
-          this.applyVrMovement(lx, ly, 'hand', speed);
-        }
+        this.applyVrMovement(lx, ly, speed);
       }
     }
   }
@@ -1013,10 +1317,153 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
    * Apply VR joystick movement relative to the controller or head orientation.
    * Left stick: horizontal plane movement (forward/back/strafe).
    */
+  private applyVrTurnAndVertical(stickX: number, stickY: number, dt: number): void {
+    if (!this.cameraRoot) return;
+
+    const turnThreshold = 0.72;
+    const resetThreshold = 0.35;
+    if (Math.abs(stickX) < resetThreshold) {
+      this.vrTurnLatch = 0;
+    } else if (this.vrTurnLatch === 0 && Math.abs(stickX) >= turnThreshold) {
+      this.vrTurnLatch = Math.sign(stickX);
+      this.rotateCameraRootAroundHead(-Math.sign(stickX) * 30);
+    }
+
+    const vertical = -stickY;
+    if (Math.abs(vertical) > 0) {
+      const pos = this.cameraRoot.getPosition().clone();
+      pos.y += vertical * this.vrVerticalSpeed * dt;
+      this.cameraRoot.setPosition(pos);
+    }
+  }
+
+  private rotateCameraRootAroundHead(yawDegrees: number): void {
+    if (!this.cameraRoot || !this.camera) return;
+    const headLocal = this.camera.getLocalPosition().clone();
+    this.cameraRoot.translateLocal(headLocal);
+    this.cameraRoot.rotateLocal(0, yawDegrees, 0);
+    this.cameraRoot.translateLocal(headLocal.mulScalar(-1));
+  }
+
+  private isXrTriggerPressed(source: RuntimeXrInputSource): boolean {
+    return Boolean(source.selecting || source.gamepad?.buttons[0]?.pressed);
+  }
+
+  private updateVrScaleGesture(inputSources: RuntimeXrInputSource[]): boolean {
+    if (!this.camera || !this.cameraRoot) return false;
+
+    const left = inputSources.find((source) => source.handedness === 'left' && this.isXrTriggerPressed(source));
+    const right = inputSources.find((source) => source.handedness === 'right' && this.isXrTriggerPressed(source));
+    const leftPos = left?.getPosition?.()?.clone() ?? null;
+    const rightPos = right?.getPosition?.()?.clone() ?? null;
+    if (!left || !right || !leftPos || !rightPos) {
+      this.vrScaleGesture = null;
+      return false;
+    }
+
+    const currentDistance = leftPos.distance(rightPos);
+    if (!Number.isFinite(currentDistance) || currentDistance <= 0.01) return true;
+    const currentMidpoint = leftPos.clone().add(rightPos).mulScalar(0.5);
+
+    if (
+      !this.vrScaleGesture ||
+      this.vrScaleGesture.leftId !== left.id ||
+      this.vrScaleGesture.rightId !== right.id
+    ) {
+      this.vrScaleGesture = {
+        leftId: left.id,
+        rightId: right.id,
+        initialDistance: currentDistance,
+        initialMidpoint: currentMidpoint,
+        initialHeadPosition: this.camera.getPosition().clone(),
+        initialRootPosition: this.cameraRoot.getPosition().clone(),
+      };
+      return true;
+    }
+
+    const scale = computePinchScale(this.vrScaleGesture.initialDistance, currentDistance);
+    const scaledHeadOffset = this.vrScaleGesture.initialHeadPosition
+      .clone()
+      .sub(this.vrScaleGesture.initialMidpoint)
+      .mulScalar(1 / scale);
+    const desiredHead = currentMidpoint.clone().add(scaledHeadOffset);
+    const rootDelta = desiredHead.sub(this.vrScaleGesture.initialHeadPosition);
+    this.cameraRoot.setPosition(this.vrScaleGesture.initialRootPosition.clone().add(rootDelta));
+    return true;
+  }
+
+  private createVrExitAffordance(): void {
+    if (this.vrExitEntity || !this.app) return;
+    const material = new StandardMaterial();
+    material.diffuse.set(0.95, 0.18, 0.16);
+    material.emissive.set(0.45, 0.02, 0.02);
+    material.opacity = 0.92;
+    material.update();
+
+    const entity = new Entity('vr-exit-affordance');
+    entity.addComponent('render', {
+      type: 'box',
+      material,
+    });
+    entity.setLocalScale(0.28, 0.08, 0.28);
+    this.app.root.addChild(entity);
+    this.vrExitEntity = entity;
+    this.vrExitMaterial = material;
+  }
+
+  private removeVrExitAffordance(): void {
+    this.vrExitEntity?.destroy();
+    this.vrExitEntity = null;
+    this.vrExitMaterial?.destroy();
+    this.vrExitMaterial = null;
+  }
+
+  private updateVrExitAffordance(inputSources: RuntimeXrInputSource[]): void {
+    if (!this.camera || !this.vrExitEntity) return;
+    const head = this.camera.getPosition().clone();
+    const forward = this.camera.forward.clone().normalize();
+    const up = this.camera.up.clone().normalize();
+    const pos = head.add(forward.mulScalar(1.15)).add(up.mulScalar(-0.38));
+    this.vrExitEntity.setPosition(pos);
+    this.vrExitEntity.lookAt(this.camera.getPosition());
+
+    const menuPressed = inputSources.some((source) => {
+      const buttons = source.gamepad?.buttons;
+      return Boolean(buttons?.[4]?.pressed || buttons?.[5]?.pressed || buttons?.[6]?.pressed);
+    });
+    if (menuPressed && !this.vrExitButtonPressed) {
+      void this.exitVr();
+    }
+    this.vrExitButtonPressed = menuPressed;
+
+    for (const source of inputSources) {
+      if (!this.isXrTriggerPressed(source)) continue;
+      const origin = source.getOrigin?.();
+      const direction = source.getDirection?.();
+      if (!origin || !direction) continue;
+      const hit = this.intersectRaySphere(origin, direction, this.vrExitEntity.getPosition(), 0.22);
+      if (hit) {
+        void this.exitVr();
+        return;
+      }
+    }
+  }
+
+  private intersectRaySphere(origin: Vec3, direction: Vec3, center: Vec3, radius: number): boolean {
+    const ox = origin.x - center.x;
+    const oy = origin.y - center.y;
+    const oz = origin.z - center.z;
+    const b = ox * direction.x + oy * direction.y + oz * direction.z;
+    const c = ox * ox + oy * oy + oz * oz - radius * radius;
+    const disc = b * b - c;
+    if (disc < 0) return false;
+    const sqrtDisc = Math.sqrt(disc);
+    return -b - sqrtDisc > 0 || -b + sqrtDisc > 0;
+  }
+
   private applyVrMovement(
     stickX: number,
     stickY: number,
-    _sourceType: string,
     speed: number,
   ): void {
     if (!this.camera || !this.cameraRoot) return;
@@ -1117,7 +1564,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateOrbitPan(dt: number): void {
     if (!this.camera || !this.app?.keyboard) return;
     const keyboard = this.app.keyboard;
-    const speed = 4.0;
+    const speed = keyboard.isPressed(16) ? 12.0 : 4.0;
     const cam = this.camera;
 
     const camForward = cam.forward.clone();
@@ -1138,6 +1585,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (keyboard.isPressed(83)) move.sub(forward);
     if (keyboard.isPressed(68)) move.add(right);
     if (keyboard.isPressed(65)) move.sub(right);
+    if (keyboard.isPressed(81)) move.sub(Vec3.UP);
+    if (keyboard.isPressed(69)) move.add(Vec3.UP);
 
     if (move.lengthSq() > 0) {
       move.normalize().mulScalar(speed * dt);
@@ -1163,12 +1612,21 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (keyboard.isPressed(65)) move.sub(right);
     if (keyboard.isPressed(81)) move.sub(worldUp);    // Q = descend
     if (keyboard.isPressed(69)) move.add(worldUp);    // E = ascend
+    if (this.flyMoveJoystick.x !== 0 || this.flyMoveJoystick.y !== 0) {
+      move.add(right.clone().mulScalar(this.flyMoveJoystick.x));
+      move.add(forward.clone().mulScalar(-this.flyMoveJoystick.y));
+    }
 
     if (move.lengthSq() > 0) {
       move.normalize().mulScalar(effectiveSpeed * dt);
       const pos = this.camera.getPosition().clone();
       pos.add(move);
       this.camera.setPosition(pos.x, pos.y, pos.z);
+    }
+
+    if (this.flyLookJoystick.x !== 0 || this.flyLookJoystick.y !== 0) {
+      this.flyYaw -= this.flyLookJoystick.x * dt * 2.6;
+      this.flyPitch = Math.max(-1.5, Math.min(1.5, this.flyPitch - this.flyLookJoystick.y * dt * 2.2));
     }
 
     // Apply fly rotation from mouse look
@@ -1180,6 +1638,111 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     );
     const lookTarget = this.camera.getPosition().clone().add(lookDir);
     this.camera.lookAt(lookTarget);
+  }
+
+  private isCoarsePointer(): boolean {
+    return typeof window !== 'undefined' && window.matchMedia?.('(pointer: coarse)').matches;
+  }
+
+  private createFlyJoysticks(): void {
+    if (this.flyJoystickLayer || !this.canvas.parentElement) return;
+
+    const layer = document.createElement('div');
+    layer.className = 'gsplat-fly-joysticks';
+    layer.style.position = 'absolute';
+    layer.style.inset = '0';
+    layer.style.pointerEvents = 'none';
+    layer.style.zIndex = '6';
+
+    const left = this.createJoystickElement('Move');
+    left.style.left = '18px';
+    left.style.bottom = '18px';
+    const right = this.createJoystickElement('Look');
+    right.style.right = '18px';
+    right.style.bottom = '18px';
+
+    this.bindJoystick(left, this.flyMoveJoystick);
+    this.bindJoystick(right, this.flyLookJoystick);
+    layer.append(left, right);
+    this.canvas.parentElement.appendChild(layer);
+    this.flyJoystickLayer = layer;
+  }
+
+  private createJoystickElement(label: string): HTMLDivElement {
+    const base = document.createElement('div');
+    base.setAttribute('aria-label', `${label} joystick`);
+    base.style.position = 'absolute';
+    base.style.width = '104px';
+    base.style.height = '104px';
+    base.style.borderRadius = '50%';
+    base.style.background = 'rgba(245,245,245,0.12)';
+    base.style.border = '1px solid rgba(255,255,255,0.22)';
+    base.style.backdropFilter = 'blur(8px)';
+    base.style.pointerEvents = 'auto';
+    base.style.touchAction = 'none';
+    base.style.opacity = '0.55';
+
+    const knob = document.createElement('div');
+    knob.dataset.knob = 'true';
+    knob.style.position = 'absolute';
+    knob.style.left = '50%';
+    knob.style.top = '50%';
+    knob.style.width = '42px';
+    knob.style.height = '42px';
+    knob.style.borderRadius = '50%';
+    knob.style.background = 'rgba(245,245,245,0.34)';
+    knob.style.border = '1px solid rgba(255,255,255,0.28)';
+    knob.style.transform = 'translate(-50%, -50%)';
+    knob.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+    base.appendChild(knob);
+    return base;
+  }
+
+  private bindJoystick(base: HTMLDivElement, state: VirtualJoystickState): void {
+    const update = (event: PointerEvent) => {
+      const rect = base.getBoundingClientRect();
+      const max = Math.max(1, rect.width * 0.34);
+      const dx = Math.max(-max, Math.min(max, event.clientX - (rect.left + rect.width * 0.5)));
+      const dy = Math.max(-max, Math.min(max, event.clientY - (rect.top + rect.height * 0.5)));
+      state.x = applyDeadzone(dx / max, 0.08);
+      state.y = applyDeadzone(dy / max, 0.08);
+      const knob = base.querySelector<HTMLElement>('[data-knob="true"]');
+      if (knob) {
+        knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
+      }
+      base.style.opacity = '0.82';
+      this.requestRender();
+    };
+
+    const reset = (event: PointerEvent) => {
+      if (state.pointerId !== event.pointerId) return;
+      state.pointerId = null;
+      state.x = 0;
+      state.y = 0;
+      const knob = base.querySelector<HTMLElement>('[data-knob="true"]');
+      if (knob) knob.style.transform = 'translate(-50%, -50%)';
+      base.style.opacity = '0.55';
+      this.requestRender();
+    };
+
+    base.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      state.pointerId = event.pointerId;
+      base.setPointerCapture?.(event.pointerId);
+      update(event);
+    });
+    base.addEventListener('pointermove', (event) => {
+      if (state.pointerId === event.pointerId) update(event);
+    });
+    base.addEventListener('pointerup', reset);
+    base.addEventListener('pointercancel', reset);
+  }
+
+  private removeFlyJoysticks(): void {
+    this.flyJoystickLayer?.remove();
+    this.flyJoystickLayer = null;
+    this.flyMoveJoystick = { pointerId: null, x: 0, y: 0 };
+    this.flyLookJoystick = { pointerId: null, x: 0, y: 0 };
   }
 
   private updateCamera(): void {

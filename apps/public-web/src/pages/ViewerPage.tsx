@@ -67,6 +67,7 @@ export default function ViewerPage() {
   const [viewerReady, setViewerReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [vrError, setVrError] = useState<string | null>(null);
+  const [vrActive, setVrActive] = useState(false);
   const [rendererPref, setRendererPref] = useState<RendererPref>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEWER_READY_KEY + '_renderer') : null;
     if (saved === 'webgpu') return 'webgpu';
@@ -182,6 +183,9 @@ export default function ViewerPage() {
         setViewerReady(true);
         setTimeout(() => setShowPoster(false), 300);
       },
+      onVrSessionChange: (active: boolean) => {
+        setVrActive(active);
+      },
       onError: (err: Error) => {
         console.error('Viewer error:', err);
         setVrError(err.message);
@@ -237,6 +241,7 @@ export default function ViewerPage() {
       viewer.destroy();
       viewerRef.current = null;
       setViewerReady(false);
+      setVrActive(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest, markers, rendererPref]);
@@ -302,8 +307,20 @@ export default function ViewerPage() {
     setVrError(null);
     try {
       await viewerRef.current?.enterVr();
+      setVrActive(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'VR failed';
+      setVrError(message);
+    }
+  }, []);
+
+  const handleExitVr = useCallback(async () => {
+    setVrError(null);
+    try {
+      await viewerRef.current?.exitVr();
+      setVrActive(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'VR exit failed';
       setVrError(message);
     }
   }, []);
@@ -444,12 +461,12 @@ export default function ViewerPage() {
           </select>
           {manifest.viewer?.enableVr && vrSupported && (
             <button
-              onClick={handleEnterVr}
+              onClick={vrActive ? handleExitVr : handleEnterVr}
               style={styles.vrButton}
-              title="Enter VR mode"
-              aria-label="Enter VR"
+              title={vrActive ? 'Exit VR mode' : 'Enter VR mode'}
+              aria-label={vrActive ? 'Exit VR' : 'Enter VR'}
             >
-              VR
+              {vrActive ? 'Exit VR' : 'VR'}
             </button>
           )}
           {manifest.viewer?.enableVr && vrChecked && !vrSupported && (

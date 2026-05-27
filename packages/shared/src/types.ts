@@ -78,6 +78,12 @@ export interface SplatListItem {
   publishedAt: string | null;
 }
 
+export interface DefaultCamera {
+  position: [number, number, number];
+  target: [number, number, number];
+  fov?: number;
+}
+
 export interface SplatDetail {
   id: string;
   slug: string;
@@ -88,7 +94,7 @@ export interface SplatDetail {
   splatCount: number | null;
   sizeBytes: number | null;
   boundingBoxJson: unknown;
-  defaultCameraJson: unknown;
+  defaultCameraJson: DefaultCamera | null;
   globalSettingsJson: unknown;
   createdAt: string;
   updatedAt: string;
@@ -111,7 +117,7 @@ export interface ViewerManifest {
     posterUrl?: string;
   };
   viewer: {
-    defaultCamera?: unknown;
+    defaultCamera?: DefaultCamera;
     enableVr: boolean;
     enableWebGpu: boolean;
     lockScene?: boolean;

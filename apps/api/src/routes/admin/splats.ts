@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import { createSplatSchema, updateSplatSchema, pretransformSchema, pretransformUpdateSchema } from '@gsplat/shared';
+import { Prisma } from '@prisma/client';
+import { createSplatSchema, updateSplatSchema, pretransformSchema, pretransformUpdateSchema, defaultCameraSchema } from '@gsplat/shared';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
 
 export async function adminSplatRoutes(app: FastifyInstance) {
@@ -100,7 +101,13 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       }
     }
 
-    const updated = await prisma.splat.update({ where: { id }, data });
+    const { defaultCameraJson, ...coreData } = data;
+    const prismaData = {
+      ...coreData,
+      ...(defaultCameraJson !== undefined ? { defaultCameraJson: defaultCameraJson as any } : {}),
+    };
+
+    const updated = await prisma.splat.update({ where: { id }, data: prismaData });
 
     return {
       splat: {
@@ -206,6 +213,49 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     });
 
     return { pretransform: updated.pretransformJson };
+  });
+
+  // ── Default Camera endpoints ──
+
+  // PATCH /api/admin/splats/:id/camera
+  app.patch('/splats/:id/camera', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const data = defaultCameraSchema.parse(request.body);
+
+    const splat = await prisma.splat.findUnique({ where: { id } });
+    if (!splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+
+    const updated = await prisma.splat.update({
+      where: { id },
+      data: { defaultCameraJson: data },
+      select: { defaultCameraJson: true },
+    });
+
+    return { defaultCamera: updated.defaultCameraJson };
+  });
+
+  // DELETE /api/admin/splats/:id/camera
+  app.delete('/splats/:id/camera', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const splat = await prisma.splat.findUnique({ where: { id } });
+    if (!splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+
+    const updated = await prisma.splat.update({
+      where: { id },
+      data: { defaultCameraJson: Prisma.JsonNull },
+      select: { defaultCameraJson: true },
+    });
+
+    return { defaultCamera: null };
   });
 
   // GET /api/admin/splats/:id/versions

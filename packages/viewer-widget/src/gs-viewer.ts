@@ -28,6 +28,7 @@ class GsViewerElement extends HTMLElement {
   private loadingEl: HTMLDivElement | null = null;
   private currentQuality: QualityPreset = 'auto';
   private currentCameraMode: CameraMode = 'orbit';
+  private currentVrActive = false;
 
   constructor() {
     super();
@@ -213,8 +214,14 @@ class GsViewerElement extends HTMLElement {
 
     if (showUi === 'full') {
       const vrBtn = document.createElement('button');
-      vrBtn.textContent = 'VR';
-      vrBtn.addEventListener('click', () => this.viewer?.enterVr());
+      vrBtn.textContent = this.currentVrActive ? 'Exit VR' : 'VR';
+      vrBtn.addEventListener('click', () => {
+        if (this.currentVrActive) {
+          void this.viewer?.exitVr();
+        } else {
+          void this.viewer?.enterVr();
+        }
+      });
       this.controlsBar.appendChild(vrBtn);
     }
   }
@@ -267,6 +274,7 @@ class GsViewerElement extends HTMLElement {
     const requestedRenderer = (this.getAttribute('renderer') as RendererMode | null) || 'auto';
     this.currentQuality = (this.getAttribute('quality') as QualityPreset | null) || config.widget.quality || 'auto';
     this.currentCameraMode = locked ? 'locked' : 'orbit';
+    this.currentVrActive = false;
     this.buildControls();
 
     const viewerManifest = manifest as import('@gsplat/viewer-core').ViewerManifest;
@@ -296,6 +304,11 @@ class GsViewerElement extends HTMLElement {
       onReady: () => {
         if (this.loadingEl) this.loadingEl.style.display = 'none';
         this.dispatchEvent(new CustomEvent('viewer-ready'));
+      },
+      onVrSessionChange: (active: boolean) => {
+        this.currentVrActive = active;
+        this.buildControls();
+        this.dispatchEvent(new CustomEvent('vr-session-change', { detail: { active } }));
       },
       onError: (error: Error) => {
         this.showError(error.message);
@@ -359,6 +372,7 @@ class GsViewerElement extends HTMLElement {
     this.infoPanel = null;
     this.controlsBar = null;
     this.loadingEl = null;
+    this.currentVrActive = false;
   }
 }
 
