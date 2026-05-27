@@ -3,6 +3,7 @@ import {
   applyDeadzone,
   center2D,
   classifyTwoPointerGesture,
+  computeDepthConsensus,
   computeDepthAwareDollyStep,
   computePinchScale,
   readGamepadStick,
@@ -31,6 +32,30 @@ describe('navigationControls', () => {
       previousCenter,
       currentCenter: { x: 8, y: 0 },
     })).toBe('pan');
+  });
+
+  it('derives a confidence-scored median depth from nearby ray samples', () => {
+    expect(computeDepthConsensus({
+      samples: [9.8, 10, 10.2, 40],
+      fallbackDepth: 5,
+      minSamples: 3,
+    })).toMatchObject({
+      distance: 10.1,
+      sampleCount: 4,
+    });
+
+    expect(computeDepthConsensus({
+      samples: [],
+      fallbackDepth: 7,
+    })).toMatchObject({
+      distance: 7,
+      confidence: 0,
+      sampleCount: 0,
+    });
+
+    const stable = computeDepthConsensus({ samples: [9.9, 10, 10.1], fallbackDepth: 3 });
+    const scattered = computeDepthConsensus({ samples: [3, 10, 80], fallbackDepth: 3 });
+    expect(stable.confidence).toBeGreaterThan(scattered.confidence);
   });
 
   it('normalizes deadzones and reads WebXR stick fallback axes', () => {

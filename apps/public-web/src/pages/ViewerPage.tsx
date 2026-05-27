@@ -186,6 +186,9 @@ export default function ViewerPage() {
       onVrSessionChange: (active: boolean) => {
         setVrActive(active);
       },
+      onCameraModeChange: (mode) => {
+        setCameraMode(mode);
+      },
       onError: (err: Error) => {
         console.error('Viewer error:', err);
         setVrError(err.message);

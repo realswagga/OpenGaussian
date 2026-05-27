@@ -36,6 +36,8 @@ export {
   applyDeadzone,
   center2D,
   classifyTwoPointerGesture,
+  clamp,
+  computeDepthConsensus,
   computeDepthAwareDollyStep,
   computePinchScale,
   distance2D,
@@ -43,6 +45,8 @@ export {
 } from './navigationControls.js';
 export type {
   DepthAwareDollyInput,
+  DepthConsensus,
+  DepthConsensusInput,
   GamepadStick,
   GesturePoint,
   TwoPointerGesture,

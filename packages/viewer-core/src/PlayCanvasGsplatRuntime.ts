@@ -18,7 +18,6 @@ import {
   Mouse,
   RenderComponentSystem,
   ScriptComponentSystem,
-  StandardMaterial,
   TextureHandler,
   TouchDevice,
   Vec3,
@@ -44,6 +43,8 @@ import {
   applyDeadzone,
   center2D,
   classifyTwoPointerGesture,
+  clamp,
+  computeDepthConsensus,
   computeDepthAwareDollyStep,
   computePinchScale,
   distance2D,
@@ -66,6 +67,7 @@ interface TrackedPointer {
 interface TouchGestureState {
   distance: number;
   center: { x: number; y: number };
+  depth: number;
 }
 
 interface VirtualJoystickState {
@@ -118,6 +120,27 @@ interface EffectiveQualitySettings {
   renderOnDemand: boolean;
   antialias: boolean;
 }
+
+type DepthPickSource = 'scene' | 'target-plane' | 'fallback';
+
+interface DepthPick {
+  point: Vec3;
+  distance: number;
+  confidence: number;
+  source: DepthPickSource;
+}
+
+const DEPTH_RAY_OFFSETS: readonly (readonly [number, number])[] = [
+  [0, 0],
+  [5, 0],
+  [-5, 0],
+  [0, 5],
+  [0, -5],
+  [4, 4],
+  [-4, 4],
+  [4, -4],
+  [-4, -4],
+];
 
 class GsplatApp extends AppBase {
   constructor(canvas: HTMLCanvasElement, options: RuntimeAppOptions) {
@@ -310,13 +333,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private flyLookJoystick: VirtualJoystickState = { pointerId: null, x: 0, y: 0 };
   // VR locomotion state
   private vrActive = false;
-  private readonly vrMoveSpeed = 3.0;
-  private readonly vrVerticalSpeed = 2.0;
-  private vrTurnLatch = 0;
-  private vrExitButtonPressed = false;
+  private readonly vrMoveSpeed = 2.4;
+  private readonly vrVerticalSpeed = 1.5;
   private vrScaleGesture: VrScaleGestureState | null = null;
-  private vrExitEntity: Entity | null = null;
-  private vrExitMaterial: StandardMaterial | null = null;
   private pendingQualityMarkerUpdate = false;
 
   constructor(options: ViewerOptions) {
@@ -387,7 +406,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.markerButtons.clear();
     this.selectedMarkerId = null;
     this.removeFlyJoysticks();
-    this.removeVrExitAffordance();
     this.splatAsset = null;
     this.splatEntity = null;
     this.camera = null;
@@ -452,23 +470,34 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       document.exitPointerLock();
     } else {
       this.removeFlyJoysticks();
-      if (this.camera && previousMode === 'fly') {
-        const pos = this.camera.getPosition().clone();
-        const forward = this.camera.forward.clone();
-        const orbitDistance = Math.max(0.25, Math.min(200, this.distance || this.sceneRadius || 4));
-        this.target = pos.clone().add(forward.mulScalar(orbitDistance));
-        const offset = pos.clone().sub(this.target);
-        this.yaw = Math.atan2(offset.x, offset.z);
-        const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
-        this.pitch = Math.atan2(offset.y, horizontalLen);
-        this.distance = orbitDistance;
-        this.updateCamera();
-      }
+      if (previousMode === 'fly') this.syncOrbitFromCameraPose();
       this.canvas.style.cursor = 'grab';
       document.exitPointerLock();
     }
     this.updateRenderPolicy();
+    if (previousMode !== mode) {
+      this.options.onCameraModeChange?.(mode);
+    }
     this.requestRender();
+  }
+
+  private syncOrbitFromCameraPose(): void {
+    if (!this.camera) return;
+    const pos = this.camera.getPosition().clone();
+    const forward = this.camera.forward.clone();
+    if (forward.lengthSq() <= 1e-8) return;
+    forward.normalize();
+    const maxDistance = Math.max(200, this.sceneRadius * 20);
+    const orbitDistance = clamp(this.distance || this.sceneRadius * 1.5 || 4, 0.25, maxDistance);
+    this.target = pos.clone().add(forward.mulScalar(orbitDistance));
+    const offset = pos.clone().sub(this.target);
+    this.yaw = Math.atan2(offset.x, offset.z);
+    const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
+    this.pitch = clamp(Math.atan2(offset.y, horizontalLen), -1.5, 1.5);
+    this.distance = orbitDistance;
+    this.updateCamera();
+    this.camera.setPosition(pos.x, pos.y, pos.z);
+    this.camera.lookAt(this.target);
   }
 
   setMarkers(points: MarkerPoint[]): void {
@@ -616,7 +645,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
               // Capture the session for gamepad polling and bind end event
               this.vrActive = true;
               this.updateRenderPolicy();
-              this.createVrExitAffordance();
               this.options.onVrSessionChange?.(true);
               const session = (this.app!.xr as unknown as { _session?: RuntimeXrSessionLike })._session;
               if (session) {
@@ -635,9 +663,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private onVrSessionEnd = (): void => {
     this.vrActive = false;
     this.vrScaleGesture = null;
-    this.vrTurnLatch = 0;
-    this.vrExitButtonPressed = false;
-    this.removeVrExitAffordance();
     this.options.onVrSessionChange?.(false);
     this.updateRenderPolicy();
   };
@@ -645,11 +670,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   async exitVr(): Promise<void> {
     this.vrActive = false;
     this.vrScaleGesture = null;
-    this.vrExitButtonPressed = false;
     if (this.app?.xr?.active) {
       this.app.xr.end();
     }
-    this.removeVrExitAffordance();
     this.options.onVrSessionChange?.(false);
     this.updateRenderPolicy();
   }
@@ -1002,6 +1025,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.activePointers.set(event.pointerId, tracked);
     this.canvas.setPointerCapture?.(event.pointerId);
 
+    if (event.pointerType === 'mouse' && event.button === 0) {
+      this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
+    }
+
     if (event.pointerType === 'touch') {
       this.isDragging = true;
       this.isRightDrag = false;
@@ -1063,7 +1090,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       wasTap &&
       this.currentCameraMode === 'orbit' &&
       this.activePointers.size <= 1 &&
-      (tracked.pointerType === 'mouse' ? tracked.button === 0 : true),
+      tracked.pointerType !== 'mouse',
     );
 
     if (canSetTarget && tracked) {
@@ -1097,7 +1124,11 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       const distance = distance2D(a, b);
 
       if (!this.touchGestureState) {
-        this.touchGestureState = { center, distance };
+        this.touchGestureState = {
+          center,
+          distance,
+          depth: this.getDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
+        };
         return;
       }
 
@@ -1106,19 +1137,27 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         currentDistance: distance,
         previousCenter: this.touchGestureState.center,
         currentCenter: center,
+        scaleThresholdPx: 6,
+        panThresholdPx: 3,
       });
 
+      let nextDepth = this.touchGestureState.depth;
       if (gesture === 'dolly') {
-        const factor = distance / Math.max(1, this.touchGestureState.distance);
-        const hitDepth = this.getDepthAtClientPoint(center.x, center.y);
-        const maxStep = Math.max(this.sceneRadius * 0.25, 0.5);
-        const step = Math.max(-maxStep, Math.min(maxStep, (factor - 1) * hitDepth));
+        const factor = clamp(distance / Math.max(1, this.touchGestureState.distance), 0.88, 1.14);
+        const maxStep = Math.max(this.sceneRadius * 0.035, 0.08);
+        const step = clamp(Math.log(factor) * this.touchGestureState.depth * 0.75, -maxStep, maxStep);
         this.dollyAlongClientPoint(center.x, center.y, step);
+        const liveDepth = this.getDepthPickAtClientPoint(center.x, center.y);
+        nextDepth = liveDepth && liveDepth.source === 'scene' && liveDepth.confidence >= 0.45
+          ? this.clampInteractionDepth(this.touchGestureState.depth * 0.85 + liveDepth.distance * 0.15)
+          : this.clampInteractionDepth(this.touchGestureState.depth - step);
       } else if (gesture === 'pan') {
-        this.panOrbitTarget(center.x - this.touchGestureState.center.x, center.y - this.touchGestureState.center.y);
+        const dx = clamp(center.x - this.touchGestureState.center.x, -24, 24);
+        const dy = clamp(center.y - this.touchGestureState.center.y, -24, 24);
+        this.panOrbitTarget(dx, dy, this.touchGestureState.depth);
       }
 
-      this.touchGestureState = { center, distance };
+      this.touchGestureState = { center, distance, depth: nextDepth };
       this.requestRender();
       return;
     }
@@ -1134,9 +1173,11 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (pointers.length >= 2) {
       const a = pointers[0]!;
       const b = pointers[1]!;
+      const center = center2D(a, b);
       this.touchGestureState = {
-        center: center2D(a, b),
+        center,
         distance: distance2D(a, b),
+        depth: this.getDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
       };
     } else {
       this.touchGestureState = null;
@@ -1149,24 +1190,24 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.updateCamera();
   }
 
-  private panOrbitTarget(dx: number, dy: number): void {
+  private panOrbitTarget(dx: number, dy: number, depth = this.distance): void {
     if (!this.camera) return;
     const right = this.camera.right.clone();
     const up = this.camera.up.clone();
     right.normalize();
     up.normalize();
-    const d = Math.max(0.1, this.distance);
+    const d = Math.max(0.1, this.clampInteractionDepth(depth));
     const panSpeed = d * 0.003;
     this.target.sub(right.mulScalar(dx * panSpeed));
     this.target.add(up.mulScalar(dy * panSpeed));
     this.updateCamera();
   }
 
-  private getRayFromClientPoint(clientX: number, clientY: number): { origin: Vec3; direction: Vec3 } | null {
+  private getRayFromClientPoint(clientX: number, clientY: number, offsetX = 0, offsetY = 0): { origin: Vec3; direction: Vec3 } | null {
     if (!this.camera?.camera) return null;
     const rect = this.canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    const x = clientX - rect.left + offsetX;
+    const y = clientY - rect.top + offsetY;
     const origin = this.camera.getPosition().clone();
     const far = this.camera.camera.farClip || 1000;
     const end = this.camera.camera.screenToWorld(x, y, far, new Vec3());
@@ -1200,10 +1241,84 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     return { point: origin.clone().add(direction.clone().mulScalar(t)), distance: t };
   }
 
+  private getFallbackInteractionDepth(): number {
+    return this.clampInteractionDepth(Math.max(this.distance, this.sceneRadius, 0.25));
+  }
+
+  private clampInteractionDepth(depth: number): number {
+    const radius = Math.max(this.sceneRadius, 0.5);
+    const minDepth = Math.max(radius * 0.035, 0.05);
+    const maxDepth = Math.max(radius * 8, this.distance * 3, 2);
+    const safeDepth = Number.isFinite(depth) && depth > 0 ? depth : Math.max(this.distance, radius, 0.25);
+    return clamp(safeDepth, minDepth, maxDepth);
+  }
+
+  private intersectRayTargetPlane(origin: Vec3, direction: Vec3): { point: Vec3; distance: number } | null {
+    if (!this.camera) return null;
+    const normal = this.camera.forward.clone();
+    if (normal.lengthSq() <= 1e-8) return null;
+    normal.normalize();
+    const denom = direction.dot(normal);
+    if (Math.abs(denom) <= 1e-5) return null;
+    const distance = this.target.clone().sub(origin).dot(normal) / denom;
+    if (!Number.isFinite(distance) || distance <= 0.01) return null;
+    return {
+      point: origin.clone().add(direction.clone().mulScalar(distance)),
+      distance,
+    };
+  }
+
+  private getDepthPickAtClientPoint(clientX: number, clientY: number): DepthPick | null {
+    const centerRay = this.getRayFromClientPoint(clientX, clientY);
+    if (!centerRay) return null;
+
+    const fallbackDepth = this.getFallbackInteractionDepth();
+    const samples: number[] = [];
+    for (const [offsetX, offsetY] of DEPTH_RAY_OFFSETS) {
+      const ray = this.getRayFromClientPoint(clientX, clientY, offsetX, offsetY);
+      if (!ray) continue;
+      const hit = this.intersectRaySceneSphere(ray.origin, ray.direction);
+      if (hit) samples.push(this.clampInteractionDepth(hit.distance));
+    }
+
+    const consensus = computeDepthConsensus({
+      samples,
+      fallbackDepth,
+      minSamples: 4,
+      maxRelativeSpread: 0.55,
+    });
+
+    if (consensus.sampleCount >= 4 && consensus.confidence >= 0.35) {
+      const distance = this.clampInteractionDepth(consensus.distance);
+      return {
+        point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(distance)),
+        distance,
+        confidence: consensus.confidence,
+        source: 'scene',
+      };
+    }
+
+    const planeHit = this.intersectRayTargetPlane(centerRay.origin, centerRay.direction);
+    if (planeHit) {
+      const distance = this.clampInteractionDepth(planeHit.distance);
+      return {
+        point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(distance)),
+        distance,
+        confidence: 0.25,
+        source: 'target-plane',
+      };
+    }
+
+    return {
+      point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(fallbackDepth)),
+      distance: fallbackDepth,
+      confidence: 0,
+      source: 'fallback',
+    };
+  }
+
   private getDepthAtClientPoint(clientX: number, clientY: number): number {
-    const ray = this.getRayFromClientPoint(clientX, clientY);
-    if (!ray) return Math.max(this.distance, 0.25);
-    return this.intersectRaySceneSphere(ray.origin, ray.direction)?.distance ?? Math.max(this.distance, this.sceneRadius, 0.25);
+    return this.getDepthPickAtClientPoint(clientX, clientY)?.distance ?? this.getFallbackInteractionDepth();
   }
 
   private dollyAlongClientPoint(clientX: number, clientY: number, step: number): void {
@@ -1217,10 +1332,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private setOrbitTargetFromClientPoint(clientX: number, clientY: number): void {
-    const ray = this.getRayFromClientPoint(clientX, clientY);
-    if (!ray || !this.camera) return;
-    const hit = this.intersectRaySceneSphere(ray.origin, ray.direction);
-    if (!hit) return;
+    const hit = this.getDepthPickAtClientPoint(clientX, clientY);
+    if (!hit || !this.camera) return;
     const pos = this.camera.getPosition().clone();
     const offset = pos.sub(hit.point);
     const distance = offset.length();
@@ -1250,6 +1363,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       deltaMode: event.deltaMode,
       hitDepth: this.getDepthAtClientPoint(event.clientX, event.clientY),
       sceneRadius: this.sceneRadius,
+      maxStep: Math.max(this.sceneRadius * 0.08, 0.2),
     });
     this.dollyAlongClientPoint(event.clientX, event.clientY, step);
     this.requestRender();
@@ -1262,6 +1376,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       this.canvas.style.cursor = 'none';
     } else {
       document.removeEventListener('mousemove', this.onFlyMouseMove);
+      if (!locked && this.currentCameraMode === 'fly' && !this.isCoarsePointer()) {
+        this.setCameraMode('orbit');
+        return;
+      }
       this.canvas.style.cursor = this.currentCameraMode === 'locked' ? 'default' : 'grab';
     }
   };
@@ -1284,14 +1402,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (inputSources.length === 0) return;
 
     const speed = this.vrMoveSpeed * dt;
-    this.updateVrExitAffordance(inputSources);
     if (this.updateVrScaleGesture(inputSources)) {
       this.requestRender();
       return;
     }
 
     for (const source of inputSources) {
-      const stick = readGamepadStick(source.gamepad);
+      const stick = readGamepadStick(source.gamepad, 0.18);
       if (stick.x === 0 && stick.y === 0) continue;
 
       // Left stick: axes[0]=left/right, axes[1]=up/down (Y is usually inverted: -1=up)
@@ -1320,13 +1437,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private applyVrTurnAndVertical(stickX: number, stickY: number, dt: number): void {
     if (!this.cameraRoot) return;
 
-    const turnThreshold = 0.72;
-    const resetThreshold = 0.35;
-    if (Math.abs(stickX) < resetThreshold) {
-      this.vrTurnLatch = 0;
-    } else if (this.vrTurnLatch === 0 && Math.abs(stickX) >= turnThreshold) {
-      this.vrTurnLatch = Math.sign(stickX);
-      this.rotateCameraRootAroundHead(-Math.sign(stickX) * 30);
+    if (Math.abs(stickX) > 0) {
+      this.rotateCameraRootAroundHead(-stickX * 55 * dt);
     }
 
     const vertical = -stickY;
@@ -1390,75 +1502,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const rootDelta = desiredHead.sub(this.vrScaleGesture.initialHeadPosition);
     this.cameraRoot.setPosition(this.vrScaleGesture.initialRootPosition.clone().add(rootDelta));
     return true;
-  }
-
-  private createVrExitAffordance(): void {
-    if (this.vrExitEntity || !this.app) return;
-    const material = new StandardMaterial();
-    material.diffuse.set(0.95, 0.18, 0.16);
-    material.emissive.set(0.45, 0.02, 0.02);
-    material.opacity = 0.92;
-    material.update();
-
-    const entity = new Entity('vr-exit-affordance');
-    entity.addComponent('render', {
-      type: 'box',
-      material,
-    });
-    entity.setLocalScale(0.28, 0.08, 0.28);
-    this.app.root.addChild(entity);
-    this.vrExitEntity = entity;
-    this.vrExitMaterial = material;
-  }
-
-  private removeVrExitAffordance(): void {
-    this.vrExitEntity?.destroy();
-    this.vrExitEntity = null;
-    this.vrExitMaterial?.destroy();
-    this.vrExitMaterial = null;
-  }
-
-  private updateVrExitAffordance(inputSources: RuntimeXrInputSource[]): void {
-    if (!this.camera || !this.vrExitEntity) return;
-    const head = this.camera.getPosition().clone();
-    const forward = this.camera.forward.clone().normalize();
-    const up = this.camera.up.clone().normalize();
-    const pos = head.add(forward.mulScalar(1.15)).add(up.mulScalar(-0.38));
-    this.vrExitEntity.setPosition(pos);
-    this.vrExitEntity.lookAt(this.camera.getPosition());
-
-    const menuPressed = inputSources.some((source) => {
-      const buttons = source.gamepad?.buttons;
-      return Boolean(buttons?.[4]?.pressed || buttons?.[5]?.pressed || buttons?.[6]?.pressed);
-    });
-    if (menuPressed && !this.vrExitButtonPressed) {
-      void this.exitVr();
-    }
-    this.vrExitButtonPressed = menuPressed;
-
-    for (const source of inputSources) {
-      if (!this.isXrTriggerPressed(source)) continue;
-      const origin = source.getOrigin?.();
-      const direction = source.getDirection?.();
-      if (!origin || !direction) continue;
-      const hit = this.intersectRaySphere(origin, direction, this.vrExitEntity.getPosition(), 0.22);
-      if (hit) {
-        void this.exitVr();
-        return;
-      }
-    }
-  }
-
-  private intersectRaySphere(origin: Vec3, direction: Vec3, center: Vec3, radius: number): boolean {
-    const ox = origin.x - center.x;
-    const oy = origin.y - center.y;
-    const oz = origin.z - center.z;
-    const b = ox * direction.x + oy * direction.y + oz * direction.z;
-    const c = ox * ox + oy * oy + oz * oz - radius * radius;
-    const disc = b * b - c;
-    if (disc < 0) return false;
-    const sqrtDisc = Math.sqrt(disc);
-    return -b - sqrtDisc > 0 || -b + sqrtDisc > 0;
   }
 
   private applyVrMovement(
@@ -1564,7 +1607,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateOrbitPan(dt: number): void {
     if (!this.camera || !this.app?.keyboard) return;
     const keyboard = this.app.keyboard;
-    const speed = keyboard.isPressed(16) ? 12.0 : 4.0;
+    const speed = keyboard.isPressed(16) ? 8.0 : 4.0;
     const cam = this.camera;
 
     const camForward = cam.forward.clone();
@@ -1599,7 +1642,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (!this.camera || !this.app?.keyboard) return;
     const keyboard = this.app.keyboard;
     const speed = this.flyMoveSpeed;
-    const effectiveSpeed = keyboard.isPressed(16) ? speed * 3 : speed;
+    const effectiveSpeed = keyboard.isPressed(16) ? speed * 2 : speed;
 
     const forward = this.camera.forward.clone();
     const right = this.camera.right.clone();
@@ -1613,8 +1656,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (keyboard.isPressed(81)) move.sub(worldUp);    // Q = descend
     if (keyboard.isPressed(69)) move.add(worldUp);    // E = ascend
     if (this.flyMoveJoystick.x !== 0 || this.flyMoveJoystick.y !== 0) {
-      move.add(right.clone().mulScalar(this.flyMoveJoystick.x));
-      move.add(forward.clone().mulScalar(-this.flyMoveJoystick.y));
+      move.add(right.clone().mulScalar(this.flyMoveJoystick.x * 0.78));
+      move.add(forward.clone().mulScalar(-this.flyMoveJoystick.y * 0.78));
     }
 
     if (move.lengthSq() > 0) {
@@ -1625,8 +1668,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
 
     if (this.flyLookJoystick.x !== 0 || this.flyLookJoystick.y !== 0) {
-      this.flyYaw -= this.flyLookJoystick.x * dt * 2.6;
-      this.flyPitch = Math.max(-1.5, Math.min(1.5, this.flyPitch - this.flyLookJoystick.y * dt * 2.2));
+      this.flyYaw -= this.flyLookJoystick.x * dt * 1.9;
+      this.flyPitch = Math.max(-1.5, Math.min(1.5, this.flyPitch - this.flyLookJoystick.y * dt * 1.65));
     }
 
     // Apply fly rotation from mouse look
@@ -1704,8 +1747,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       const max = Math.max(1, rect.width * 0.34);
       const dx = Math.max(-max, Math.min(max, event.clientX - (rect.left + rect.width * 0.5)));
       const dy = Math.max(-max, Math.min(max, event.clientY - (rect.top + rect.height * 0.5)));
-      state.x = applyDeadzone(dx / max, 0.08);
-      state.y = applyDeadzone(dy / max, 0.08);
+      state.x = applyDeadzone(dx / max, 0.12);
+      state.y = applyDeadzone(dy / max, 0.12);
       const knob = base.querySelector<HTMLElement>('[data-knob="true"]');
       if (knob) {
         knob.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;

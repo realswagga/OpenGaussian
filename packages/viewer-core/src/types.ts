@@ -82,6 +82,7 @@ export interface ViewerOptions {
   onError?: (error: Error) => void;
   onStats?: (stats: ViewerStats) => void;
   onVrSessionChange?: (active: boolean) => void;
+  onCameraModeChange?: (mode: CameraMode) => void;
 }
 
 export interface ViewerStats {

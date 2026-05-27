@@ -6,6 +6,8 @@ import { TransformControls } from 'three/examples/jsm/controls/TransformControls
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
 import {
   applyDeadzone,
+  clamp,
+  computeDepthConsensus,
   computeDepthAwareDollyStep,
   extractGsplatPointCenters,
   pickMarkerPoint,
@@ -206,6 +208,7 @@ export default function Annotation3DEditorPage() {
 
   // Place marker mode
   const [placeMode, setPlaceMode] = useState(false);
+  const placeModeRef = useRef(false);
 
   // Fly mode
   const [flyMode, setFlyMode] = useState(false);
@@ -220,6 +223,7 @@ export default function Annotation3DEditorPage() {
   const [coarsePointer, setCoarsePointer] = useState(false);
   // Sync ref for the animation loop closure
   useEffect(() => { flyModeRef.current = flyMode; }, [flyMode]);
+  useEffect(() => { placeModeRef.current = placeMode; }, [placeMode]);
 
   useEffect(() => {
     const media = window.matchMedia?.('(pointer: coarse)');
@@ -541,6 +545,58 @@ export default function Annotation3DEditorPage() {
     }
   }, [splat?.productionFormat, buildCloudFromPositions]);
 
+  function resetFlyInputState() {
+    keysRef.current.clear();
+    flyMoveStickRef.current = { pointerId: null, x: 0, y: 0 };
+    flyLookStickRef.current = { pointerId: null, x: 0, y: 0 };
+  }
+
+  function syncOrbitFromCameraPose() {
+    const cam = cameraRef.current;
+    const orbit = orbitRef.current;
+    if (!cam || !orbit) return;
+
+    const pos = cam.position.clone();
+    const forward = new THREE.Vector3();
+    cam.getWorldDirection(forward);
+    if (forward.lengthSq() <= 1e-8) return;
+
+    const maxDist = Math.max(sceneRadiusRef.current * 20, 200);
+    const orbitDist = clamp(pos.distanceTo(orbit.target) || sceneRadiusRef.current * 1.5 || 4, 0.5, maxDist);
+    orbit.target.copy(pos.clone().add(forward.normalize().multiplyScalar(orbitDist)));
+    orbit.enabled = true;
+    orbit.update();
+    cam.position.copy(pos);
+    cam.lookAt(orbit.target);
+    orbit.update();
+  }
+
+  function enterFlyModeFromCamera() {
+    const cam = cameraRef.current;
+    if (!cam) return;
+    setFlyMode(true);
+    flyModeRef.current = true;
+    resetFlyInputState();
+    if (orbitRef.current) orbitRef.current.enabled = false;
+    const forward = new THREE.Vector3();
+    cam.getWorldDirection(forward);
+    flyYawRef.current = Math.atan2(forward.x, forward.z);
+    const horizontalLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
+    flyPitchRef.current = Math.atan2(forward.y, horizontalLen);
+    flyMoveSpeedRef.current = 4.0;
+    if (!coarsePointer) {
+      containerRef.current?.querySelector('canvas')?.requestPointerLock();
+    }
+  }
+
+  function exitFlyModePreservingCamera() {
+    setFlyMode(false);
+    flyModeRef.current = false;
+    resetFlyInputState();
+    document.exitPointerLock();
+    syncOrbitFromCameraPose();
+  }
+
   // ── 3D Scene Setup ──
   useEffect(() => {
     if (!containerRef.current || loading) return;
@@ -582,16 +638,35 @@ export default function Annotation3DEditorPage() {
     orbit.zoomToCursor = true;
     orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
-    function setPointerFromClient(clientX: number, clientY: number) {
+    const depthRayOffsets: readonly (readonly [number, number])[] = [
+      [0, 0],
+      [5, 0],
+      [-5, 0],
+      [0, 5],
+      [0, -5],
+      [4, 4],
+      [-4, 4],
+      [4, -4],
+      [-4, -4],
+    ];
+
+    function setPointerFromClient(clientX: number, clientY: number, offsetX = 0, offsetY = 0) {
       const rect = renderer.domElement.getBoundingClientRect();
-      pointerRef.current.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-      pointerRef.current.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+      pointerRef.current.x = ((clientX - rect.left + offsetX) / rect.width) * 2 - 1;
+      pointerRef.current.y = -((clientY - rect.top + offsetY) / rect.height) * 2 + 1;
       raycasterRef.current.setFromCamera(pointerRef.current, camera);
-      return raycasterRef.current.ray;
+      return raycasterRef.current.ray.clone();
     }
 
-    function getDepthAtClientPoint(clientX: number, clientY: number) {
-      const ray = setPointerFromClient(clientX, clientY);
+    function clampDepth(depth: number) {
+      const radius = Math.max(sceneRadiusRef.current, 0.5);
+      const minDepth = Math.max(radius * 0.035, 0.05);
+      const maxDepth = Math.max(radius * 8, camera.position.distanceTo(orbit.target) * 3, 2);
+      const fallback = Math.max(camera.position.distanceTo(orbit.target), radius, 0.25);
+      return clamp(Number.isFinite(depth) && depth > 0 ? depth : fallback, minDepth, maxDepth);
+    }
+
+    function intersectSceneDepth(ray: THREE.Ray) {
       const cloudPositions = splatCloudRef.current?.geometry.attributes.position as THREE.BufferAttribute | undefined;
       const pointHit = cloudPositions
         ? pickMarkerPoint({
@@ -611,7 +686,79 @@ export default function Annotation3DEditorPage() {
           return hitPoint.distanceTo(ray.origin);
         }
       }
-      return Math.max(camera.position.distanceTo(orbit.target), sceneRadiusRef.current, 0.25);
+      return null;
+    }
+
+    function intersectTargetPlane(ray: THREE.Ray) {
+      const normal = new THREE.Vector3();
+      camera.getWorldDirection(normal);
+      const denom = ray.direction.dot(normal);
+      if (Math.abs(denom) <= 1e-5) return null;
+      const distance = orbit.target.clone().sub(ray.origin).dot(normal) / denom;
+      if (!Number.isFinite(distance) || distance <= 0.01) return null;
+      return distance;
+    }
+
+    function getDepthPickAtClientPoint(clientX: number, clientY: number) {
+      const centerRay = setPointerFromClient(clientX, clientY);
+      const fallbackDepth = clampDepth(Math.max(camera.position.distanceTo(orbit.target), sceneRadiusRef.current, 0.25));
+      const samples: number[] = [];
+
+      for (const [offsetX, offsetY] of depthRayOffsets) {
+        const ray = setPointerFromClient(clientX, clientY, offsetX, offsetY);
+        const depth = intersectSceneDepth(ray);
+        if (depth) samples.push(clampDepth(depth));
+      }
+
+      const consensus = computeDepthConsensus({
+        samples,
+        fallbackDepth,
+        minSamples: 4,
+        maxRelativeSpread: 0.55,
+      });
+
+      if (consensus.sampleCount >= 4 && consensus.confidence >= 0.35) {
+        const distance = clampDepth(consensus.distance);
+        return {
+          point: centerRay.origin.clone().add(centerRay.direction.clone().multiplyScalar(distance)),
+          distance,
+          confidence: consensus.confidence,
+          source: 'scene' as const,
+        };
+      }
+
+      const planeDistance = intersectTargetPlane(centerRay);
+      if (planeDistance) {
+        const distance = clampDepth(planeDistance);
+        return {
+          point: centerRay.origin.clone().add(centerRay.direction.clone().multiplyScalar(distance)),
+          distance,
+          confidence: 0.25,
+          source: 'target-plane' as const,
+        };
+      }
+
+      return {
+        point: centerRay.origin.clone().add(centerRay.direction.clone().multiplyScalar(fallbackDepth)),
+        distance: fallbackDepth,
+        confidence: 0,
+        source: 'fallback' as const,
+      };
+    }
+
+    function getDepthAtClientPoint(clientX: number, clientY: number) {
+      return getDepthPickAtClientPoint(clientX, clientY).distance;
+    }
+
+    function setOrbitTargetFromClientPoint(clientX: number, clientY: number) {
+      const pick = getDepthPickAtClientPoint(clientX, clientY);
+      const pos = camera.position.clone();
+      const distance = pos.distanceTo(pick.point);
+      if (!Number.isFinite(distance) || distance <= 0.05) return;
+      orbit.target.copy(pick.point);
+      orbit.update();
+      camera.position.copy(pos);
+      camera.lookAt(orbit.target);
     }
 
     function onCustomWheel(e: WheelEvent) {
@@ -629,6 +776,7 @@ export default function Annotation3DEditorPage() {
         deltaMode: e.deltaMode,
         hitDepth: getDepthAtClientPoint(e.clientX, e.clientY),
         sceneRadius: sceneRadiusRef.current,
+        maxStep: Math.max(sceneRadiusRef.current * 0.08, 0.2),
       });
       const delta = ray.direction.clone().multiplyScalar(step);
       camera.position.add(delta);
@@ -636,6 +784,12 @@ export default function Annotation3DEditorPage() {
       orbit.update();
     }
     renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false, capture: true });
+    function onOrbitAnchorPointerDown(e: PointerEvent) {
+      if (e.pointerType !== 'mouse' || e.button !== 0 || flyModeRef.current || placeModeRef.current) return;
+      if ((transformRef.current as unknown as { dragging?: boolean } | null)?.dragging) return;
+      setOrbitTargetFromClientPoint(e.clientX, e.clientY);
+    }
+    renderer.domElement.addEventListener('pointerdown', onOrbitAnchorPointerDown, { capture: true });
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -732,7 +886,7 @@ export default function Annotation3DEditorPage() {
     // ── Fly camera helpers ──
     function updateFlyCamera(dt: number) {
       const k = keysRef.current;
-      const speed = k.has('shift') ? flyMoveSpeedRef.current * 3 : flyMoveSpeedRef.current;
+      const speed = k.has('shift') ? flyMoveSpeedRef.current * 2 : flyMoveSpeedRef.current;
       const cam = camera;
       const forward = new THREE.Vector3();
       cam.getWorldDirection(forward);
@@ -749,8 +903,8 @@ export default function Annotation3DEditorPage() {
       if (k.has('e')) move.add(worldUp);
       const moveStick = flyMoveStickRef.current;
       if (moveStick.x !== 0 || moveStick.y !== 0) {
-        move.add(right.clone().multiplyScalar(moveStick.x));
-        move.add(forward.clone().multiplyScalar(-moveStick.y));
+        move.add(right.clone().multiplyScalar(moveStick.x * 0.78));
+        move.add(forward.clone().multiplyScalar(-moveStick.y * 0.78));
       }
 
       if (move.lengthSq() > 0) {
@@ -760,8 +914,8 @@ export default function Annotation3DEditorPage() {
 
       const lookStick = flyLookStickRef.current;
       if (lookStick.x !== 0 || lookStick.y !== 0) {
-        flyYawRef.current -= lookStick.x * dt * 2.6;
-        flyPitchRef.current = Math.max(-1.5, Math.min(1.5, flyPitchRef.current - lookStick.y * dt * 2.2));
+        flyYawRef.current -= lookStick.x * dt * 1.9;
+        flyPitchRef.current = Math.max(-1.5, Math.min(1.5, flyPitchRef.current - lookStick.y * dt * 1.65));
       }
 
       const cosP = Math.cos(flyPitchRef.current);
@@ -778,6 +932,9 @@ export default function Annotation3DEditorPage() {
         document.addEventListener('mousemove', onFlyMouseMove);
       } else {
         document.removeEventListener('mousemove', onFlyMouseMove);
+        if (flyModeRef.current && !coarsePointer) {
+          exitFlyModePreservingCamera();
+        }
       }
     }
 
@@ -817,7 +974,7 @@ export default function Annotation3DEditorPage() {
     function updateOrbitPan(dt: number) {
       const k = keysRef.current;
       if (!k.has('w') && !k.has('s') && !k.has('a') && !k.has('d') && !k.has('q') && !k.has('e')) return;
-      const speed = k.has('shift') ? 12 : 4;
+      const speed = k.has('shift') ? 8 : 4;
       const cam = camera;
       const rawForward = new THREE.Vector3();
       cam.getWorldDirection(rawForward);
@@ -869,6 +1026,7 @@ export default function Annotation3DEditorPage() {
       window.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onFlyKeyUp);
       renderer.domElement.removeEventListener('wheel', onCustomWheel, { capture: true });
+      renderer.domElement.removeEventListener('pointerdown', onOrbitAnchorPointerDown, { capture: true });
       document.exitPointerLock();
       renderer.dispose();
       if (splatCloudRef.current) {
@@ -890,7 +1048,14 @@ export default function Annotation3DEditorPage() {
         case 'g': setSnapEnabled((p) => !p); break;
         case 'p': setPlaceMode((p) => !p); break;
         case 'delete': if (selectedId) handleDelete(); break;
-        case 'escape': setSelectedId(null); setPlaceMode(false); transformRef.current?.detach(); break;
+        case 'escape':
+          if (flyModeRef.current) {
+            exitFlyModePreservingCamera();
+          }
+          setSelectedId(null);
+          setPlaceMode(false);
+          transformRef.current?.detach();
+          break;
       }
     };
     window.addEventListener('keydown', handleKey);
@@ -1023,6 +1188,7 @@ export default function Annotation3DEditorPage() {
       const camera = cameraRef.current;
       const ground = groundRef.current;
       if (!renderer || !scene || !camera || !ground || !splat) return;
+      if (flyModeRef.current) return;
       if ((transformRef.current as unknown as { dragging?: boolean } | null)?.dragging) return;
       if (canvasPointerRef.current.moved) return;
 
@@ -1297,8 +1463,8 @@ export default function Annotation3DEditorPage() {
     const max = Math.max(1, rect.width * 0.34);
     const dx = Math.max(-max, Math.min(max, e.clientX - (rect.left + rect.width * 0.5)));
     const dy = Math.max(-max, Math.min(max, e.clientY - (rect.top + rect.height * 0.5)));
-    ref.current.x = applyDeadzone(dx / max, 0.08);
-    ref.current.y = applyDeadzone(dy / max, 0.08);
+    ref.current.x = applyDeadzone(dx / max, 0.12);
+    ref.current.y = applyDeadzone(dy / max, 0.12);
     element.style.setProperty('--jx', `${dx}px`);
     element.style.setProperty('--jy', `${dy}px`);
     element.style.opacity = '0.82';
@@ -1363,35 +1529,10 @@ export default function Annotation3DEditorPage() {
           {/* Fly mode toggle */}
           <button
             onClick={() => {
-              const next = !flyMode;
-              setFlyMode(next);
-              flyModeRef.current = next;
-              keysRef.current.clear();
-              flyMoveStickRef.current = { pointerId: null, x: 0, y: 0 };
-              flyLookStickRef.current = { pointerId: null, x: 0, y: 0 };
-              if (next) {
-                const cam = cameraRef.current!;
-                if (orbitRef.current) orbitRef.current.enabled = false;
-                const forward = new THREE.Vector3();
-                cam.getWorldDirection(forward);
-                flyYawRef.current = Math.atan2(forward.x, forward.z);
-                const horizontalLen = Math.sqrt(forward.x * forward.x + forward.z * forward.z);
-                flyPitchRef.current = Math.atan2(forward.y, horizontalLen);
-                flyMoveSpeedRef.current = 4.0;
-                if (!coarsePointer) {
-                  containerRef.current?.querySelector('canvas')?.requestPointerLock();
-                }
+              if (flyModeRef.current) {
+                exitFlyModePreservingCamera();
               } else {
-                if (orbitRef.current) orbitRef.current.enabled = true;
-                document.exitPointerLock();
-                const cam = cameraRef.current!;
-                const orbit = orbitRef.current!;
-                const pos = cam.position.clone();
-                const forward = new THREE.Vector3();
-                cam.getWorldDirection(forward);
-                const orbitDist = Math.max(1, Math.min(20, pos.distanceTo(orbit.target) || 4));
-                orbit.target.copy(pos.clone().add(forward.multiplyScalar(orbitDist)));
-                orbit.update();
+                enterFlyModeFromCamera();
               }
             }}
             title="Fly mode — WASD + mouse look, Shift=boost, Q/E=up/down"

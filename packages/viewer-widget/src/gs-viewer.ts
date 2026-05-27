@@ -310,6 +310,10 @@ class GsViewerElement extends HTMLElement {
         this.buildControls();
         this.dispatchEvent(new CustomEvent('vr-session-change', { detail: { active } }));
       },
+      onCameraModeChange: (mode) => {
+        this.currentCameraMode = mode;
+        this.dispatchEvent(new CustomEvent('camera-mode-change', { detail: { mode } }));
+      },
       onError: (error: Error) => {
         this.showError(error.message);
       },
