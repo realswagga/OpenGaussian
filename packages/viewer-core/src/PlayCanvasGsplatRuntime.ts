@@ -152,6 +152,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private lastUpdateTime = 0;
   private loadedSplats = 0;
   private destroyed = false;
+  private adaptiveBudget = 0;
+  private lastAdaptiveAdjustTime = 0;
+  private frameTimeSamples: number[] = [];
   // Fly mode state
   private flyYaw = 0;
   private flyPitch = 0;
@@ -587,7 +590,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const gsplat = this.app.scene.gsplat;
     gsplat.antiAlias = profile.antialias;
     gsplat.alphaClip = 1 / 255;
-    gsplat.splatBudget = profile.splatBudget;
+    const effectiveBudget = this.options.budgetOverride ?? (this.adaptiveBudget > 0 ? this.adaptiveBudget : profile.splatBudget);
+    gsplat.splatBudget = effectiveBudget;
     gsplat.debug = GSPLAT_DEBUG_NONE;
     gsplat.renderer = this.rendererMode === 'webgpu'
       ? GSPLAT_RENDERER_RASTER_GPU_SORT
@@ -843,9 +847,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       if (delta > 0) {
         this.fpsSamples.push(1000 / delta);
         if (this.fpsSamples.length > 90) this.fpsSamples.shift();
+        this.frameTimeSamples.push(delta);
+        if (this.frameTimeSamples.length > 8) this.frameTimeSamples.shift();
       }
     }
     this.lastUpdateTime = now;
+
+    this.updateAdaptiveBudget(now);
 
     // VR locomotion takes priority — use gamepad joysticks
     if (this.vrActive) {
@@ -856,6 +864,32 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       this.updateOrbitPan(dt);
     }
     this.updateMarkerPositions();
+  }
+
+  private updateAdaptiveBudget(now: number): void {
+    const profile = qualityForPreset(this.currentQuality);
+    if (!profile.adaptiveBudgetEnabled) {
+      this.adaptiveBudget = 0;
+      return;
+    }
+    if (now - this.lastAdaptiveAdjustTime < 1000) return;
+    this.lastAdaptiveAdjustTime = now;
+
+    const avgFrameTime = this.frameTimeSamples.length > 0
+      ? this.frameTimeSamples.reduce((a, b) => a + b, 0) / this.frameTimeSamples.length
+      : 0;
+    const targetFrameTime = 1000 / profile.targetFps;
+    const currentBudget = this.adaptiveBudget > 0 ? this.adaptiveBudget : profile.splatBudget;
+    const minBudget = 50_000;
+
+    if (avgFrameTime > targetFrameTime + 5) {
+      this.adaptiveBudget = Math.max(minBudget, Math.round(currentBudget * 0.9));
+      this.applyGsplatSettings();
+    } else if (avgFrameTime < targetFrameTime - 5 && this.adaptiveBudget > 0) {
+      this.adaptiveBudget = Math.min(profile.splatBudget, Math.round(currentBudget * 1.05));
+      if (this.adaptiveBudget >= profile.splatBudget) this.adaptiveBudget = 0;
+      this.applyGsplatSettings();
+    }
   }
 
   private updateOrbitPan(dt: number): void {
@@ -964,6 +998,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private applyQualitySettings(): void {
     if (!this.app) return;
     const profile = qualityForPreset(this.currentQuality);
+    const effectivePostFx = this.options.disablePostFx ? false : profile.enablePostFx;
     this.app.graphicsDevice.maxPixelRatio = Math.min(window.devicePixelRatio || 1, profile.maxDevicePixelRatio);
     this.applyGsplatSettings();
     this.resize();
@@ -1010,16 +1045,17 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const avgFps = this.fpsSamples.length
       ? this.fpsSamples.reduce((sum, value) => sum + value, 0) / this.fpsSamples.length
       : 0;
+    const effectiveBudget = this.options.budgetOverride ?? (this.adaptiveBudget > 0 ? this.adaptiveBudget : profile.splatBudget);
     const stats: ViewerStats = {
       fps: Math.round(avgFps),
       rendererMode: this.rendererMode,
       rendererBackend: 'playcanvas',
       quality: this.currentQuality,
-      splatBudget: profile.splatBudget,
+      splatBudget: effectiveBudget,
       approximateLoadedSplats: this.loadedSplats || this.manifestHasCount(),
       totalSplats: this.loadedSplats || this.manifestHasCount(),
       activeSplats: this.resolvedAsset.isLod
-        ? Math.min(this.loadedSplats || this.manifestHasCount(), profile.splatBudget)
+        ? Math.min(this.loadedSplats || this.manifestHasCount(), effectiveBudget)
         : this.loadedSplats || this.manifestHasCount(),
       sortTimeMs: this.lastSortTimeMs,
       canvasPixels: this.canvas.width * this.canvas.height,

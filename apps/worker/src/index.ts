@@ -670,7 +670,7 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
               await job.updateProgress(30);
       
               // Build octree cells
-              const gridSize = 4; // 4×4×4 = 64 cells
+              const gridSize = 8; // 8×8×8 = 512 cells
               const cellSizeX = (maxX - minX) / gridSize || 1;
               const cellSizeY = (maxY - minY) / gridSize || 1;
               const cellSizeZ = (maxZ - minZ) / gridSize || 1;
@@ -756,6 +756,18 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
                 }
               }
       
+              const boundsRadius = Math.sqrt(
+                ((maxX - minX) / 2) ** 2 +
+                ((maxY - minY) / 2) ** 2 +
+                ((maxZ - minZ) / 2) ** 2
+              ) || 4;
+
+              const transitionDistances = [
+                0.3 * boundsRadius,
+                1.0 * boundsRadius,
+                3.0 * boundsRadius,
+              ];
+
               // Build lod-meta.json manifest
               const lodMeta = {
                 version: 1,
@@ -763,6 +775,7 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
                 bounds: { min: [minX, minY, minZ], max: [maxX, maxY, maxZ] },
                 cellCount: cellMap.size,
                 format: 'ply',
+                transitionDistances,
                 chunks: chunkManifest,
               };
       

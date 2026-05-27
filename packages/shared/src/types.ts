@@ -16,7 +16,7 @@ export type QualityPreset = 'auto' | 'low' | 'medium' | 'high' | 'ultra';
 
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
 
-export type QualityProfileName = 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
+export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
 
 export type ViewerLoadPhase =
   | 'idle'
@@ -109,6 +109,7 @@ export interface ViewerManifest {
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
+    transitionDistances?: number[];
   };
   viewer: {
     defaultCamera?: unknown;
@@ -222,6 +223,10 @@ export interface QualityProfile {
   enablePostFx: boolean;
   markerDistanceLimit: number;
   antialias: boolean;
+  targetFps: number;
+  adaptiveBudgetEnabled: boolean;
+  sigmaScale: number;
+  shaderPrecision: 'mediump' | 'highp';
 }
 
 // ============================================================

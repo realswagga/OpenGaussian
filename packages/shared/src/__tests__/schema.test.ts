@@ -142,7 +142,7 @@ describe('ViewerManifest validation', () => {
       enableVr: true,
       enableWebGpu: true,
       quality: 'auto',
-      budgets: { desktop: 1500000, mobile: 500000, vr: 700000 },
+      budgets: { desktop: 1500000, mobile: 300000, vr: 200000 },
     },
   };
 

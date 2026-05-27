@@ -12,6 +12,8 @@ export type {
   ViewerRuntimeProgress,
   ResolvedViewerAsset,
   ViewerRuntime,
+  QualityProfile,
+  QualityProfileName,
 } from './types.js';
 
 export {

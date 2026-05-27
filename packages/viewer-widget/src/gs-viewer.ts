@@ -35,7 +35,7 @@ class GsViewerElement extends HTMLElement {
   }
 
   static get observedAttributes(): string[] {
-    return ['scene', 'height', 'quality', 'show-markers', 'vr', 'locked', 'ui', 'renderer'];
+    return ['scene', 'height', 'quality', 'show-markers', 'vr', 'locked', 'ui', 'renderer', 'budget', 'nofx'];
   }
 
   connectedCallback(): void {
@@ -278,6 +278,8 @@ class GsViewerElement extends HTMLElement {
       rendererMode: enableVr ? 'webgl2' : requestedRenderer,
       locked,
       showMarkers,
+      budgetOverride: this.getAttribute('budget') ? Number(this.getAttribute('budget')) : undefined,
+      disablePostFx: this.getAttribute('nofx') === 'true',
       onProgress: (progress: ViewerRuntimeProgress) => {
         if (this.loadingEl && progress.phase !== 'complete') {
           const pct = progress.totalBytes && progress.loadedBytes !== undefined
