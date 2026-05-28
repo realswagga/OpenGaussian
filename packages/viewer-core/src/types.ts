@@ -76,6 +76,35 @@ export interface MarkerPoint {
 /** @deprecated Use MarkerPoint. */
 export type AnnotationPoint = MarkerPoint;
 
+export interface ViewerQuestPerfCpuBuckets {
+  totalUpdateMs?: number;
+  adaptiveQualityMs?: number;
+  renderPolicyMs?: number;
+  cameraInputMs?: number;
+  vrLocomotionMs?: number;
+  markerGizmoMs?: number;
+  statsEmitMs?: number;
+}
+
+export interface ViewerQuestPerfQualityFlags {
+  antialias: boolean;
+  highQualitySH: boolean;
+  radialSorting: boolean;
+  renderOnDemand: boolean;
+  markersVisible: boolean;
+}
+
+export interface ViewerQuestPerfRuntimeOverrides {
+  splatBudget?: number;
+  xrFramebufferScale?: number;
+  xrFixedFoveation?: number;
+  highQualitySH?: boolean;
+  minPixelSize?: number;
+  minContribution?: number;
+  radialSorting?: boolean;
+  markersVisible?: boolean;
+}
+
 export interface ViewerOptions {
   canvas: HTMLCanvasElement;
   manifest: ViewerManifest;
@@ -94,11 +123,13 @@ export interface ViewerOptions {
   showMarkers?: boolean;
   budgetOverride?: number;
   disablePostFx?: boolean;
+  questPerfEnabled?: boolean;
   onMarkerSelect?: (marker: MarkerPoint) => void;
   onProgress?: (progress: ViewerRuntimeProgress) => void;
   onReady?: () => void;
   onError?: (error: Error) => void;
   onStats?: (stats: ViewerStats) => void;
+  onQuestPerfSample?: (stats: ViewerStats) => void;
   onVrSessionChange?: (active: boolean) => void;
   onCameraModeChange?: (mode: CameraMode) => void;
 }
@@ -116,9 +147,17 @@ export interface ViewerStats {
   activeSplats?: number;
   actualRenderedSplats?: number;
   sortTimeMs?: number;
+  frameP50Ms?: number;
+  frameP95Ms?: number;
+  frameP99Ms?: number;
+  cpu?: ViewerQuestPerfCpuBuckets;
+  gpuTimeMs?: number;
+  gpuTimerStatus?: 'disabled' | 'unsupported' | 'pending' | 'available' | 'disjoint';
   canvasPixels?: number;
   frameTimeMs?: number;
   devicePixelRatio?: number;
+  jsHeapUsedMB?: number;
+  jsHeapTotalMB?: number;
   minPixelSize?: number;
   minContribution?: number;
   alphaClip?: number;
@@ -137,6 +176,12 @@ export interface ViewerStats {
   xrFrameRate?: number;
   xrFramebufferScale?: number;
   fixedFoveation?: number | null;
+  lodLoadingCount?: number;
+  camera?: {
+    position: [number, number, number];
+    target: [number, number, number];
+  };
+  qualityFlags?: ViewerQuestPerfQualityFlags;
 }
 
 export interface ViewerRuntimeProgress {
@@ -165,6 +210,8 @@ export interface ViewerRuntime {
   setMarkers(points: MarkerPoint[]): void;
   /** @deprecated Use setMarkers. */
   setAnnotations(points: MarkerPoint[]): void;
+  setQuestPerfEnabled(enabled: boolean): void;
+  setQuestPerfOverrides(overrides: ViewerQuestPerfRuntimeOverrides): void;
   enterVr(): Promise<void>;
   exitVr(): Promise<void>;
 }

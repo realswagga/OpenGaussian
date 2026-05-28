@@ -1,5 +1,5 @@
 import { PlayCanvasGsplatRuntime } from './PlayCanvasGsplatRuntime.js';
-import type { MarkerPoint, CameraMode, QualityPreset, ViewerOptions, ViewerRuntime } from './types.js';
+import type { MarkerPoint, CameraMode, QualityPreset, ViewerOptions, ViewerQuestPerfRuntimeOverrides, ViewerRuntime } from './types.js';
 
 /**
  * Stable public viewer facade.
@@ -38,6 +38,14 @@ export class GsplatViewer {
   /** @deprecated Use setMarkers. */
   setAnnotations(points: MarkerPoint[]): void {
     this.runtime.setAnnotations(points);
+  }
+
+  setQuestPerfEnabled(enabled: boolean): void {
+    this.runtime.setQuestPerfEnabled(enabled);
+  }
+
+  setQuestPerfOverrides(overrides: ViewerQuestPerfRuntimeOverrides): void {
+    this.runtime.setQuestPerfOverrides(overrides);
   }
 
   enterVr(): Promise<void> {

@@ -167,6 +167,24 @@ export interface MarkerPoint {
 /** @deprecated Use MarkerPoint. */
 export type AnnotationPoint = MarkerPoint;
 
+export interface ViewerQuestPerfCpuBuckets {
+  totalUpdateMs?: number;
+  adaptiveQualityMs?: number;
+  renderPolicyMs?: number;
+  cameraInputMs?: number;
+  vrLocomotionMs?: number;
+  markerGizmoMs?: number;
+  statsEmitMs?: number;
+}
+
+export interface ViewerQuestPerfQualityFlags {
+  antialias: boolean;
+  highQualitySH: boolean;
+  radialSorting: boolean;
+  renderOnDemand: boolean;
+  markersVisible: boolean;
+}
+
 export interface ViewerStats {
   fps: number;
   rendererMode: 'webgl2' | 'webgpu';
@@ -180,9 +198,17 @@ export interface ViewerStats {
   activeSplats?: number;
   actualRenderedSplats?: number;
   sortTimeMs?: number;
+  frameP50Ms?: number;
+  frameP95Ms?: number;
+  frameP99Ms?: number;
+  cpu?: ViewerQuestPerfCpuBuckets;
+  gpuTimeMs?: number;
+  gpuTimerStatus?: 'disabled' | 'unsupported' | 'pending' | 'available' | 'disjoint';
   canvasPixels?: number;
   frameTimeMs?: number;
   devicePixelRatio?: number;
+  jsHeapUsedMB?: number;
+  jsHeapTotalMB?: number;
   minPixelSize?: number;
   minContribution?: number;
   alphaClip?: number;
@@ -201,6 +227,12 @@ export interface ViewerStats {
   xrFrameRate?: number;
   xrFramebufferScale?: number;
   fixedFoveation?: number | null;
+  lodLoadingCount?: number;
+  camera?: {
+    position: [number, number, number];
+    target: [number, number, number];
+  };
+  qualityFlags?: ViewerQuestPerfQualityFlags;
 }
 
 export interface ViewerRuntimeProgress {

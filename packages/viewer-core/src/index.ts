@@ -18,9 +18,25 @@ export type {
   ViewerRuntimeProgress,
   ResolvedViewerAsset,
   ViewerRuntime,
+  ViewerQuestPerfCpuBuckets,
+  ViewerQuestPerfQualityFlags,
+  ViewerQuestPerfRuntimeOverrides,
   QualityProfile,
   QualityProfileName,
 } from './types.js';
+export type {
+  QuestPerfBottleneck,
+  QuestPerfCameraPose,
+  QuestPerfCpuBuckets,
+  QuestPerfExperiment,
+  QuestPerfExperimentPhase,
+  QuestPerfQualityFlags,
+  QuestPerfRuntimeOverrides,
+  QuestPerfSample,
+  QuestPerfTrace,
+  QuestPerfTraceInput,
+  QuestPerfVerdict,
+} from './questPerf.js';
 
 export {
   qualityProfiles,
@@ -29,6 +45,17 @@ export {
   resolveAssetVariantName,
   resolveViewerAsset,
 } from './types.js';
+export {
+  analyzeQuestPerfTrace,
+  appendQuestPerfSample,
+  computeQuestPerfPercentiles,
+  createDefaultQuestPerfExperiments,
+  createQuestPerfSample,
+  createQuestPerfTrace,
+  exportQuestPerfCsv,
+  exportQuestPerfJson,
+  summarizeQuestPerfTrace,
+} from './questPerf.js';
 
 export { GsplatViewer } from './GsplatViewer.js';
 export {

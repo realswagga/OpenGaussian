@@ -1,6 +1,22 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { GsplatViewer } from '@gsplat/viewer-core';
+import {
+  GsplatViewer,
+  analyzeQuestPerfTrace,
+  appendQuestPerfSample,
+  createDefaultQuestPerfExperiments,
+  createQuestPerfSample,
+  createQuestPerfTrace,
+  exportQuestPerfCsv,
+  exportQuestPerfJson,
+  summarizeQuestPerfTrace,
+} from '@gsplat/viewer-core';
+import type {
+  QuestPerfExperiment,
+  QuestPerfExperimentPhase,
+  QuestPerfTrace,
+  QuestPerfVerdict,
+} from '@gsplat/viewer-core';
 import type { AssetVariantSelection, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -16,6 +32,11 @@ interface DebugInfo {
   rendererPipeline: string;
   quality: string;
   frameTimeMs: number;
+  frameP95Ms: number;
+  sortTimeMs: number;
+  gpuTimeMs: number;
+  gpuTimerStatus: string;
+  cpuUpdateMs: number;
   gpuMemoryMB: number;
   drawCalls: number;
   activeSplats: number;
@@ -35,6 +56,7 @@ interface DebugInfo {
   xrFrameRate: number;
   xrFramebufferScale: number;
   fixedFoveation: number | null;
+  lodLoadingCount: number;
 }
 
 function detectFeaturesSync() {
@@ -67,6 +89,16 @@ export default function ViewerPage() {
   const viewerRef = useRef<GsplatViewer | null>(null);
   const pendingVrStartRef = useRef(false);
   const benchmarkSamplesRef = useRef<Record<string, Array<{ fps: number; frameTimeMs: number; activeSplats: number; budget: number }>>>({});
+  const questTraceRef = useRef<QuestPerfTrace | null>(null);
+  const questPerfCapturingRef = useRef(false);
+  const activeExperimentRef = useRef<{ experiment: QuestPerfExperiment; phase: QuestPerfExperimentPhase } | null>(null);
+  const experimentRunnerRef = useRef<{
+    running: boolean;
+    experiments: QuestPerfExperiment[];
+    index: number;
+    phase: QuestPerfExperimentPhase;
+    phaseStartedAt: number;
+  } | null>(null);
   const [manifest, setManifest] = useState<ViewerManifest | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
   const [selectedMarker, setSelectedMarker] = useState<MarkerPoint | null>(null);
@@ -92,6 +124,18 @@ export default function ViewerPage() {
   const [vrSupported, setVrSupported] = useState<boolean | null>(null);
   const [vrChecked, setVrChecked] = useState(false);
   const [showDebug, setShowDebug] = useState(() => localStorage.getItem(VIEWER_READY_KEY + '_debug') === 'true');
+  const [showQuestPerf, setShowQuestPerf] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('questPerf') === '1' || localStorage.getItem(VIEWER_READY_KEY + '_quest_perf') === 'true';
+  });
+  const [questPerfCapturing, setQuestPerfCapturing] = useState(false);
+  const [questPerfTrace, setQuestPerfTrace] = useState<QuestPerfTrace | null>(null);
+  const [questPerfVerdict, setQuestPerfVerdict] = useState<QuestPerfVerdict | null>(null);
+  const [questPerfExperiment, setQuestPerfExperiment] = useState<string>('Idle');
+  const [questPerfSampleCount, setQuestPerfSampleCount] = useState(0);
+  const [questPerfCopied, setQuestPerfCopied] = useState(false);
+  const questPerfExperiments = useRef(createDefaultQuestPerfExperiments({ includeRestartRequired: false }));
   const benchmarkEnabled = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('benchmark') === '1';
   const [debugInfo, setDebugInfo] = useState<DebugInfo>({
     fps: 0,
@@ -100,6 +144,11 @@ export default function ViewerPage() {
     rendererPipeline: '-',
     quality: '-',
     frameTimeMs: 0,
+    frameP95Ms: 0,
+    sortTimeMs: 0,
+    gpuTimeMs: 0,
+    gpuTimerStatus: 'disabled',
+    cpuUpdateMs: 0,
     gpuMemoryMB: 0,
     drawCalls: 0,
     activeSplats: 0,
@@ -119,6 +168,7 @@ export default function ViewerPage() {
     xrFrameRate: 0,
     xrFramebufferScale: 0,
     fixedFoveation: null,
+    lodLoadingCount: 0,
   });
 
   // Probe real VR support asynchronously (required for secure-context check
@@ -179,6 +229,95 @@ export default function ViewerPage() {
     setVrError(null);
   }, [vrActive, vrLaunchPending]);
 
+  const setQuestPerfPanelVisible = useCallback((visible: boolean) => {
+    setShowQuestPerf(visible);
+    localStorage.setItem(VIEWER_READY_KEY + '_quest_perf', String(visible));
+  }, []);
+
+  const startQuestPerfCapture = useCallback((experiments?: QuestPerfExperiment[]) => {
+    if (!manifest) return;
+    const trace = createQuestPerfTrace({
+      sceneId: manifest.id,
+      sceneSlug: manifest.slug,
+      targetFps: 72,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : undefined,
+    });
+    questTraceRef.current = trace;
+    questPerfCapturingRef.current = true;
+    setQuestPerfTrace(trace);
+    setQuestPerfVerdict(null);
+    setQuestPerfSampleCount(0);
+    setQuestPerfCapturing(true);
+    setQuestPerfPanelVisible(true);
+    viewerRef.current?.setQuestPerfEnabled(true);
+
+    if (experiments?.length) {
+      experimentRunnerRef.current = {
+        running: true,
+        experiments,
+        index: 0,
+        phase: 'warmup',
+        phaseStartedAt: performance.now(),
+      };
+      activeExperimentRef.current = { experiment: experiments[0]!, phase: 'warmup' };
+      setQuestPerfExperiment(`${experiments[0]!.label} warmup`);
+      viewerRef.current?.setQuestPerfOverrides(experiments[0]!.overrides);
+    } else {
+      experimentRunnerRef.current = null;
+      activeExperimentRef.current = null;
+      setQuestPerfExperiment('Manual capture');
+    }
+  }, [manifest, setQuestPerfPanelVisible]);
+
+  const stopQuestPerfCapture = useCallback(() => {
+    const trace = questTraceRef.current;
+    questPerfCapturingRef.current = false;
+    experimentRunnerRef.current = null;
+    activeExperimentRef.current = null;
+    setQuestPerfCapturing(false);
+    setQuestPerfExperiment('Idle');
+    viewerRef.current?.setQuestPerfOverrides({});
+    viewerRef.current?.setQuestPerfEnabled(showDebug || showQuestPerf);
+    if (!trace) return;
+    trace.endedAt = new Date().toISOString();
+    const verdict = analyzeQuestPerfTrace(trace);
+    setQuestPerfVerdict(verdict);
+    setQuestPerfTrace({ ...trace, samples: trace.samples });
+    setQuestPerfSampleCount(trace.samples.length);
+  }, [showDebug, showQuestPerf]);
+
+  const downloadQuestPerfTrace = useCallback((format: 'csv' | 'json') => {
+    const trace = questTraceRef.current || questPerfTrace;
+    if (!trace) return;
+    const text = format === 'csv' ? exportQuestPerfCsv(trace) : exportQuestPerfJson(trace);
+    const blob = new Blob([text], { type: format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${trace.id}.${format}`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  }, [questPerfTrace]);
+
+  const copyQuestPerfSummary = useCallback(async () => {
+    const trace = questTraceRef.current || questPerfTrace;
+    if (!trace) return;
+    const summary = summarizeQuestPerfTrace(trace);
+    try {
+      await navigator.clipboard?.writeText(summary);
+      setQuestPerfCopied(true);
+      window.setTimeout(() => setQuestPerfCopied(false), 1200);
+    } catch {
+      setQuestPerfCopied(false);
+    }
+  }, [questPerfTrace]);
+
+  const runQuestPerfMatrix = useCallback(() => {
+    startQuestPerfCapture(questPerfExperiments.current);
+  }, [startQuestPerfCapture]);
+
   // Initialize viewer when manifest loads and canvas mounts, or when rendererPref changes
   useEffect(() => {
     if (!manifest || !canvasRef.current) return;
@@ -198,6 +337,7 @@ export default function ViewerPage() {
       xrFixedFoveation: 1,
       webgpuPipeline: 'off',
       showMarkers: true,
+      questPerfEnabled: showDebug || showQuestPerf || questPerfCapturing,
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
       },
@@ -233,6 +373,20 @@ export default function ViewerPage() {
         setVrError(err.message);
         setShowPoster(false);
       },
+      onQuestPerfSample: (stats: ViewerStats) => {
+        if (!questPerfCapturingRef.current || !questTraceRef.current) return;
+        const activeExperiment = activeExperimentRef.current;
+        if (activeExperiment && activeExperiment.phase !== 'capture') return;
+        const sample = createQuestPerfSample(stats, {
+          traceId: questTraceRef.current.id,
+          sceneId: manifest.id,
+          sceneSlug: manifest.slug,
+          experimentId: activeExperiment?.experiment.id,
+          experimentLabel: activeExperiment?.experiment.label,
+          experimentPhase: activeExperiment?.phase,
+        });
+        appendQuestPerfSample(questTraceRef.current, sample);
+      },
       onStats: (stats: ViewerStats) => {
         if (benchmarkEnabled && stats.loadPhase !== 'loading-asset' && stats.loadPhase !== 'loading-metadata') {
           const key = stats.quality;
@@ -253,9 +407,12 @@ export default function ViewerPage() {
           rendererPipeline: stats.rendererPipeline || '-',
           quality: stats.quality,
           frameTimeMs: stats.frameTimeMs ? Math.round(stats.frameTimeMs) : stats.fps > 0 ? Math.round(1000 / stats.fps) : 0,
-          gpuMemoryMB: (performance as any).memory?.usedJSHeapSize
-            ? Math.round((performance as any).memory.usedJSHeapSize / 1048576)
-            : 0,
+          frameP95Ms: stats.frameP95Ms ? Math.round(stats.frameP95Ms) : 0,
+          sortTimeMs: stats.sortTimeMs ?? 0,
+          gpuTimeMs: stats.gpuTimeMs ?? 0,
+          gpuTimerStatus: stats.gpuTimerStatus || 'disabled',
+          cpuUpdateMs: stats.cpu?.totalUpdateMs ?? 0,
+          gpuMemoryMB: stats.jsHeapUsedMB ? Math.round(stats.jsHeapUsedMB) : 0,
           drawCalls: 0,
           activeSplats: stats.actualRenderedSplats ?? stats.activeSplats ?? stats.approximateLoadedSplats ?? 0,
           budget: stats.splatBudget,
@@ -274,7 +431,14 @@ export default function ViewerPage() {
           xrFrameRate: stats.xrFrameRate ?? 0,
           xrFramebufferScale: stats.xrFramebufferScale ?? 0,
           fixedFoveation: stats.fixedFoveation ?? null,
+          lodLoadingCount: stats.lodLoadingCount ?? 0,
         });
+
+        if (questTraceRef.current) {
+          setQuestPerfSampleCount(questTraceRef.current.samples.length);
+          setQuestPerfVerdict(analyzeQuestPerfTrace(questTraceRef.current));
+          setQuestPerfTrace({ ...questTraceRef.current, samples: questTraceRef.current.samples });
+        }
       },
     });
 
@@ -296,6 +460,49 @@ export default function ViewerPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest, markers, rendererPref, assetVariant]);
+
+  useEffect(() => {
+    viewerRef.current?.setQuestPerfEnabled(showDebug || showQuestPerf || questPerfCapturing);
+  }, [showDebug, showQuestPerf, questPerfCapturing]);
+
+  useEffect(() => {
+    if (!questPerfCapturing || !experimentRunnerRef.current) return;
+
+    const intervalId = window.setInterval(() => {
+      const runner = experimentRunnerRef.current;
+      if (!runner?.running) return;
+      const experiment = runner.experiments[runner.index];
+      if (!experiment) {
+        stopQuestPerfCapture();
+        return;
+      }
+
+      const elapsed = performance.now() - runner.phaseStartedAt;
+      if (runner.phase === 'warmup' && elapsed >= experiment.warmupMs) {
+        runner.phase = 'capture';
+        runner.phaseStartedAt = performance.now();
+        activeExperimentRef.current = { experiment, phase: 'capture' };
+        setQuestPerfExperiment(`${experiment.label} capture`);
+        return;
+      }
+
+      if (runner.phase === 'capture' && elapsed >= experiment.captureMs) {
+        runner.index += 1;
+        const next = runner.experiments[runner.index];
+        if (!next) {
+          stopQuestPerfCapture();
+          return;
+        }
+        runner.phase = 'warmup';
+        runner.phaseStartedAt = performance.now();
+        activeExperimentRef.current = { experiment: next, phase: 'warmup' };
+        setQuestPerfExperiment(`${next.label} warmup`);
+        viewerRef.current?.setQuestPerfOverrides(next.overrides);
+      }
+    }, 250);
+
+    return () => window.clearInterval(intervalId);
+  }, [questPerfCapturing, stopQuestPerfCapture]);
 
   // Sync markers to existing viewer
   useEffect(() => {
@@ -529,6 +736,14 @@ export default function ViewerPage() {
             <option value="medium">Medium</option>
             <option value="high">High</option>
           </select>
+          <button
+            onClick={() => setQuestPerfPanelVisible(!showQuestPerf)}
+            style={showQuestPerf ? styles.questPerfButtonActive : styles.vrButton}
+            title="Quest performance tools"
+            aria-label="Toggle Quest performance tools"
+          >
+            Quest Perf
+          </button>
           {manifest.viewer?.enableVr && vrSupported && (
             <button
               onClick={vrActive ? handleExitVr : handleEnterVr}
@@ -632,6 +847,75 @@ export default function ViewerPage() {
           </div>
         </>
       )}
+
+      {showQuestPerf && (
+        <div style={styles.questPerfPanel} aria-label="Quest performance lab" role="region">
+          <div style={styles.questPerfHeader}>
+            <span style={styles.questPerfTitle}>Quest Perf</span>
+            <button
+              onClick={() => setQuestPerfPanelVisible(false)}
+              style={styles.questPerfClose}
+              aria-label="Close Quest performance tools"
+            >
+              X
+            </button>
+          </div>
+          <div style={styles.questPerfStatsGrid}>
+            <span>Samples</span><strong>{questPerfSampleCount}</strong>
+            <span>Run</span><strong>{questPerfExperiment}</strong>
+            <span>p95</span><strong>{debugInfo.frameP95Ms || '-'}ms</strong>
+            <span>Sort</span><strong>{debugInfo.sortTimeMs ? debugInfo.sortTimeMs.toFixed(1) : '-'}ms</strong>
+            <span>GPU</span><strong>{debugInfo.gpuTimeMs ? debugInfo.gpuTimeMs.toFixed(1) : debugInfo.gpuTimerStatus}</strong>
+            <span>CPU</span><strong>{debugInfo.cpuUpdateMs ? debugInfo.cpuUpdateMs.toFixed(1) : '-'}ms</strong>
+            <span>LOD loads</span><strong>{debugInfo.lodLoadingCount}</strong>
+            <span>Heap</span><strong>{debugInfo.gpuMemoryMB || '-'}MB</strong>
+          </div>
+          {questPerfVerdict && (
+            <div style={styles.questPerfVerdict}>
+              <strong>{questPerfVerdict.bottleneck}</strong>
+              <span>{questPerfVerdict.confidence}</span>
+              <p>{questPerfVerdict.summary}</p>
+            </div>
+          )}
+          <div style={styles.questPerfActions}>
+            <button
+              onClick={() => questPerfCapturing ? stopQuestPerfCapture() : startQuestPerfCapture()}
+              style={questPerfCapturing ? styles.questPerfDangerButton : styles.questPerfActionButton}
+            >
+              {questPerfCapturing ? 'Stop' : 'Capture'}
+            </button>
+            <button
+              onClick={runQuestPerfMatrix}
+              disabled={questPerfCapturing}
+              style={styles.questPerfActionButton}
+            >
+              Run Matrix
+            </button>
+            <button
+              onClick={() => downloadQuestPerfTrace('csv')}
+              disabled={!questPerfTrace}
+              style={styles.questPerfActionButton}
+            >
+              CSV
+            </button>
+            <button
+              onClick={() => downloadQuestPerfTrace('json')}
+              disabled={!questPerfTrace}
+              style={styles.questPerfActionButton}
+            >
+              JSON
+            </button>
+            <button
+              onClick={copyQuestPerfSummary}
+              disabled={!questPerfTrace}
+              style={styles.questPerfActionButton}
+            >
+              {questPerfCopied ? 'Copied' : 'Copy'}
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Debug overlay, toggle with ` key. */}
       {showDebug && (
         <div style={styles.debugOverlay} aria-label="Debug info" role="region">
@@ -647,6 +931,22 @@ export default function ViewerPage() {
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Frame</span>
               <span style={styles.debugValue}>{debugInfo.frameTimeMs}ms</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>p95</span>
+              <span style={styles.debugValue}>{debugInfo.frameP95Ms || '-'}ms</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Sort</span>
+              <span style={styles.debugValue}>{debugInfo.sortTimeMs ? debugInfo.sortTimeMs.toFixed(1) : '-'}ms</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>GPU</span>
+              <span style={styles.debugValue}>{debugInfo.gpuTimeMs ? `${debugInfo.gpuTimeMs.toFixed(1)}ms` : debugInfo.gpuTimerStatus}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>CPU</span>
+              <span style={styles.debugValue}>{debugInfo.cpuUpdateMs ? `${debugInfo.cpuUpdateMs.toFixed(1)}ms` : '-'}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Splats</span>
@@ -703,6 +1003,10 @@ export default function ViewerPage() {
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>LOD</span>
               <span style={styles.debugValue}>{debugInfo.lodRange}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>LOD loads</span>
+              <span style={styles.debugValue}>{debugInfo.lodLoadingCount}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Scale</span>
@@ -864,6 +1168,15 @@ const styles: Record<string, React.CSSProperties> = {
     border: '1px solid #2a2a2a',
     borderRadius: 6,
     color: '#a3a3a3',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+  },
+  questPerfButtonActive: {
+    padding: '0.375rem 0.75rem',
+    background: '#10251c',
+    border: '1px solid #34d399',
+    borderRadius: 6,
+    color: '#a7f3d0',
     cursor: 'pointer',
     fontSize: '0.75rem',
   },
@@ -1047,6 +1360,79 @@ const styles: Record<string, React.CSSProperties> = {
     padding: 0,
     lineHeight: 1,
     marginLeft: '0.25rem',
+  },
+  questPerfPanel: {
+    position: 'fixed' as const,
+    left: 12,
+    bottom: 12,
+    width: 340,
+    maxWidth: 'calc(100vw - 24px)',
+    background: 'rgba(13,13,13,0.94)',
+    border: '1px solid #2a2a2a',
+    borderRadius: 8,
+    padding: '0.75rem',
+    zIndex: 55,
+    color: '#d4d4d4',
+    fontSize: '0.75rem',
+    backdropFilter: 'blur(8px)',
+    boxShadow: '0 18px 60px rgba(0,0,0,0.42)',
+  },
+  questPerfHeader: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: '0.625rem',
+    paddingBottom: '0.5rem',
+    borderBottom: '1px solid #2a2a2a',
+  },
+  questPerfTitle: {
+    color: '#f5f5f5',
+    fontWeight: 700,
+  },
+  questPerfClose: {
+    background: 'transparent',
+    border: 'none',
+    color: '#a3a3a3',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+  },
+  questPerfStatsGrid: {
+    display: 'grid',
+    gridTemplateColumns: '1fr auto',
+    gap: '0.25rem 0.75rem',
+    marginBottom: '0.625rem',
+  },
+  questPerfVerdict: {
+    border: '1px solid #334155',
+    background: 'rgba(15,23,42,0.72)',
+    borderRadius: 6,
+    padding: '0.5rem',
+    marginBottom: '0.625rem',
+    display: 'grid',
+    gap: '0.25rem',
+  },
+  questPerfActions: {
+    display: 'flex',
+    flexWrap: 'wrap' as const,
+    gap: '0.375rem',
+  },
+  questPerfActionButton: {
+    padding: '0.375rem 0.625rem',
+    background: '#171717',
+    border: '1px solid #2a2a2a',
+    borderRadius: 6,
+    color: '#d4d4d4',
+    cursor: 'pointer',
+    fontSize: '0.72rem',
+  },
+  questPerfDangerButton: {
+    padding: '0.375rem 0.625rem',
+    background: '#3b1111',
+    border: '1px solid #ef4444',
+    borderRadius: 6,
+    color: '#fecaca',
+    cursor: 'pointer',
+    fontSize: '0.72rem',
   },
   // Mobile bottom sheet
   bottomSheetOverlay: {
