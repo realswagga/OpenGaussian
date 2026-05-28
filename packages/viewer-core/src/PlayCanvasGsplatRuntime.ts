@@ -1216,10 +1216,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         });
         this.dollyAlongOrbitAnchor(step);
         nextDepth = this.getOrbitDollyDepth();
-      } else if (gesture === 'pan') {
-        const dx = clamp(center.x - this.touchGestureState.center.x, -24, 24);
-        const dy = clamp(center.y - this.touchGestureState.center.y, -24, 24);
-        this.panOrbitTarget(dx, dy, this.touchGestureState.depth);
       }
 
       this.touchGestureState = { center, distance, depth: nextDepth };
