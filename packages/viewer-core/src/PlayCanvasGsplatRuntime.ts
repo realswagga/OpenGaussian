@@ -362,8 +362,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private depthPickRequestId = 0;
   private lastDepthPickRequestTime = 0;
   private pendingWheelDeltaY = 0;
-  private pendingWheelClientX = 0;
-  private pendingWheelClientY = 0;
   private wheelProcessing = false;
   private orbitAnchorGizmo: HTMLDivElement | null = null;
   private orbitAnchorTransition: OrbitAnchorTransition | null = null;
@@ -1189,7 +1187,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         this.touchGestureState = {
           center,
           distance,
-          depth: this.getInteractionDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
+          depth: this.getOrbitDollyDepth(),
         };
         return;
       }
@@ -1206,20 +1204,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       let nextDepth = this.touchGestureState.depth;
       if (gesture === 'dolly') {
         const factor = clamp(distance / Math.max(1, this.touchGestureState.distance), 0.88, 1.14);
+        const anchorDepth = this.getOrbitDollyDepth();
         const maxStep = Math.max(this.sceneRadius * 0.035, 0.08);
-        const rawStep = clamp(Math.log(factor) * this.touchGestureState.depth * 0.75, -maxStep, maxStep);
+        const rawStep = clamp(Math.log(factor) * anchorDepth * 0.75, -maxStep, maxStep);
         const step = clampDollyStepToDepth({
           step: rawStep,
-          hitDepth: this.touchGestureState.depth,
+          hitDepth: anchorDepth,
           sceneRadius: this.sceneRadius,
-          nearSurfaceStop: this.getNearSurfaceStopDistance(),
+          nearSurfaceStop: this.getMinimumOrbitDistance(),
           forwardLimitRatio: 0.35,
         });
-        this.dollyAlongClientPoint(center.x, center.y, step);
-        const liveDepth = this.getInteractionDepthPickAtClientPoint(center.x, center.y);
-        nextDepth = liveDepth && liveDepth.source === 'scene' && liveDepth.confidence >= 0.45
-          ? this.clampInteractionDepth(this.touchGestureState.depth * 0.85 + liveDepth.distance * 0.15)
-          : this.clampInteractionDepth(this.touchGestureState.depth - step);
+        this.dollyAlongOrbitAnchor(step);
+        nextDepth = this.getOrbitDollyDepth();
       } else if (gesture === 'pan') {
         const dx = clamp(center.x - this.touchGestureState.center.x, -24, 24);
         const dy = clamp(center.y - this.touchGestureState.center.y, -24, 24);
@@ -1246,7 +1242,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       this.touchGestureState = {
         center,
         distance: distance2D(a, b),
-        depth: this.getInteractionDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
+        depth: this.getOrbitDollyDepth(),
       };
     } else {
       this.touchGestureState = null;
@@ -1318,6 +1314,25 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private getNearSurfaceStopDistance(): number {
     return clamp(this.sceneRadius * 0.004, 0.03, 1.5);
+  }
+
+  private getMinimumOrbitDistance(): number {
+    return Math.max(0.1, this.getNearSurfaceStopDistance() * 0.5);
+  }
+
+  private getOrbitDollyDepth(): number {
+    if (!this.camera) return Math.max(this.distance, this.getMinimumOrbitDistance());
+    const distance = this.camera.getPosition().distance(this.target);
+    return Number.isFinite(distance) && distance > 0 ? distance : Math.max(this.distance, this.getMinimumOrbitDistance());
+  }
+
+  private getAnchorProximityMoveScale(): number {
+    const distance = this.getOrbitDollyDepth();
+    const minDistance = this.getMinimumOrbitDistance();
+    const slowRange = Math.max(minDistance * 12, this.sceneRadius * 0.03, 0.6);
+    const t = clamp((distance - minDistance) / Math.max(1e-6, slowRange - minDistance), 0, 1);
+    const eased = t * t * (3 - 2 * t);
+    return clamp(0.18 + eased * 0.82, 0.18, 1);
   }
 
   private clampInteractionDepth(depth: number): number {
@@ -1527,19 +1542,25 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     };
   }
 
-  private getDepthAtClientPoint(clientX: number, clientY: number): number {
-    return this.getInteractionDepthPickAtClientPoint(clientX, clientY)?.distance ?? this.getFallbackInteractionDepth();
-  }
-
-  private dollyAlongClientPoint(clientX: number, clientY: number, step: number): void {
+  private dollyAlongOrbitAnchor(step: number): void {
     if (!Number.isFinite(step) || Math.abs(step) < 1e-8) return;
     this.orbitAnchorTransition = null;
-    const ray = this.getRayFromClientPoint(clientX, clientY);
-    const direction = ray?.direction ?? this.camera?.forward.clone();
-    if (!direction) return;
-    const delta = direction.clone().mulScalar(step);
-    this.target.add(delta);
-    this.updateCamera();
+    if (!this.camera) return;
+
+    const cameraPosition = this.camera.getPosition().clone();
+    const anchorDirection = this.target.clone().sub(cameraPosition);
+    const anchorDistance = anchorDirection.length();
+    if (!Number.isFinite(anchorDistance) || anchorDistance <= 1e-6) return;
+
+    const minDistance = this.getMinimumOrbitDistance();
+    const forwardLimit = Math.max(0, anchorDistance - minDistance);
+    const clampedStep = step > 0
+      ? Math.min(step, forwardLimit, anchorDistance * 0.35)
+      : step;
+    if (Math.abs(clampedStep) < 1e-8) return;
+
+    const nextCameraPosition = cameraPosition.add(anchorDirection.normalize().mulScalar(clampedStep));
+    this.applyOrbitPoseFromCameraAndTarget(nextCameraPosition, this.target);
   }
 
   private async setOrbitTargetFromClientPoint(clientX: number, clientY: number): Promise<void> {
@@ -1574,12 +1595,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private applyOrbitPoseFromCameraAndTarget(cameraPosition: Vec3, target: Vec3): void {
     if (!this.camera) return;
-    const offset = cameraPosition.clone().sub(target);
-    const distance = offset.length();
+    let offset = cameraPosition.clone().sub(target);
+    let distance = offset.length();
     if (!Number.isFinite(distance) || distance <= 0.05) return;
 
+    const minDistance = this.getMinimumOrbitDistance();
+    if (distance < minDistance) {
+      offset.normalize().mulScalar(minDistance);
+      cameraPosition = target.clone().add(offset);
+      distance = minDistance;
+    }
+
     this.target.copy(target);
-    this.distance = clamp(distance, 0.2, Math.max(200, this.sceneRadius * 20));
+    this.distance = clamp(distance, minDistance, Math.max(200, this.sceneRadius * 20));
     this.yaw = Math.atan2(offset.x, offset.z);
     const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
     this.pitch = clamp(Math.atan2(offset.y, horizontalLen), -1.5, 1.5);
@@ -1612,8 +1640,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
 
     this.pendingWheelDeltaY += normalizeWheelDeltaY(event.deltaY, event.deltaMode);
-    this.pendingWheelClientX = event.clientX;
-    this.pendingWheelClientY = event.clientY;
     void this.processPendingWheelDolly();
   };
 
@@ -1624,21 +1650,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       while (!this.destroyed && Math.abs(this.pendingWheelDeltaY) > 0.001) {
         const deltaY = clamp(this.pendingWheelDeltaY, -400, 400);
         this.pendingWheelDeltaY -= deltaY;
-        const clientX = this.pendingWheelClientX;
-        const clientY = this.pendingWheelClientY;
-        const hit = await this.resolveDepthPickAtClientPoint(clientX, clientY);
         if (this.destroyed) return;
-        const hitDepth = hit?.distance ?? this.getDepthAtClientPoint(clientX, clientY);
+        const anchorDepth = this.getOrbitDollyDepth();
         const step = computeDepthAwareDollyStep({
           deltaY,
           deltaMode: 0,
-          hitDepth,
+          hitDepth: anchorDepth,
           sceneRadius: this.sceneRadius,
           maxStep: Math.max(this.sceneRadius * 0.08, 0.2),
-          nearSurfaceStop: this.getNearSurfaceStopDistance(),
+          nearSurfaceStop: this.getMinimumOrbitDistance(),
           forwardLimitRatio: 0.35,
         });
-        this.dollyAlongClientPoint(clientX, clientY, step);
+        this.dollyAlongOrbitAnchor(step);
         this.requestRender();
       }
     } finally {
@@ -1891,7 +1914,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateOrbitPan(dt: number): void {
     if (!this.camera || !this.app?.keyboard) return;
     const keyboard = this.app.keyboard;
-    const speed = keyboard.isPressed(16) ? 8.0 : 4.0;
+    const baseSpeed = keyboard.isPressed(16) ? 8.0 : 4.0;
+    const speed = baseSpeed * this.getAnchorProximityMoveScale();
     const cam = this.camera;
 
     const camForward = cam.forward.clone();
