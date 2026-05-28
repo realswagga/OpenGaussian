@@ -1488,7 +1488,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private orbitByPointerDelta(dx: number, dy: number): void {
     this.orbitAnchorTransition = null;
     this.yaw -= dx * 0.006;
-    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.004));
     this.updateCamera();
   }
 
@@ -2577,7 +2577,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const totalSplats = this.loadedSplats || this.manifestHasCount();
     const memory = readPerformanceMemory();
     const gpuTimerStatus = this.questPerfEnabled
-      ? this.gpuTimer?.status ?? (this.rendererMode === 'webgl2' ? 'unsupported' : 'unsupported')
+      ? this.gpuTimer?.status ?? (this.rendererMode === 'webgl2' ? 'unsupported' : 'n/a')
       : 'disabled';
     const cameraPose = this.readCameraPose();
     const qualityFlags: ViewerQuestPerfQualityFlags = {

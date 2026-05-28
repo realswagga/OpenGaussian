@@ -277,7 +277,7 @@ export default function ViewerPage() {
     setQuestPerfCapturing(false);
     setQuestPerfExperiment('Idle');
     viewerRef.current?.setQuestPerfOverrides({});
-    viewerRef.current?.setQuestPerfEnabled(showDebug || showQuestPerf);
+    viewerRef.current?.setQuestPerfEnabled(showQuestPerf);
     if (!trace) return;
     trace.endedAt = new Date().toISOString();
     const verdict = analyzeQuestPerfTrace(trace);
@@ -337,7 +337,7 @@ export default function ViewerPage() {
       xrFixedFoveation: 1,
       webgpuPipeline: 'off',
       showMarkers: true,
-      questPerfEnabled: showDebug || showQuestPerf || questPerfCapturing,
+      questPerfEnabled: showQuestPerf || questPerfCapturing,
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
       },
@@ -462,7 +462,7 @@ export default function ViewerPage() {
   }, [manifest, markers, rendererPref, assetVariant]);
 
   useEffect(() => {
-    viewerRef.current?.setQuestPerfEnabled(showDebug || showQuestPerf || questPerfCapturing);
+    viewerRef.current?.setQuestPerfEnabled(showQuestPerf || questPerfCapturing);
   }, [showDebug, showQuestPerf, questPerfCapturing]);
 
   useEffect(() => {

@@ -152,7 +152,7 @@ export interface ViewerStats {
   frameP99Ms?: number;
   cpu?: ViewerQuestPerfCpuBuckets;
   gpuTimeMs?: number;
-  gpuTimerStatus?: 'disabled' | 'unsupported' | 'pending' | 'available' | 'disjoint';
+  gpuTimerStatus?: 'disabled' | 'unsupported' | 'pending' | 'available' | 'disjoint' | 'n/a';
   canvasPixels?: number;
   frameTimeMs?: number;
   devicePixelRatio?: number;
