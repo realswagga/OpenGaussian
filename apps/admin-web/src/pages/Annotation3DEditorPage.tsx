@@ -635,7 +635,7 @@ export default function Annotation3DEditorPage() {
     };
     orbitRef.current = orbit;
     orbit.enableZoom = true;
-    orbit.zoomToCursor = true;
+    orbit.zoomToCursor = false;
     orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
     const orbitAnchorEl = document.createElement('div');
@@ -683,6 +683,47 @@ export default function Annotation3DEditorPage() {
 
     function getNearSurfaceStopDistance() {
       return clamp(sceneRadiusRef.current * 0.004, 0.03, 1.5);
+    }
+
+    function getMinimumOrbitDistance() {
+      return Math.max(0.1, getNearSurfaceStopDistance() * 0.5);
+    }
+
+    function getOrbitDollyDepth() {
+      const distance = camera.position.distanceTo(orbit.target);
+      return Number.isFinite(distance) && distance > 0 ? distance : getMinimumOrbitDistance();
+    }
+
+    function getAnchorProximityMoveScale() {
+      const distance = getOrbitDollyDepth();
+      const minDistance = getMinimumOrbitDistance();
+      const slowRange = Math.max(minDistance * 12, sceneRadiusRef.current * 0.03, 0.6);
+      const t = clamp((distance - minDistance) / Math.max(1e-6, slowRange - minDistance), 0, 1);
+      const eased = t * t * (3 - 2 * t);
+      return clamp(0.18 + eased * 0.82, 0.18, 1);
+    }
+
+    function dollyAlongOrbitAnchor(step: number) {
+      if (!Number.isFinite(step) || Math.abs(step) < 1e-8) return;
+      const anchorDirection = orbit.target.clone().sub(camera.position);
+      const anchorDistance = anchorDirection.length();
+      if (!Number.isFinite(anchorDistance) || anchorDistance <= 1e-6) return;
+
+      const minDistance = getMinimumOrbitDistance();
+      const forwardLimit = Math.max(0, anchorDistance - minDistance);
+      const clampedStep = step > 0
+        ? Math.min(step, forwardLimit, anchorDistance * 0.35)
+        : step;
+      if (Math.abs(clampedStep) < 1e-8) return;
+
+      camera.position.add(anchorDirection.normalize().multiplyScalar(clampedStep));
+      const nextDistance = camera.position.distanceTo(orbit.target);
+      if (nextDistance < minDistance) {
+        const away = camera.position.clone().sub(orbit.target).normalize();
+        camera.position.copy(orbit.target).add(away.multiplyScalar(minDistance));
+      }
+      camera.lookAt(orbit.target);
+      orbit.update();
     }
 
     function intersectSceneDepth(ray: THREE.Ray) {
@@ -766,10 +807,6 @@ export default function Annotation3DEditorPage() {
       };
     }
 
-    function getDepthAtClientPoint(clientX: number, clientY: number) {
-      return getDepthPickAtClientPoint(clientX, clientY).distance;
-    }
-
     let orbitAnchorTransition: {
       from: THREE.Vector3;
       to: THREE.Vector3;
@@ -821,20 +858,17 @@ export default function Annotation3DEditorPage() {
         return;
       }
       orbitAnchorTransition = null;
-      const ray = setPointerFromClient(e.clientX, e.clientY);
+      const anchorDepth = getOrbitDollyDepth();
       const step = computeDepthAwareDollyStep({
         deltaY: e.deltaY,
         deltaMode: e.deltaMode,
-        hitDepth: getDepthAtClientPoint(e.clientX, e.clientY),
+        hitDepth: anchorDepth,
         sceneRadius: sceneRadiusRef.current,
         maxStep: Math.max(sceneRadiusRef.current * 0.08, 0.2),
-        nearSurfaceStop: getNearSurfaceStopDistance(),
+        nearSurfaceStop: getMinimumOrbitDistance(),
         forwardLimitRatio: 0.35,
       });
-      const delta = ray.direction.clone().multiplyScalar(step);
-      camera.position.add(delta);
-      orbit.target.add(delta);
-      orbit.update();
+      dollyAlongOrbitAnchor(step);
     }
     renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false, capture: true });
     function onOrbitAnchorDoubleClick(e: MouseEvent) {
@@ -1050,7 +1084,8 @@ export default function Annotation3DEditorPage() {
     function updateOrbitPan(dt: number) {
       const k = keysRef.current;
       if (!k.has('w') && !k.has('s') && !k.has('a') && !k.has('d') && !k.has('q') && !k.has('e')) return;
-      const speed = k.has('shift') ? 8 : 4;
+      const baseSpeed = k.has('shift') ? 8 : 4;
+      const speed = baseSpeed * getAnchorProximityMoveScale();
       const cam = camera;
       const rawForward = new THREE.Vector3();
       cam.getWorldDirection(rawForward);
