@@ -7,6 +7,7 @@ import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
 import {
   applyDeadzone,
   clamp,
+  clampDollyStepToDepth,
   computeDepthAwareDollyStep,
   computeFrontDepthConsensus,
   extractGsplatPointCenters,
@@ -636,7 +637,7 @@ export default function Annotation3DEditorPage() {
     orbitRef.current = orbit;
     orbit.enableZoom = true;
     orbit.zoomToCursor = false;
-    orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
+    orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
 
     const orbitAnchorEl = document.createElement('div');
     orbitAnchorEl.setAttribute('aria-hidden', 'true');
@@ -878,6 +879,75 @@ export default function Annotation3DEditorPage() {
       setOrbitTargetFromClientPoint(e.clientX, e.clientY);
     }
     renderer.domElement.addEventListener('dblclick', onOrbitAnchorDoubleClick, { capture: true });
+
+    const activeTouchPointers = new Map<number, { x: number; y: number }>();
+    let touchPinchState: { distance: number } | null = null;
+    const setOrbitTouchSuppressed = (suppressed: boolean) => {
+      if (suppressed) {
+        orbit.enabled = false;
+      } else if (!flyModeRef.current && !(transformRef.current as unknown as { dragging?: boolean } | null)?.dragging) {
+        orbit.enabled = true;
+      }
+    };
+    const readTouchPinchDistance = () => {
+      const pointers = Array.from(activeTouchPointers.values());
+      if (pointers.length < 2) return null;
+      return Math.hypot(pointers[0]!.x - pointers[1]!.x, pointers[0]!.y - pointers[1]!.y);
+    };
+    const onTouchPointerDownCapture = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activeTouchPointers.size < 2) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setOrbitTouchSuppressed(true);
+      touchPinchState = { distance: readTouchPinchDistance() ?? 0 };
+    };
+    const onTouchPointerMoveCapture = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch' || !activeTouchPointers.has(e.pointerId)) return;
+      activeTouchPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activeTouchPointers.size < 2) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setOrbitTouchSuppressed(true);
+
+      const distance = readTouchPinchDistance();
+      if (!distance || distance <= 1) return;
+      if (!touchPinchState) {
+        touchPinchState = { distance };
+        return;
+      }
+
+      const factor = clamp(distance / Math.max(1, touchPinchState.distance), 0.88, 1.14);
+      const anchorDepth = getOrbitDollyDepth();
+      const maxStep = Math.max(sceneRadiusRef.current * 0.035, 0.08);
+      const rawStep = clamp(Math.log(factor) * anchorDepth * 0.75, -maxStep, maxStep);
+      const step = clampDollyStepToDepth({
+        step: rawStep,
+        hitDepth: anchorDepth,
+        sceneRadius: sceneRadiusRef.current,
+        nearSurfaceStop: getMinimumOrbitDistance(),
+        forwardLimitRatio: 0.35,
+      });
+      dollyAlongOrbitAnchor(step);
+      touchPinchState = { distance };
+    };
+    const onTouchPointerEndCapture = (e: PointerEvent) => {
+      if (e.pointerType !== 'touch') return;
+      activeTouchPointers.delete(e.pointerId);
+      if (activeTouchPointers.size >= 2) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        touchPinchState = { distance: readTouchPinchDistance() ?? 0 };
+        return;
+      }
+      touchPinchState = null;
+      setOrbitTouchSuppressed(false);
+    };
+    renderer.domElement.addEventListener('pointerdown', onTouchPointerDownCapture, { capture: true });
+    renderer.domElement.addEventListener('pointermove', onTouchPointerMoveCapture, { capture: true });
+    renderer.domElement.addEventListener('pointerup', onTouchPointerEndCapture, { capture: true });
+    renderer.domElement.addEventListener('pointercancel', onTouchPointerEndCapture, { capture: true });
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -1139,6 +1209,10 @@ export default function Annotation3DEditorPage() {
       window.removeEventListener('keyup', onFlyKeyUp);
       renderer.domElement.removeEventListener('wheel', onCustomWheel, { capture: true });
       renderer.domElement.removeEventListener('dblclick', onOrbitAnchorDoubleClick, { capture: true });
+      renderer.domElement.removeEventListener('pointerdown', onTouchPointerDownCapture, { capture: true });
+      renderer.domElement.removeEventListener('pointermove', onTouchPointerMoveCapture, { capture: true });
+      renderer.domElement.removeEventListener('pointerup', onTouchPointerEndCapture, { capture: true });
+      renderer.domElement.removeEventListener('pointercancel', onTouchPointerEndCapture, { capture: true });
       document.exitPointerLock();
       renderer.dispose();
       orbitAnchorEl.remove();
