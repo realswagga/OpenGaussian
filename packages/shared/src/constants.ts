@@ -97,23 +97,29 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     preferredRenderer: 'webgl2',
   },
   vrQuest: {
-    splatBudget: 120_000,
-    maxDevicePixelRatio: 1,
-    maxPixelDim: 1440,
+    splatBudget: 60_000,
+    maxDevicePixelRatio: 0.75,
+    maxPixelDim: 1024,
     enablePostFx: false,
     markerDistanceLimit: 40,
     antialias: false,
     targetFps: 72,
     adaptiveQualityEnabled: true,
-    minPixelSize: 3,
-    minContribution: 8,
-    alphaClip: 1 / 64,
+    minPixelSize: 5,
+    minContribution: 14,
+    alphaClip: 1 / 32,
     lodBaseDistanceScale: 0.15,
-    lodMultiplier: 2.5,
-    lodRange: [2, 3],
+    lodMultiplier: 2.75,
+    lodRange: [3, 3],
     highQualitySH: false,
     renderOnDemand: false,
     preferredRenderer: 'webgl2',
+    xrFramebufferScale: 0.6,
+    xrFixedFoveation: 1,
+    radialSorting: true,
+    nearClip: 0.08,
+    targetActiveSplats: 60_000,
+    lodUpdateAngle: 90,
   },
 };
 
@@ -128,4 +134,4 @@ export const acceptedExtensions = ['.ply', '.spz', '.sog', '.meta.json', '.lod-m
 
 export const defaultLodBudget = 900_000;
 export const defaultMobileLodBudget = 250_000;
-export const defaultVrLodBudget = 120_000;
+export const defaultVrLodBudget = 60_000;

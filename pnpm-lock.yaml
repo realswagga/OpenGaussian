@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  ioredis: 5.10.1
+
 importers:
 
   .: {}
@@ -87,7 +90,7 @@ importers:
         specifier: ^4.28.0
         version: 4.29.1
       ioredis:
-        specifier: ^5.4.1
+        specifier: 5.10.1
         version: 5.10.1
       jsonwebtoken:
         specifier: ^9.0.2
@@ -160,6 +163,9 @@ importers:
       '@gsplat/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@playcanvas/splat-transform':
+        specifier: 2.4.0
+        version: 2.4.0(playcanvas@2.18.2)
       '@prisma/client':
         specifier: ^5.15.0
         version: 5.22.0(prisma@5.22.0)
@@ -170,7 +176,7 @@ importers:
         specifier: ^16.4.5
         version: 16.6.1
       ioredis:
-        specifier: ^5.4.0
+        specifier: 5.10.1
         version: 5.10.1
     devDependencies:
       '@types/node':
@@ -254,6 +260,9 @@ importers:
         version: 5.4.21(@types/node@20.19.41)
 
 packages:
+
+  '@adobe/spz@0.2.2':
+    resolution: {integrity: sha512-KUCw5R52rCBnfyvOOIa9nUQGfR6TEcHjYzuWDYRGb1fpkpnkci6VXFqCx/xFJ1yEN7V5gc9YxU2zIY6sEjIbhw==}
 
   '@aws-crypto/crc32@5.2.0':
     resolution: {integrity: sha512-nLbCWqQNgUiwwtFsen1AdzAtvuLRsQS8rYgMuxCrdKf9kOssamGLuPwyTY9wyYblNr9+1XM8v6zoDTPPSIeANg==}
@@ -863,6 +872,13 @@ packages:
   '@pkgjs/parseargs@0.11.0':
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
+
+  '@playcanvas/splat-transform@2.4.0':
+    resolution: {integrity: sha512-EYauPPiZLzC+XiV7AxxQFJnsyOqHPQh182vPwWujAkuh5CNTTqDvvOboL6CX1RO5GWubEhXwAdDWAhPth/d/YA==}
+    engines: {node: '>=18.0.0'}
+    hasBin: true
+    peerDependencies:
+      playcanvas: ^2.0.0
 
   '@prisma/client@5.22.0':
     resolution: {integrity: sha512-M0SVXfyHnQREBKxCgyo7sffrKttwE6R8PMq330MIUF0pTwjUhLbW84pFDlf06B27XyCR++VtjugEnIHdr07SVA==}
@@ -2020,6 +2036,9 @@ packages:
       jsdom:
         optional: true
 
+  webgpu@0.4.0:
+    resolution: {integrity: sha512-F5pimn3Aoi0zWjuRdiVs5TnrUwSzD2lESBohsIUsqyitWkGRQlXU2fhV6ycXlQTa1bvAf3sjqiUpBEpmSQ5ptA==}
+
   which@2.0.2:
     resolution: {integrity: sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==}
     engines: {node: '>= 8'}
@@ -2052,6 +2071,8 @@ packages:
     resolution: {integrity: sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ==}
 
 snapshots:
+
+  '@adobe/spz@0.2.2': {}
 
   '@aws-crypto/crc32@5.2.0':
     dependencies:
@@ -2703,6 +2724,14 @@ snapshots:
 
   '@pkgjs/parseargs@0.11.0':
     optional: true
+
+  '@playcanvas/splat-transform@2.4.0(playcanvas@2.18.2)':
+    dependencies:
+      '@adobe/spz': 0.2.2
+      playcanvas: 2.18.2
+      webgpu: 0.4.0
+    transitivePeerDependencies:
+      - supports-color
 
   '@prisma/client@5.22.0(prisma@5.22.0)':
     optionalDependencies:
@@ -3900,6 +3929,13 @@ snapshots:
       - sugarss
       - supports-color
       - terser
+
+  webgpu@0.4.0:
+    dependencies:
+      '@webgpu/types': 0.1.70
+      debug: 4.4.3
+    transitivePeerDependencies:
+      - supports-color
 
   which@2.0.2:
     dependencies:

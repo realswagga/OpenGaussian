@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { GsplatViewer } from '@gsplat/viewer-core';
-import type { ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
+import type { AssetVariantSelection, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -13,6 +13,7 @@ interface DebugInfo {
   fps: number;
   splats: number;
   rendererMode: string;
+  rendererPipeline: string;
   quality: string;
   frameTimeMs: number;
   gpuMemoryMB: number;
@@ -27,8 +28,13 @@ interface DebugInfo {
   devicePixelRatio: number;
   loadPhase: ViewerLoadPhase | string;
   assetFormat: string;
+  assetVariant: string;
   lodActive: boolean;
   renderOnDemand: boolean;
+  xrActive: boolean;
+  xrFrameRate: number;
+  xrFramebufferScale: number;
+  fixedFoveation: number | null;
 }
 
 function detectFeaturesSync() {
@@ -59,6 +65,7 @@ export default function ViewerPage() {
   const { slug } = useParams<{ slug: string }>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<GsplatViewer | null>(null);
+  const pendingVrStartRef = useRef(false);
   const benchmarkSamplesRef = useRef<Record<string, Array<{ fps: number; frameTimeMs: number; activeSplats: number; budget: number }>>>({});
   const [manifest, setManifest] = useState<ViewerManifest | null>(null);
   const [markers, setMarkers] = useState<MarkerPoint[]>([]);
@@ -68,6 +75,8 @@ export default function ViewerPage() {
   const [error, setError] = useState<string | null>(null);
   const [vrError, setVrError] = useState<string | null>(null);
   const [vrActive, setVrActive] = useState(false);
+  const [vrLaunchPending, setVrLaunchPending] = useState(false);
+  const [assetVariant, setAssetVariant] = useState<AssetVariantSelection>('auto');
   const [rendererPref, setRendererPref] = useState<RendererPref>(() => {
     const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(VIEWER_READY_KEY + '_renderer') : null;
     if (saved === 'webgpu') return 'webgpu';
@@ -88,6 +97,7 @@ export default function ViewerPage() {
     fps: 0,
     splats: 0,
     rendererMode: '-',
+    rendererPipeline: '-',
     quality: '-',
     frameTimeMs: 0,
     gpuMemoryMB: 0,
@@ -102,8 +112,13 @@ export default function ViewerPage() {
     devicePixelRatio: 1,
     loadPhase: '-',
     assetFormat: '-',
+    assetVariant: '-',
     lodActive: false,
     renderOnDemand: false,
+    xrActive: false,
+    xrFrameRate: 0,
+    xrFramebufferScale: 0,
+    fixedFoveation: null,
   });
 
   // Probe real VR support asynchronously (required for secure-context check
@@ -152,6 +167,7 @@ export default function ViewerPage() {
 
   // Toggle renderer, then recreate the viewer with the new preference.
   const toggleRenderer = useCallback(() => {
+    if (vrActive || vrLaunchPending) return;
     setRendererPref((prev) => {
       const next: RendererPref = prev === 'webgpu' ? 'webgl2' : 'webgpu';
       localStorage.setItem(VIEWER_READY_KEY + '_renderer', next);
@@ -161,13 +177,14 @@ export default function ViewerPage() {
     setViewerReady(false);
     setShowPoster(true);
     setVrError(null);
-  }, []);
+  }, [vrActive, vrLaunchPending]);
 
   // Initialize viewer when manifest loads and canvas mounts, or when rendererPref changes
   useEffect(() => {
     if (!manifest || !canvasRef.current) return;
 
     const canvas = canvasRef.current;
+    let activeViewer: GsplatViewer | null = null;
     const viewer = new GsplatViewer({
       canvas,
       manifest,
@@ -175,6 +192,11 @@ export default function ViewerPage() {
       cameraMode: 'orbit',
       quality: quality as 'auto' | 'low' | 'medium' | 'high',
       rendererMode: rendererPref,
+      assetVariant,
+      xrQuality: 'balanced',
+      xrFramebufferScale: 0.6,
+      xrFixedFoveation: 1,
+      webgpuPipeline: 'off',
       showMarkers: true,
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
@@ -182,9 +204,26 @@ export default function ViewerPage() {
       onReady: () => {
         setViewerReady(true);
         setTimeout(() => setShowPoster(false), 300);
+        if (pendingVrStartRef.current) {
+          pendingVrStartRef.current = false;
+          void activeViewer?.enterVr()
+            .then(() => {
+              setVrActive(true);
+              setVrLaunchPending(false);
+            })
+            .catch((err: Error) => {
+              setVrLaunchPending(false);
+              setAssetVariant('auto');
+              setVrError(err.message);
+            });
+        }
       },
       onVrSessionChange: (active: boolean) => {
         setVrActive(active);
+        if (!active && !pendingVrStartRef.current) {
+          setAssetVariant('auto');
+          setVrLaunchPending(false);
+        }
       },
       onCameraModeChange: (mode) => {
         setCameraMode(mode);
@@ -211,6 +250,7 @@ export default function ViewerPage() {
           fps: stats.fps,
           splats: stats.approximateLoadedSplats ?? 0,
           rendererMode: stats.gsplatRenderer ? `${stats.rendererMode}/${stats.gsplatRenderer}` : stats.rendererMode,
+          rendererPipeline: stats.rendererPipeline || '-',
           quality: stats.quality,
           frameTimeMs: stats.frameTimeMs ? Math.round(stats.frameTimeMs) : stats.fps > 0 ? Math.round(1000 / stats.fps) : 0,
           gpuMemoryMB: (performance as any).memory?.usedJSHeapSize
@@ -227,17 +267,25 @@ export default function ViewerPage() {
           devicePixelRatio: stats.devicePixelRatio ?? 1,
           loadPhase: stats.loadPhase || '-',
           assetFormat: stats.assetFormat || manifest.assets.format || '-',
+          assetVariant: stats.activeAssetVariant || 'base',
           lodActive: Boolean(stats.lodActive),
           renderOnDemand: Boolean(stats.renderOnDemand),
+          xrActive: Boolean(stats.xrActive),
+          xrFrameRate: stats.xrFrameRate ?? 0,
+          xrFramebufferScale: stats.xrFramebufferScale ?? 0,
+          fixedFoveation: stats.fixedFoveation ?? null,
         });
       },
     });
 
     viewer.start().catch((err: Error) => {
       console.error('Viewer start failed:', err);
+      pendingVrStartRef.current = false;
+      setVrLaunchPending(false);
       setShowPoster(false);
       setError(err.message);
     });
+    activeViewer = viewer;
     viewerRef.current = viewer;
 
     return () => {
@@ -247,7 +295,7 @@ export default function ViewerPage() {
       setVrActive(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, markers, rendererPref]);
+  }, [manifest, markers, rendererPref, assetVariant]);
 
   // Sync markers to existing viewer
   useEffect(() => {
@@ -308,20 +356,34 @@ export default function ViewerPage() {
   // VR entry handler surfaces errors to the user instead of swallowing them.
   const handleEnterVr = useCallback(async () => {
     setVrError(null);
+    if (rendererPref !== 'webgl2' || assetVariant !== 'vr') {
+      pendingVrStartRef.current = true;
+      setVrLaunchPending(true);
+      setViewerReady(false);
+      setShowPoster(true);
+      setAssetVariant('vr');
+      if (rendererPref !== 'webgl2') {
+        localStorage.setItem(VIEWER_READY_KEY + '_renderer', 'webgl2');
+        setRendererPref('webgl2');
+      }
+      return;
+    }
     try {
       await viewerRef.current?.enterVr();
       setVrActive(true);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'VR failed';
       setVrError(message);
+      setVrLaunchPending(false);
     }
-  }, []);
+  }, [assetVariant, rendererPref]);
 
   const handleExitVr = useCallback(async () => {
     setVrError(null);
     try {
       await viewerRef.current?.exitVr();
       setVrActive(false);
+      setAssetVariant('auto');
     } catch (err) {
       const message = err instanceof Error ? err.message : 'VR exit failed';
       setVrError(message);
@@ -368,6 +430,7 @@ export default function ViewerPage() {
 
   const posterUrl = manifest.assets?.posterUrl;
   const showPosterOverlay = showPoster && posterUrl;
+  const rendererToggleLocked = vrActive || vrLaunchPending;
   return (
     <div style={styles.viewerContainer}>
       {/* Poster overlay with fade */}
@@ -425,8 +488,12 @@ export default function ViewerPage() {
           {features.webgpu ? (
             <button
               onClick={toggleRenderer}
-              style={rendererPref === 'webgpu' ? styles.rendererBadgeActive : styles.rendererBadgeInactive}
-              title={`Click to switch to ${rendererPref === 'webgpu' ? 'WebGL2' : 'WebGPU'}`}
+              disabled={rendererToggleLocked}
+              style={{
+                ...(rendererPref === 'webgpu' ? styles.rendererBadgeActive : styles.rendererBadgeInactive),
+                ...(rendererToggleLocked ? styles.rendererBadgeDisabled : {}),
+              }}
+              title={rendererToggleLocked ? 'Exit VR before switching renderer' : `Click to switch to ${rendererPref === 'webgpu' ? 'WebGL2' : 'WebGPU'}`}
               aria-label={`Renderer: ${rendererPref}. Click to switch.`}
             >
               {rendererPref === 'webgpu' ? 'WebGPU' : 'WebGL2'}
@@ -465,11 +532,12 @@ export default function ViewerPage() {
           {manifest.viewer?.enableVr && vrSupported && (
             <button
               onClick={vrActive ? handleExitVr : handleEnterVr}
+              disabled={vrLaunchPending}
               style={styles.vrButton}
-              title={vrActive ? 'Exit VR mode' : 'Enter VR mode'}
+              title={vrLaunchPending ? 'Preparing VR renderer' : vrActive ? 'Exit VR mode' : 'Enter VR mode'}
               aria-label={vrActive ? 'Exit VR' : 'Enter VR'}
             >
-              {vrActive ? 'Exit VR' : 'VR'}
+              {vrLaunchPending ? 'VR...' : vrActive ? 'Exit VR' : 'VR'}
             </button>
           )}
           {manifest.viewer?.enableVr && vrChecked && !vrSupported && (
@@ -484,7 +552,7 @@ export default function ViewerPage() {
       <div style={styles.mainContent}>
         {/* 3D Viewer Canvas */}
         <div style={styles.canvasWrapper}>
-          <canvas ref={canvasRef} style={styles.canvas} />
+          <canvas key={`${rendererPref}-${assetVariant}`} ref={canvasRef} style={styles.canvas} />
         </div>
 
         {/* Annotation side panel (desktop), hidden on mobile. */}
@@ -597,8 +665,16 @@ export default function ViewerPage() {
               <span style={styles.debugValue}>{debugInfo.rendererMode}</span>
             </div>
             <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Pipeline</span>
+              <span style={styles.debugValue}>{debugInfo.rendererPipeline}</span>
+            </div>
+            <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Asset</span>
               <span style={styles.debugValue}>{debugInfo.assetFormat}{debugInfo.lodActive ? ' LOD' : ''}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Variant</span>
+              <span style={styles.debugValue}>{debugInfo.assetVariant}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Phase</span>
@@ -635,6 +711,18 @@ export default function ViewerPage() {
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>On demand</span>
               <span style={styles.debugValue}>{debugInfo.renderOnDemand ? 'yes' : 'no'}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>XR</span>
+              <span style={styles.debugValue}>{debugInfo.xrActive ? `${debugInfo.xrFrameRate || '-'}Hz` : 'off'}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>XR scale</span>
+              <span style={styles.debugValue}>{debugInfo.xrFramebufferScale ? debugInfo.xrFramebufferScale.toFixed(2) : '-'}</span>
+            </div>
+            <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Foveation</span>
+              <span style={styles.debugValue}>{debugInfo.fixedFoveation === null ? '-' : debugInfo.fixedFoveation.toFixed(2)}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>JS Heap</span>
@@ -906,6 +994,10 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 4,
     color: '#737373',
     cursor: 'pointer',
+  },
+  rendererBadgeDisabled: {
+    opacity: 0.55,
+    cursor: 'not-allowed',
   },
   versionBadge: {
     fontSize: '0.625rem',

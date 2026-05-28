@@ -1,5 +1,56 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
+import type { AssetVariantName, SplatAssetFormat, ViewerAssetVariant } from '@gsplat/shared';
+
+type StoredAssetVariant = {
+  format?: SplatAssetFormat;
+  sceneKey?: string | null;
+  lodManifestKey?: string | null;
+  metaKey?: string | null;
+  posterKey?: string | null;
+  sceneUrl?: string | null;
+  lodManifestUrl?: string | null;
+  metaUrl?: string | null;
+  posterUrl?: string | null;
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function assetUrl(assetBaseUrl: string, keyOrUrl?: string | null): string | undefined {
+  if (!keyOrUrl) return undefined;
+  if (/^https?:\/\//i.test(keyOrUrl) || keyOrUrl.startsWith('/')) return keyOrUrl;
+  return `${assetBaseUrl}/${keyOrUrl}`;
+}
+
+function buildManifestVariants(
+  settingsJson: unknown,
+  assetBaseUrl: string,
+): Partial<Record<AssetVariantName, ViewerAssetVariant>> | undefined {
+  if (!isRecord(settingsJson) || !isRecord(settingsJson.assetVariants)) return undefined;
+
+  const variants: Partial<Record<AssetVariantName, ViewerAssetVariant>> = {};
+  for (const name of ['desktop', 'mobile', 'vr'] as const) {
+    const stored = settingsJson.assetVariants[name];
+    if (!isRecord(stored)) continue;
+    const variant = stored as StoredAssetVariant;
+    const sceneUrl = assetUrl(assetBaseUrl, variant.sceneUrl || variant.sceneKey);
+    const lodManifestUrl = assetUrl(assetBaseUrl, variant.lodManifestUrl || variant.lodManifestKey);
+    const metaUrl = assetUrl(assetBaseUrl, variant.metaUrl || variant.metaKey);
+    if (!sceneUrl && !lodManifestUrl && !metaUrl) continue;
+
+    variants[name] = {
+      format: variant.format || (lodManifestUrl ? 'lod-meta' : 'ply'),
+      sceneUrl,
+      lodManifestUrl,
+      metaUrl,
+      posterUrl: assetUrl(assetBaseUrl, variant.posterUrl || variant.posterKey),
+    };
+  }
+
+  return Object.keys(variants).length > 0 ? variants : undefined;
+}
 
 export async function publicSplatRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -88,6 +139,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     const productionFormat = (splat.productionFormat || 'ply') as 'sog' | 'sog-meta' | 'lod-meta' | 'ply' | 'compressed-ply' | 'spz';
     const lodManifestKey = splat.lodManifestKey || (productionFormat === 'lod-meta' ? splat.productionObjectKey : null);
     const metaKey = productionFormat === 'sog-meta' ? splat.productionObjectKey : null;
+    const variants = buildManifestVariants(splat.globalSettingsJson, assetBaseUrl);
 
     return {
       id: splat.id,
@@ -105,6 +157,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         posterUrl: splat.posterKey
           ? `${assetBaseUrl}/${splat.posterKey}`
           : undefined,
+        variants,
       },
       viewer: {
         defaultCamera: splat.defaultCameraJson,
@@ -114,7 +167,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         budgets: {
           desktop: Number(process.env.DEFAULT_LOD_BUDGET) || 900_000,
           mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 250_000,
-          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 120_000,
+          vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 60_000,
         },
         pretransform: splat.pretransformJson || null,
       },

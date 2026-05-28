@@ -38,7 +38,7 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.phoneHigh.splatBudget).toBe(250_000);
     expect(qualityProfiles.desktopMedium.splatBudget).toBe(900_000);
     expect(qualityProfiles.desktopHigh.splatBudget).toBe(3_000_000);
-    expect(qualityProfiles.vrQuest.splatBudget).toBe(120_000);
+    expect(qualityProfiles.vrQuest.splatBudget).toBe(60_000);
   });
 
   it('phone profiles have no post processing', () => {
@@ -102,6 +102,20 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.phoneLow.lodBaseDistanceScale).toBe(0.15);
     expect(qualityProfiles.phoneLow.lodMultiplier).toBe(2.5);
     expect(qualityProfiles.phoneLow.lodRange).toEqual([2, 3]);
+  });
+
+  it('VR profile carries Quest-specific XR and culling defaults', () => {
+    expect(qualityProfiles.vrQuest.maxDevicePixelRatio).toBe(0.75);
+    expect(qualityProfiles.vrQuest.maxPixelDim).toBe(1024);
+    expect(qualityProfiles.vrQuest.minPixelSize).toBe(5);
+    expect(qualityProfiles.vrQuest.minContribution).toBe(14);
+    expect(qualityProfiles.vrQuest.alphaClip).toBeCloseTo(1 / 32);
+    expect(qualityProfiles.vrQuest.lodMultiplier).toBe(2.75);
+    expect(qualityProfiles.vrQuest.lodRange).toEqual([3, 3]);
+    expect(qualityProfiles.vrQuest.xrFramebufferScale).toBe(0.6);
+    expect(qualityProfiles.vrQuest.xrFixedFoveation).toBe(1);
+    expect(qualityProfiles.vrQuest.radialSorting).toBe(true);
+    expect(qualityProfiles.vrQuest.lodUpdateAngle).toBe(90);
   });
 
   it('high profiles allow full LOD range and high quality SH', () => {

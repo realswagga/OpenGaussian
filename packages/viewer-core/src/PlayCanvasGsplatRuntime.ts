@@ -11,8 +11,8 @@ import {
   GSplatComponentSystem,
   GSplatHandler,
   GSPLAT_DEBUG_NONE,
+  GSPLAT_RENDERER_COMPUTE,
   GSPLAT_RENDERER_RASTER_CPU_SORT,
-  GSPLAT_RENDERER_RASTER_GPU_SORT,
   Keyboard,
   LightComponentSystem,
   Mouse,
@@ -38,6 +38,8 @@ import type {
   QualityProfile,
   ViewerRuntime,
   ViewerStats,
+  WebgpuPipelineMode,
+  XrQuality,
 } from './types.js';
 import { chooseRendererMode, detectDeviceProfile, qualityProfiles, resolveViewerAsset } from './types.js';
 import {
@@ -83,6 +85,12 @@ interface RuntimeXrSessionLike {
   addEventListener(type: 'end', listener: () => void, options?: AddEventListenerOptions): void;
 }
 
+type RuntimeXrManagerLike = XrManager & {
+  fixedFoveation?: number;
+  frameRate?: number;
+  updateTargetFrameRate?: (targetFrameRate: number, callback?: (error?: Error | null) => void) => void;
+};
+
 interface RuntimeXrInputSource {
   id?: number;
   handedness?: string;
@@ -122,6 +130,11 @@ interface EffectiveQualitySettings {
   highQualitySH: boolean;
   renderOnDemand: boolean;
   antialias: boolean;
+  radialSorting: boolean;
+  nearClip: number;
+  maxPixelRadius?: number;
+  targetActiveSplats?: number;
+  lodUpdateAngle: number;
 }
 
 type DepthPickSource = 'scene' | 'target-plane' | 'fallback';
@@ -301,12 +314,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private readonly canvas: HTMLCanvasElement;
   private readonly manifest: ViewerManifest;
   private readonly options: ViewerOptions;
-  private readonly resolvedAsset: ResolvedViewerAsset;
+  private resolvedAsset: ResolvedViewerAsset;
+  private readonly xrQuality: XrQuality;
 
   private markers: MarkerPoint[];
   private currentQuality: QualityPreset;
   private currentCameraMode: CameraMode;
   private rendererMode: RendererBackend = 'webgl2';
+  private rendererPipeline: WebgpuPipelineMode = 'raster-cpu-sort';
   private loadPhase: ViewerLoadPhase = 'idle';
 
   private app: GsplatApp | null = null;
@@ -353,6 +368,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private flyLookJoystick: VirtualJoystickState = { pointerId: null, x: 0, y: 0 };
   // VR locomotion state
   private vrActive = false;
+  private activeXrFramebufferScale: number | undefined;
+  private activeXrFixedFoveation: number | null = null;
   private readonly vrMoveSpeed = 2.4;
   private readonly vrVerticalSpeed = 1.5;
   private vrScaleGesture: VrScaleGestureState | null = null;
@@ -373,7 +390,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.markers = options.markers || options.annotations || [];
     this.currentQuality = options.quality || this.manifest.viewer.quality || 'auto';
     this.currentCameraMode = options.cameraMode || (options.locked ? 'locked' : 'orbit');
-    this.resolvedAsset = resolveViewerAsset(this.manifest);
+    this.xrQuality = options.xrQuality || 'balanced';
+    this.resolvedAsset = resolveViewerAsset(this.manifest, options.assetVariant);
   }
 
   async start(): Promise<void> {
@@ -383,7 +401,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.emitProgress('loading-metadata', 'Preparing PlayCanvas GSplat runtime');
 
     const requested = this.options.rendererMode || 'auto';
-    const profile = qualityForPreset(this.currentQuality);
+    this.resolvedAsset = resolveViewerAsset(this.manifest, this.options.assetVariant, false);
+    const profile = this.getCurrentQualityProfile();
     this.rendererMode = chooseRendererMode({
       requested,
       isVrActive: false,
@@ -672,13 +691,28 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // can await the XR session and catch errors (required by WebXR user-gesture flow).
     return new Promise<void>((resolve, reject) => {
       try {
+        const profile = qualityProfiles.vrQuest;
+        const framebufferScaleFactor = this.getXrFramebufferScale(profile);
+        const fixedFoveation = this.getXrFixedFoveation(profile);
         this.app!.xr!.start(this.camera!.camera!, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
+          framebufferScaleFactor,
           callback: (error?: Error | null) => {
             if (error) {
               reject(error);
             } else {
               // Capture the session for gamepad polling and bind end event
               this.vrActive = true;
+              this.activeXrFramebufferScale = framebufferScaleFactor;
+              this.activeXrFixedFoveation = fixedFoveation;
+              this.setOverlayHiddenForVr(true);
+              const xr = this.app!.xr as RuntimeXrManagerLike;
+              try {
+                xr.fixedFoveation = fixedFoveation;
+              } catch (foveationError) {
+                console.warn('[GsplatViewer] Unable to apply XR fixed foveation:', foveationError);
+              }
+              xr.updateTargetFrameRate?.(profile.targetFps, () => undefined);
+              this.applyQualitySettings();
               this.updateRenderPolicy();
               this.options.onVrSessionChange?.(true);
               const session = (this.app!.xr as unknown as { _session?: RuntimeXrSessionLike })._session;
@@ -696,24 +730,35 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private onVrSessionEnd = (): void => {
-    this.vrActive = false;
-    this.vrScaleGesture = null;
-    this.options.onVrSessionChange?.(false);
-    this.updateRenderPolicy();
+    this.finishVrSession();
   };
 
   async exitVr(): Promise<void> {
-    this.vrActive = false;
-    this.vrScaleGesture = null;
+    const wasActive = this.vrActive;
     if (this.app?.xr?.active) {
       this.app.xr.end();
     }
-    this.options.onVrSessionChange?.(false);
+    if (wasActive) {
+      this.finishVrSession();
+    }
+  }
+
+  private finishVrSession(): void {
+    const wasActive = this.vrActive;
+    this.vrActive = false;
+    this.vrScaleGesture = null;
+    this.activeXrFramebufferScale = undefined;
+    this.activeXrFixedFoveation = null;
+    this.setOverlayHiddenForVr(false);
+    this.applyQualitySettings();
     this.updateRenderPolicy();
+    if (wasActive) {
+      this.options.onVrSessionChange?.(false);
+    }
   }
 
   private async createApp(rendererMode: RendererBackend): Promise<void> {
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     // Always include both backends so PlayCanvas can fall through if the
     // canvas retains a stale GPU context binding from a previous instance.
     const deviceTypes = rendererMode === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2', 'webgpu'];
@@ -749,10 +794,11 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.camera = new Entity('camera');
     this.cameraRoot.addChild(this.camera);
     this.app!.root.addChild(this.cameraRoot);
+    const settings = this.getEffectiveQualitySettings();
 
     this.camera.addComponent('camera', {
       clearColor: new Color(0.02, 0.02, 0.02),
-      nearClip: 0.03,
+      nearClip: settings.nearClip,
       farClip: 1000,
       fov: 60,
     });
@@ -870,7 +916,32 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     return data;
   }
 
-  private getEffectiveQualitySettings(profile = qualityForPreset(this.currentQuality)): EffectiveQualitySettings {
+  private getCurrentQualityProfile(): QualityProfile {
+    if (this.vrActive || this.options.assetVariant === 'vr') {
+      return qualityProfiles.vrQuest;
+    }
+    return qualityForPreset(this.currentQuality);
+  }
+
+  private getXrFramebufferScale(profile = qualityProfiles.vrQuest): number {
+    if (typeof this.options.xrFramebufferScale === 'number' && Number.isFinite(this.options.xrFramebufferScale)) {
+      return clamp(this.options.xrFramebufferScale, 0.35, 1);
+    }
+    if (this.xrQuality === 'performance') return 0.5;
+    if (this.xrQuality === 'quality') return 0.75;
+    return clamp(profile.xrFramebufferScale ?? 0.6, 0.35, 1);
+  }
+
+  private getXrFixedFoveation(profile = qualityProfiles.vrQuest): number {
+    if (typeof this.options.xrFixedFoveation === 'number' && Number.isFinite(this.options.xrFixedFoveation)) {
+      return clamp(this.options.xrFixedFoveation, 0, 1);
+    }
+    if (this.xrQuality === 'quality') return 0.65;
+    if (this.xrQuality === 'performance') return 1;
+    return clamp(profile.xrFixedFoveation ?? 1, 0, 1);
+  }
+
+  private getEffectiveQualitySettings(profile = this.getCurrentQualityProfile()): EffectiveQualitySettings {
     const scale = profile.adaptiveQualityEnabled ? this.adaptiveQualityScale : 1;
     const degradation = 1 / Math.max(0.35, scale);
     const budgetScale = this.resolvedAsset.isLod ? scale : 1;
@@ -894,14 +965,22 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       highQualitySH: profile.highQualitySH && !this.options.disablePostFx,
       renderOnDemand: profile.renderOnDemand,
       antialias: profile.antialias && !this.options.disablePostFx,
+      radialSorting: Boolean(profile.radialSorting),
+      nearClip: profile.nearClip ?? 0.03,
+      maxPixelRadius: profile.maxPixelRadius,
+      targetActiveSplats: profile.targetActiveSplats,
+      lodUpdateAngle: profile.lodUpdateAngle ?? 60,
     };
   }
 
   private applyGsplatSettings(): void {
     if (!this.app) return;
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     const settings = this.getEffectiveQualitySettings(profile);
-    const gsplat = this.app.scene.gsplat;
+    const gsplat = this.app.scene.gsplat as typeof this.app.scene.gsplat & {
+      radialSorting?: boolean;
+      maxPixelRadius?: number;
+    };
     gsplat.antiAlias = settings.antialias;
     gsplat.alphaClip = settings.alphaClip;
     gsplat.minPixelSize = settings.minPixelSize;
@@ -911,8 +990,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     gsplat.lodRangeMax = settings.lodRange[1];
     gsplat.lodBehindPenalty = 5;
     gsplat.lodUnderfillLimit = 10;
-    gsplat.lodUpdateAngle = 60;
+    gsplat.lodUpdateAngle = settings.lodUpdateAngle;
     gsplat.lodUpdateDistance = Math.max(0.1, this.sceneRadius * 0.02);
+    gsplat.radialSorting = settings.radialSorting;
+    if (settings.maxPixelRadius !== undefined) {
+      gsplat.maxPixelRadius = settings.maxPixelRadius;
+    }
     gsplat.debug = GSPLAT_DEBUG_NONE;
     // Always use CPU sort. GPU radix sort (GSPLAT_RENDERER_RASTER_GPU_SORT)
     // introduces a billboard effect where splats incorrectly rotate relative
@@ -920,7 +1003,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // world-space rotation quaternions correctly. At the maximum user-facing
     // budget of 900K splats, CPU sort takes 3–8ms in the worker thread,
     // which fits comfortably within a 60 fps frame budget.
-    gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
+    if (this.rendererMode === 'webgpu' && this.options.webgpuPipeline === 'compute-canary') {
+      gsplat.renderer = GSPLAT_RENDERER_COMPUTE;
+      this.rendererPipeline = 'compute-canary';
+    } else {
+      gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
+      this.rendererPipeline = 'raster-cpu-sort';
+    }
 
     const component = (this.splatEntity as unknown as {
       gsplat?: {
@@ -994,7 +1083,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private resize(): void {
     if (!this.app || this.app.xr?.active) return;
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     const settings = this.getEffectiveQualitySettings(profile);
     const width = Math.max(1, this.canvas.clientWidth);
     const height = Math.max(1, this.canvas.clientHeight);
@@ -1882,7 +1971,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private updateAdaptiveQuality(now: number): void {
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     if (!profile.adaptiveQualityEnabled) {
       this.adaptiveQualityScale = 1;
       return;
@@ -2109,6 +2198,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private updateMarkerPositions(): void {
+    if (this.vrActive) {
+      this.setOverlayHiddenForVr(true);
+      return;
+    }
+    this.setOverlayHiddenForVr(false);
+
     if (!this.camera?.camera) {
       this.updateOrbitAnchorGizmo();
       return;
@@ -2155,6 +2250,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.updateOrbitAnchorGizmo();
   }
 
+  private setOverlayHiddenForVr(hidden: boolean): void {
+    if (this.markerLayer) {
+      this.markerLayer.style.display = hidden ? 'none' : '';
+    }
+    if (this.orbitAnchorGizmo && hidden) {
+      this.orbitAnchorGizmo.style.display = 'none';
+    }
+  }
+
   private updateOrbitAnchorGizmo(): void {
     if (!this.orbitAnchorGizmo || !this.camera?.camera) return;
     if (this.currentCameraMode !== 'orbit' || this.vrActive) {
@@ -2199,9 +2303,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private applyQualitySettings(): void {
     if (!this.app) return;
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     const settings = this.getEffectiveQualitySettings(profile);
     this.app.graphicsDevice.maxPixelRatio = Math.min(window.devicePixelRatio || 1, settings.maxDevicePixelRatio);
+    if (this.camera?.camera) {
+      this.camera.camera.nearClip = settings.nearClip;
+    }
     this.applyGsplatSettings();
     this.resize();
     // resize() synchronously updates camera.aspectRatio and sets buffer
@@ -2249,7 +2356,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private emitStats(): void {
-    const profile = qualityForPreset(this.currentQuality);
+    const profile = this.getCurrentQualityProfile();
     const settings = this.getEffectiveQualitySettings(profile);
     const avgFps = this.fpsSamples.length
       ? this.fpsSamples.reduce((sum, value) => sum + value, 0) / this.fpsSamples.length
@@ -2257,12 +2364,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const frameStats = (this.app?.stats as { frame?: { gsplats?: number } } | undefined)?.frame;
     const actualRenderedSplats = typeof frameStats?.gsplats === 'number' ? frameStats.gsplats : undefined;
     const gsplat = this.app?.scene.gsplat as { currentRenderer?: unknown } | undefined;
+    const xr = this.app?.xr as RuntimeXrManagerLike | undefined;
     const totalSplats = this.loadedSplats || this.manifestHasCount();
     const stats: ViewerStats = {
       fps: Math.round(avgFps),
       rendererMode: this.rendererMode,
       gsplatRenderer: gsplat?.currentRenderer !== undefined ? String(gsplat.currentRenderer) : undefined,
       rendererBackend: 'playcanvas',
+      rendererPipeline: this.rendererPipeline,
       quality: this.currentQuality,
       splatBudget: settings.splatBudget,
       approximateLoadedSplats: totalSplats,
@@ -2285,7 +2394,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       lodActive: this.resolvedAsset.isLod || this.lodLoadingCount > 0,
       assetFormat: this.resolvedAsset.format,
       assetUrl: this.resolvedAsset.url,
+      activeAssetVariant: this.resolvedAsset.variantName,
       isSog: this.resolvedAsset.isSog,
+      xrActive: this.vrActive,
+      xrFrameRate: xr?.frameRate,
+      xrFramebufferScale: this.activeXrFramebufferScale,
+      fixedFoveation: xr?.fixedFoveation ?? this.activeXrFixedFoveation,
     };
     this.options.onStats?.(stats);
   }

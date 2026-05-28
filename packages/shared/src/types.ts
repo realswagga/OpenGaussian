@@ -18,6 +18,14 @@ export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | '
 
 export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
 
+export type AssetVariantName = 'desktop' | 'mobile' | 'vr';
+
+export type AssetVariantSelection = 'auto' | AssetVariantName;
+
+export type XrQuality = 'performance' | 'balanced' | 'quality';
+
+export type WebgpuPipelineMode = 'off' | 'raster-cpu-sort' | 'compute-canary';
+
 export type ViewerLoadPhase =
   | 'idle'
   | 'loading-metadata'
@@ -105,6 +113,14 @@ export interface SplatDetail {
 // Viewer types
 // ============================================================
 
+export interface ViewerAssetVariant {
+  format: SplatAssetFormat;
+  sceneUrl?: string;
+  lodManifestUrl?: string;
+  metaUrl?: string;
+  posterUrl?: string;
+}
+
 export interface ViewerManifest {
   id: string;
   slug: string;
@@ -115,6 +131,7 @@ export interface ViewerManifest {
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
+    variants?: Partial<Record<AssetVariantName, ViewerAssetVariant>>;
   };
   viewer: {
     defaultCamera?: DefaultCamera;
@@ -155,6 +172,7 @@ export interface ViewerStats {
   rendererMode: 'webgl2' | 'webgpu';
   gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
+  rendererPipeline?: WebgpuPipelineMode;
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
@@ -177,7 +195,12 @@ export interface ViewerStats {
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;
   assetUrl?: string;
+  activeAssetVariant?: AssetVariantName | 'base';
   isSog?: boolean;
+  xrActive?: boolean;
+  xrFrameRate?: number;
+  xrFramebufferScale?: number;
+  fixedFoveation?: number | null;
 }
 
 export interface ViewerRuntimeProgress {
@@ -252,6 +275,13 @@ export interface QualityProfile {
   highQualitySH: boolean;
   renderOnDemand: boolean;
   preferredRenderer: RendererMode;
+  xrFramebufferScale?: number;
+  xrFixedFoveation?: number;
+  radialSorting?: boolean;
+  nearClip?: number;
+  maxPixelRadius?: number;
+  targetActiveSplats?: number;
+  lodUpdateAngle?: number;
 }
 
 // ============================================================

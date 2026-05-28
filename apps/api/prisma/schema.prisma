@@ -123,7 +123,7 @@ model ViewerPreset {
   cameraMode         String @default("orbit")
   lodBudget          Int    @default(1500000)
   mobileLodBudget    Int    @default(500000)
-  vrLodBudget        Int    @default(700000)
+  vrLodBudget        Int    @default(60000)
 
   enableVr           Boolean @default(true)
   enableWebGpu       Boolean @default(true)

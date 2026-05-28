@@ -3,6 +3,10 @@ export type CameraMode = 'orbit' | 'fly' | 'locked';
 export type QualityPreset = 'auto' | 'low' | 'medium' | 'high';
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
 export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
+export type AssetVariantName = 'desktop' | 'mobile' | 'vr';
+export type AssetVariantSelection = 'auto' | AssetVariantName;
+export type XrQuality = 'performance' | 'balanced' | 'quality';
+export type WebgpuPipelineMode = 'off' | 'raster-cpu-sort' | 'compute-canary';
 export type ViewerLoadPhase =
   | 'idle'
   | 'loading-metadata'
@@ -18,6 +22,14 @@ export interface DefaultCamera {
   fov?: number;
 }
 
+export interface ViewerAssetVariant {
+  format: SplatAssetFormat;
+  sceneUrl?: string;
+  lodManifestUrl?: string;
+  metaUrl?: string;
+  posterUrl?: string;
+}
+
 export interface ViewerManifest {
   id: string;
   slug: string;
@@ -28,6 +40,7 @@ export interface ViewerManifest {
     lodManifestUrl?: string;
     metaUrl?: string;
     posterUrl?: string;
+    variants?: Partial<Record<AssetVariantName, ViewerAssetVariant>>;
   };
   viewer: {
     defaultCamera?: DefaultCamera;
@@ -72,6 +85,11 @@ export interface ViewerOptions {
   rendererMode?: RendererMode;
   cameraMode?: CameraMode;
   quality?: QualityPreset;
+  assetVariant?: AssetVariantSelection;
+  xrQuality?: XrQuality;
+  xrFramebufferScale?: number;
+  xrFixedFoveation?: number;
+  webgpuPipeline?: WebgpuPipelineMode;
   locked?: boolean;
   showMarkers?: boolean;
   budgetOverride?: number;
@@ -90,6 +108,7 @@ export interface ViewerStats {
   rendererMode: 'webgl2' | 'webgpu';
   gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
+  rendererPipeline?: WebgpuPipelineMode;
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
@@ -112,7 +131,12 @@ export interface ViewerStats {
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;
   assetUrl?: string;
+  activeAssetVariant?: AssetVariantName | 'base';
   isSog?: boolean;
+  xrActive?: boolean;
+  xrFrameRate?: number;
+  xrFramebufferScale?: number;
+  fixedFoveation?: number | null;
 }
 
 export interface ViewerRuntimeProgress {
@@ -130,6 +154,7 @@ export interface ResolvedViewerAsset {
   source: 'scene' | 'meta' | 'lod';
   isLod: boolean;
   isSog: boolean;
+  variantName: AssetVariantName | 'base';
 }
 
 export interface ViewerRuntime {
@@ -162,6 +187,13 @@ export interface QualityProfile {
   highQualitySH: boolean;
   renderOnDemand: boolean;
   preferredRenderer: RendererMode;
+  xrFramebufferScale?: number;
+  xrFixedFoveation?: number;
+  radialSorting?: boolean;
+  nearClip?: number;
+  maxPixelRadius?: number;
+  targetActiveSplats?: number;
+  lodUpdateAngle?: number;
 }
 
 export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
@@ -261,23 +293,29 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     preferredRenderer: 'webgl2',
   },
   vrQuest: {
-    splatBudget: 120_000,
-    maxDevicePixelRatio: 1,
-    maxPixelDim: 1440,
+    splatBudget: 60_000,
+    maxDevicePixelRatio: 0.75,
+    maxPixelDim: 1024,
     enablePostFx: false,
     markerDistanceLimit: 40,
     antialias: false,
     targetFps: 72,
     adaptiveQualityEnabled: true,
-    minPixelSize: 3,
-    minContribution: 8,
-    alphaClip: 1 / 64,
+    minPixelSize: 5,
+    minContribution: 14,
+    alphaClip: 1 / 32,
     lodBaseDistanceScale: 0.15,
-    lodMultiplier: 2.5,
-    lodRange: [2, 3],
+    lodMultiplier: 2.75,
+    lodRange: [3, 3],
     highQualitySH: false,
     renderOnDemand: false,
     preferredRenderer: 'webgl2',
+    xrFramebufferScale: 0.6,
+    xrFixedFoveation: 1,
+    radialSorting: true,
+    nearClip: 0.08,
+    targetActiveSplats: 60_000,
+    lodUpdateAngle: 90,
   },
 };
 
@@ -320,34 +358,71 @@ export function detectDeviceProfile(): QualityProfileName {
   return 'desktopMedium';
 }
 
-export function resolveViewerAsset(manifest: ViewerManifest): ResolvedViewerAsset {
-  const format = manifest.assets.format || 'ply';
+function isMobileUserAgent(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent || '');
+}
 
-  if (manifest.assets.lodManifestUrl) {
+export function resolveAssetVariantName(
+  selection: AssetVariantSelection = 'auto',
+  isVrActive = false,
+): AssetVariantName {
+  if (selection !== 'auto') return selection;
+  if (isVrActive) return 'vr';
+  return isMobileUserAgent() ? 'mobile' : 'desktop';
+}
+
+function resolveAssetFields(manifest: ViewerManifest, variantName: AssetVariantName): ViewerAssetVariant & { variantName: AssetVariantName | 'base' } {
+  const variant = manifest.assets.variants?.[variantName];
+  const hasVariantUrl = Boolean(variant?.lodManifestUrl || variant?.metaUrl || variant?.sceneUrl);
+  if (!variant || !hasVariantUrl) {
+    return { ...manifest.assets, variantName: 'base' };
+  }
+  return {
+    ...manifest.assets,
+    ...variant,
+    format: variant.format || manifest.assets.format || 'ply',
+    variantName,
+  };
+}
+
+export function resolveViewerAsset(
+  manifest: ViewerManifest,
+  selection: AssetVariantSelection = 'auto',
+  isVrActive = false,
+): ResolvedViewerAsset {
+  const preferredVariant = resolveAssetVariantName(selection, isVrActive);
+  const asset = resolveAssetFields(manifest, preferredVariant);
+  const format = asset.format || 'ply';
+
+  if (asset.lodManifestUrl) {
     return {
       format: 'lod-meta',
-      url: manifest.assets.lodManifestUrl,
+      url: asset.lodManifestUrl,
       source: 'lod',
       isLod: true,
       isSog: true,
+      variantName: asset.variantName,
     };
   }
 
-  if (format === 'sog-meta' && manifest.assets.metaUrl) {
+  if (format === 'sog-meta' && asset.metaUrl) {
     return {
       format,
-      url: manifest.assets.metaUrl,
+      url: asset.metaUrl,
       source: 'meta',
       isLod: false,
       isSog: true,
+      variantName: asset.variantName,
     };
   }
 
   return {
     format,
-    url: manifest.assets.sceneUrl,
+    url: asset.sceneUrl || manifest.assets.sceneUrl,
     source: 'scene',
     isLod: false,
     isSog: format === 'sog' || format === 'sog-meta',
+    variantName: asset.variantName,
   };
 }

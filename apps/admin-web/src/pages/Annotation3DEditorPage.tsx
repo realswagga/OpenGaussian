@@ -160,7 +160,7 @@ function buildEditorManifest(splat: SplatInfo): ViewerManifest | null {
       budgets: {
         desktop: 900_000,
         mobile: 250_000,
-        vr: 120_000,
+        vr: 60_000,
       },
       pretransform: splat.pretransformJson || null,
     },

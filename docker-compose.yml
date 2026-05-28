@@ -51,7 +51,7 @@ services:
       - S3_PUBLIC_ENDPOINT=http://localhost:8080/assets
       - DEFAULT_LOD_BUDGET=1500000
       - DEFAULT_MOBILE_LOD_BUDGET=500000
-      - DEFAULT_VR_LOD_BUDGET=700000
+      - DEFAULT_VR_LOD_BUDGET=60000
     depends_on:
       postgres:
         condition: service_healthy

@@ -16,7 +16,7 @@ function createRuntime(options: Partial<ViewerOptions> = {}) {
       enableVr: true,
       enableWebGpu: true,
       quality: 'auto',
-      budgets: { desktop: 900_000, mobile: 250_000, vr: 120_000 },
+      budgets: { desktop: 900_000, mobile: 250_000, vr: 60_000 },
     },
   };
 
@@ -80,6 +80,20 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     const { gsplat, component } = applyQuality('high', { disablePostFx: true });
 
     expect(gsplat.antiAlias).toBe(false);
+    expect(component.highQualitySH).toBe(false);
+  });
+
+  it('applies aggressive VR profile values for VR asset sessions', () => {
+    const { gsplat, component } = applyQuality('auto', { assetVariant: 'vr' });
+
+    expect(gsplat.splatBudget).toBe(60_000);
+    expect(gsplat.minPixelSize).toBe(5);
+    expect(gsplat.minContribution).toBe(14);
+    expect(gsplat.alphaClip).toBeCloseTo(1 / 32);
+    expect(gsplat.lodRangeMin).toBe(3);
+    expect(gsplat.lodRangeMax).toBe(3);
+    expect(gsplat.radialSorting).toBe(true);
+    expect(gsplat.lodUpdateAngle).toBe(90);
     expect(component.highQualitySH).toBe(false);
   });
 });

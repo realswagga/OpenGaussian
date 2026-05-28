@@ -3,6 +3,11 @@ export type {
   CameraMode,
   QualityPreset,
   SplatAssetFormat,
+  AssetVariantName,
+  AssetVariantSelection,
+  ViewerAssetVariant,
+  WebgpuPipelineMode,
+  XrQuality,
   ViewerLoadPhase,
   ViewerManifest,
   DefaultCamera,
@@ -21,6 +26,7 @@ export {
   qualityProfiles,
   chooseRendererMode,
   detectDeviceProfile,
+  resolveAssetVariantName,
   resolveViewerAsset,
 } from './types.js';
 

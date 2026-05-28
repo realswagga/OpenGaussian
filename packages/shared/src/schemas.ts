@@ -94,7 +94,7 @@ export const viewerPresetSchema = z.object({
   cameraMode: z.enum(['orbit', 'fly', 'locked']).default('orbit'),
   lodBudget: z.number().int().positive().default(900000),
   mobileLodBudget: z.number().int().positive().default(250000),
-  vrLodBudget: z.number().int().positive().default(120000),
+  vrLodBudget: z.number().int().positive().default(60000),
   enableVr: z.boolean().default(true),
   enableWebGpu: z.boolean().default(true),
   enableMarkers: z.boolean().default(true),

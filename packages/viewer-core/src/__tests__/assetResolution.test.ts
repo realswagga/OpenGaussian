@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveViewerAsset, type ViewerManifest } from '../types.js';
+import { resolveAssetVariantName, resolveViewerAsset, type ViewerManifest } from '../types.js';
 
 function manifestWithAssets(assets: ViewerManifest['assets']): ViewerManifest {
   return {
@@ -33,6 +33,7 @@ describe('resolveViewerAsset', () => {
       source: 'scene',
       isLod: false,
       isSog: true,
+      variantName: 'base',
     });
   });
 
@@ -47,6 +48,7 @@ describe('resolveViewerAsset', () => {
     expect(asset.url).toBe('/assets/lod-meta.json');
     expect(asset.source).toBe('lod');
     expect(asset.isLod).toBe(true);
+    expect(asset.variantName).toBe('base');
   });
 
   it('uses metaUrl for unbundled SOG metadata assets', () => {
@@ -59,5 +61,46 @@ describe('resolveViewerAsset', () => {
     expect(asset.url).toBe('/assets/scene.meta.json');
     expect(asset.source).toBe('meta');
     expect(asset.isSog).toBe(true);
+    expect(asset.variantName).toBe('base');
+  });
+
+  it('selects the explicit VR LOD asset variant', () => {
+    const asset = resolveViewerAsset(manifestWithAssets({
+      format: 'sog',
+      sceneUrl: '/assets/scene.sog',
+      variants: {
+        vr: {
+          format: 'lod-meta',
+          lodManifestUrl: '/assets/vr/lod-meta.json',
+        },
+      },
+    }), 'vr');
+
+    expect(asset).toMatchObject({
+      format: 'lod-meta',
+      url: '/assets/vr/lod-meta.json',
+      source: 'lod',
+      isLod: true,
+      variantName: 'vr',
+    });
+  });
+
+  it('falls back to the base asset when a selected variant has no URL', () => {
+    const asset = resolveViewerAsset(manifestWithAssets({
+      format: 'sog',
+      sceneUrl: '/assets/scene.sog',
+      variants: {
+        vr: {
+          format: 'lod-meta',
+        },
+      },
+    }), 'vr');
+
+    expect(asset.url).toBe('/assets/scene.sog');
+    expect(asset.variantName).toBe('base');
+  });
+
+  it('prefers the VR variant during active XR in auto mode', () => {
+    expect(resolveAssetVariantName('auto', true)).toBe('vr');
   });
 });

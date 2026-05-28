@@ -3,10 +3,17 @@ import Redis from 'ioredis';
 import { Queue, Worker, Job } from 'bullmq';
 import { PrismaClient } from '@prisma/client';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import type { AssetVariantName } from '@gsplat/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { spawn } from 'child_process';
 import { createPlayCanvasLodManifest, sampleLodVertices, type LodCellManifestInput, type LodSourceVertex } from './lodManifest.js';
+import {
+  SPLAT_VARIANT_CONFIGS,
+  computeVariantTargets,
+  type WorkerAssetVariantMetadata,
+} from './assetVariants.js';
 
 // Configuration from environment
 const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
@@ -25,6 +32,12 @@ interface JobData {
   sourceObjectKey?: string;
   jobType: JobType;
   [key: string]: unknown;
+}
+
+type AssetVariantMap = Partial<Record<AssetVariantName, WorkerAssetVariantMetadata>>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
 const prisma = new PrismaClient();
@@ -193,32 +206,52 @@ async function markVersionReady(splatId: string, versionId: string, updates: {
   posterKey?: string;
   splatCount?: number;
   sizeBytes?: number;
+  assetVariants?: AssetVariantMap;
 }): Promise<void> {
+  const metricsJson: any = {
+    format: updates.productionFormat,
+    splatCount: updates.splatCount,
+    fileSize: updates.sizeBytes,
+  };
+  if (updates.assetVariants && Object.keys(updates.assetVariants).length > 0) {
+    metricsJson.assetVariants = updates.assetVariants;
+  }
+
   await prisma.splatVersion.update({
     where: { id: versionId },
     data: {
       processingStatus: 'READY',
       convertedKey: updates.convertedKey || null,
-      metricsJson: {
-        format: updates.productionFormat,
-        splatCount: updates.splatCount,
-        fileSize: updates.sizeBytes,
-      },
+      metricsJson,
     },
   });
+
+  const splatUpdateData: any = {
+    status: 'READY',
+    productionFormat: updates.productionFormat || null,
+    productionObjectKey: updates.convertedKey || null,
+    lodManifestKey: updates.lodKey || null,
+    posterKey: updates.posterKey || null,
+    splatCount: updates.splatCount || null,
+    sizeBytes: updates.sizeBytes ? BigInt(updates.sizeBytes) : null,
+  };
+
+  if (updates.assetVariants && Object.keys(updates.assetVariants).length > 0) {
+    const existing = await prisma.splat.findUnique({
+      where: { id: splatId },
+      select: { globalSettingsJson: true },
+    });
+    const currentSettings = isRecord(existing?.globalSettingsJson) ? existing.globalSettingsJson : {};
+    splatUpdateData.globalSettingsJson = {
+      ...currentSettings,
+      assetVariants: updates.assetVariants,
+    };
+  }
 
   // Update splat record
   await prisma.splat.update({
     where: { id: splatId },
-    data: {
-      status: 'READY',
-      productionFormat: updates.productionFormat || null,
-      productionObjectKey: updates.convertedKey || null,
-      lodManifestKey: updates.lodKey || null,
-      posterKey: updates.posterKey || null,
-      splatCount: updates.splatCount || null,
-      sizeBytes: updates.sizeBytes ? BigInt(updates.sizeBytes) : null,
-    },
+    data: splatUpdateData,
   });
 }
 
@@ -242,6 +275,158 @@ async function writeBuffer(key: string, buffer: Buffer): Promise<string> {
   }));
   console.log(`[worker] Wrote buffer to ${key} (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
   return key;
+}
+
+function contentTypeForPath(filePath: string): string {
+  const lower = filePath.toLowerCase();
+  if (lower.endsWith('.json')) return 'application/json';
+  if (lower.endsWith('.html')) return 'text/html; charset=utf-8';
+  if (lower.endsWith('.webp')) return 'image/webp';
+  return 'application/octet-stream';
+}
+
+function resolveSplatTransformExecutable(): string {
+  const executable = process.platform === 'win32' ? 'splat-transform.CMD' : 'splat-transform';
+  const candidates = [
+    path.resolve(process.cwd(), 'apps', 'worker', 'node_modules', '.bin', executable),
+    path.resolve(process.cwd(), 'node_modules', '.bin', executable),
+  ];
+  const found = candidates.find((candidate) => fs.existsSync(candidate));
+  return found || 'splat-transform';
+}
+
+async function runSplatTransform(args: string[]): Promise<void> {
+  const executable = resolveSplatTransformExecutable();
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(executable, args, {
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const stdout: Buffer[] = [];
+    const stderr: Buffer[] = [];
+    child.stdout?.on('data', (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr?.on('data', (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on('error', reject);
+    child.on('close', (code) => {
+      if (code === 0) {
+        resolve();
+        return;
+      }
+      const output = Buffer.concat([...stdout, ...stderr]).toString('utf8').slice(-4000);
+      reject(new Error(`splat-transform exited with ${code}: ${output}`));
+    });
+  });
+}
+
+async function collectFiles(dir: string): Promise<string[]> {
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      files.push(...await collectFiles(fullPath));
+    } else if (entry.isFile()) {
+      files.push(fullPath);
+    }
+  }
+  return files;
+}
+
+async function uploadVariantFile(
+  splatId: string,
+  versionId: string,
+  variantName: AssetVariantName,
+  variantDir: string,
+  localPath: string,
+): Promise<string> {
+  const relativePath = path.relative(variantDir, localPath).split(path.sep).join('/');
+  const key = `splats/${splatId}/versions/${versionId}/variants/${variantName}/${relativePath}`;
+  const body = await fs.promises.readFile(localPath);
+  await s3Client.send(new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: key,
+    Body: body,
+    ContentType: contentTypeForPath(localPath),
+  }));
+  console.log(`[worker] Uploaded ${key} (${(body.length / 1024 / 1024).toFixed(2)} MB)`);
+  return key;
+}
+
+async function generateSplatTransformVariants(
+  splatId: string,
+  versionId: string,
+  sourceFile: string,
+  totalSplats: number,
+): Promise<AssetVariantMap> {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), `splat-variants-${splatId}-${versionId}-`));
+  const variants: AssetVariantMap = {};
+
+  try {
+    for (const config of Object.values(SPLAT_VARIANT_CONFIGS)) {
+      const targets = computeVariantTargets(totalSplats, config);
+      if (targets.length === 0) continue;
+
+      const variantDir = path.join(root, config.name);
+      await fs.promises.mkdir(variantDir, { recursive: true });
+      const lodFiles: string[] = [];
+
+      for (let lod = 0; lod < targets.length; lod += 1) {
+        const target = targets[lod]!;
+        const lodPath = path.join(variantDir, `lod-${lod}.compressed.ply`);
+        const args = [
+          '-w',
+          sourceFile,
+          '--filter-nan',
+          '--filter-harmonics',
+          String(config.harmonics),
+          '--morton-order',
+        ];
+        if (target < totalSplats) {
+          args.push('--decimate', String(target));
+        }
+        args.push('--lod', String(lod), lodPath);
+        await runSplatTransform(args);
+        lodFiles.push(lodPath);
+      }
+
+      const lodManifestPath = path.join(variantDir, 'lod-meta.json');
+      await runSplatTransform([
+        '-w',
+        ...lodFiles,
+        '--iterations',
+        String(config.iterations),
+        '--lod-chunk-count',
+        String(config.lodChunkCountK),
+        '--lod-chunk-extent',
+        String(config.lodChunkExtent),
+        lodManifestPath,
+      ]);
+
+      const files = await collectFiles(variantDir);
+      let lodManifestKey = '';
+      for (const file of files) {
+        const key = await uploadVariantFile(splatId, versionId, config.name, variantDir, file);
+        if (path.basename(file) === 'lod-meta.json') {
+          lodManifestKey = key;
+        }
+      }
+
+      if (!lodManifestKey) {
+        throw new Error(`splat-transform did not create lod-meta.json for ${config.name}`);
+      }
+
+      variants[config.name] = {
+        format: 'lod-meta',
+        lodManifestKey,
+        targetSplats: targets,
+        generatedAt: new Date().toISOString(),
+      };
+    }
+  } finally {
+    await fs.promises.rm(root, { recursive: true, force: true }).catch(() => undefined);
+  }
+
+  return variants;
 }
 
 function buildPlyHeader(vertexCount: number): Buffer {
@@ -303,6 +488,46 @@ async function generatePlayCanvasLod(
 
   const ext = getSplatExtension(sourceObjectKey);
   const format = formatFromExtension(ext);
+
+  if (['ply', 'compressed-ply', 'sog', 'spz'].includes(format)) {
+    try {
+      await job.updateProgress(25);
+      await updateVersionLog(versionId, 'Generating canonical SOG/LOD variants with splat-transform...');
+      const metadata = await extractMetadata(tmpFile);
+      const assetVariants = await generateSplatTransformVariants(
+        splatId,
+        versionId,
+        tmpFile,
+        metadata.approximateSplatCount,
+      );
+      const desktopVariant = assetVariants.desktop ?? assetVariants.mobile ?? assetVariants.vr;
+      if (!desktopVariant) {
+        throw new Error('splat-transform did not produce a usable desktop/mobile/vr variant');
+      }
+
+      await fs.promises.unlink(tmpFile).catch(() => {});
+      await markVersionReady(splatId, versionId, {
+        convertedKey: desktopVariant.lodManifestKey,
+        productionFormat: 'lod-meta',
+        lodKey: desktopVariant.lodManifestKey,
+        splatCount: metadata.approximateSplatCount,
+        sizeBytes: metadata.fileSize,
+        assetVariants,
+      });
+      await job.updateProgress(100);
+      await updateVersionLog(versionId, `SplatTransform LOD ready: ${Object.keys(assetVariants).join(', ')}`);
+      return {
+        splatCount: metadata.approximateSplatCount,
+        assetVariants,
+        productionObjectKey: desktopVariant.lodManifestKey,
+        productionFormat: 'lod-meta',
+      };
+    } catch (variantError) {
+      const message = variantError instanceof Error ? variantError.message : String(variantError);
+      await updateVersionLog(versionId, `SplatTransform LOD failed, falling back to legacy PLY packer: ${message}`);
+      console.warn(`[worker] SplatTransform LOD failed for ${splatId}/${versionId}: ${message}`);
+    }
+  }
 
   if (format !== 'ply') {
     await fs.promises.unlink(tmpFile).catch(() => {});
@@ -802,25 +1027,46 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         );
 
         const stats = await fs.promises.stat(tmpFile);
-        await fs.promises.unlink(tmpFile).catch(() => {});
 
         // Estimate splat count
         let bytesPerSplat = 100;
         if (productionFormat === 'sog' || productionFormat === 'sog-meta' || productionFormat === 'lod-meta') bytesPerSplat = 40;
         if (productionFormat === 'spz') bytesPerSplat = 60;
         const splatCount = Math.round(stats.size / bytesPerSplat);
+        let assetVariants: AssetVariantMap | undefined;
+
+        if (['ply', 'compressed-ply', 'sog', 'spz'].includes(productionFormat)) {
+          try {
+            await job.updateProgress(60);
+            await updateVersionLog(versionId, 'Generating SOG/LOD asset variants with splat-transform...');
+            assetVariants = await generateSplatTransformVariants(splatId, versionId, tmpFile, splatCount);
+            await updateVersionLog(versionId, `Generated variants: ${Object.keys(assetVariants).join(', ') || 'none'}`);
+          } catch (variantError) {
+            const message = variantError instanceof Error ? variantError.message : String(variantError);
+            console.warn(`[worker] Variant generation failed for ${splatId}/${versionId}: ${message}`);
+            await updateVersionLog(versionId, `Variant generation skipped: ${message}`);
+          }
+        } else {
+          await updateVersionLog(versionId, `Variant generation skipped for ${productionFormat} input.`);
+        }
+
+        await fs.promises.unlink(tmpFile).catch(() => {});
 
         await job.updateProgress(90);
         await updateVersionLog(versionId, 'Updating database with results...');
+        const desktopVariant = assetVariants?.desktop;
+        const readyKey = desktopVariant?.lodManifestKey || fullKey;
+        const readyFormat = desktopVariant ? 'lod-meta' : productionFormat;
 
         // Mark version as ready with all collected info
         await markVersionReady(splatId, versionId, {
-          convertedKey: fullKey,
-          productionFormat,
-          lodKey: productionFormat === 'lod-meta' ? fullKey : undefined,
-          metaKey: productionFormat === 'sog-meta' ? fullKey : undefined,
+          convertedKey: readyKey,
+          productionFormat: readyFormat,
+          lodKey: readyFormat === 'lod-meta' ? readyKey : undefined,
+          metaKey: readyFormat === 'sog-meta' ? readyKey : undefined,
           splatCount,
           sizeBytes: stats.size,
+          assetVariants,
         });
 
         await job.updateProgress(100);
@@ -843,10 +1089,11 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         }
 
         return {
-          productionObjectKey: fullKey,
-          productionFormat,
+          productionObjectKey: readyKey,
+          productionFormat: readyFormat,
           splatCount,
           fileSize: stats.size,
+          assetVariants,
         };
       }
 
