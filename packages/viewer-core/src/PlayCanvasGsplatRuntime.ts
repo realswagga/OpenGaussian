@@ -16,6 +16,7 @@ import {
   Keyboard,
   LightComponentSystem,
   Mouse,
+  Picker,
   RenderComponentSystem,
   ScriptComponentSystem,
   TextureHandler,
@@ -44,10 +45,12 @@ import {
   center2D,
   classifyTwoPointerGesture,
   clamp,
-  computeDepthConsensus,
+  clampDollyStepToDepth,
   computeDepthAwareDollyStep,
+  computeFrontDepthConsensus,
   computePinchScale,
   distance2D,
+  normalizeWheelDeltaY,
   readGamepadStick,
 } from './navigationControls.js';
 
@@ -128,6 +131,23 @@ interface DepthPick {
   distance: number;
   confidence: number;
   source: DepthPickSource;
+}
+
+interface CachedDepthPick {
+  x: number;
+  y: number;
+  time: number;
+  cameraPosition: Vec3;
+  target: Vec3;
+  pick: DepthPick;
+}
+
+interface OrbitAnchorTransition {
+  from: Vec3;
+  to: Vec3;
+  cameraPosition: Vec3;
+  startTime: number;
+  durationMs: number;
 }
 
 const DEPTH_RAY_OFFSETS: readonly (readonly [number, number])[] = [
@@ -337,6 +357,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private readonly vrVerticalSpeed = 1.5;
   private vrScaleGesture: VrScaleGestureState | null = null;
   private pendingQualityMarkerUpdate = false;
+  private depthPicker: Picker | null = null;
+  private cachedDepthPick: CachedDepthPick | null = null;
+  private depthPickRequestId = 0;
+  private lastDepthPickRequestTime = 0;
+  private pendingWheelDeltaY = 0;
+  private pendingWheelClientX = 0;
+  private pendingWheelClientY = 0;
+  private wheelProcessing = false;
+  private orbitAnchorGizmo: HTMLDivElement | null = null;
+  private orbitAnchorTransition: OrbitAnchorTransition | null = null;
 
   constructor(options: ViewerOptions) {
     this.canvas = options.canvas;
@@ -403,9 +433,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.removeInput();
     this.markerLayer?.remove();
     this.markerLayer = null;
+    this.orbitAnchorGizmo?.remove();
+    this.orbitAnchorGizmo = null;
     this.markerButtons.clear();
     this.selectedMarkerId = null;
     this.removeFlyJoysticks();
+    this.depthPicker?.destroy();
+    this.depthPicker = null;
+    this.cachedDepthPick = null;
+    this.orbitAnchorTransition = null;
     this.splatAsset = null;
     this.splatEntity = null;
     this.camera = null;
@@ -478,6 +514,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (previousMode !== mode) {
       this.options.onCameraModeChange?.(mode);
     }
+    this.updateOrbitAnchorGizmo();
     this.requestRender();
   }
 
@@ -927,6 +964,27 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.markerLayer.style.overflow = 'hidden';
     this.markerLayer.style.zIndex = '4';
     parent.appendChild(this.markerLayer);
+    this.createOrbitAnchorGizmo(parent);
+  }
+
+  private createOrbitAnchorGizmo(parent: HTMLElement): void {
+    this.orbitAnchorGizmo?.remove();
+    const gizmo = document.createElement('div');
+    gizmo.className = 'gsplat-orbit-anchor';
+    gizmo.setAttribute('aria-hidden', 'true');
+    gizmo.style.position = 'absolute';
+    gizmo.style.width = '14px';
+    gizmo.style.height = '14px';
+    gizmo.style.borderRadius = '50%';
+    gizmo.style.border = '1px solid rgba(255,255,255,0.9)';
+    gizmo.style.background = 'rgba(255,255,255,0.24)';
+    gizmo.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.28)';
+    gizmo.style.pointerEvents = 'none';
+    gizmo.style.transform = 'translate(-50%, -50%)';
+    gizmo.style.zIndex = '5';
+    gizmo.style.display = 'none';
+    parent.appendChild(gizmo);
+    this.orbitAnchorGizmo = gizmo;
   }
 
   private setupResize(): void {
@@ -983,6 +1041,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     window.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pointercancel', this.onPointerUp);
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false });
+    this.canvas.addEventListener('dblclick', this.onDoubleClick);
     // Pointer lock change handler for fly mode
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
   }
@@ -994,12 +1053,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     window.removeEventListener('pointerup', this.onPointerUp);
     window.removeEventListener('pointercancel', this.onPointerUp);
     this.canvas.removeEventListener('wheel', this.onWheel);
+    this.canvas.removeEventListener('dblclick', this.onDoubleClick);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     document.exitPointerLock();
   }
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
+  };
+
+  private onDoubleClick = (event: MouseEvent): void => {
+    if (this.currentCameraMode !== 'orbit' || event.button !== 0 || this.vrActive) return;
+    event.preventDefault();
+    void this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
   };
 
   private onPointerDown = (event: PointerEvent): void => {
@@ -1024,10 +1090,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     };
     this.activePointers.set(event.pointerId, tracked);
     this.canvas.setPointerCapture?.(event.pointerId);
-
-    if (event.pointerType === 'mouse' && event.button === 0) {
-      this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
-    }
 
     if (event.pointerType === 'touch') {
       this.isDragging = true;
@@ -1094,7 +1156,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     );
 
     if (canSetTarget && tracked) {
-      this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
+      void this.setOrbitTargetFromClientPoint(event.clientX, event.clientY);
     }
 
     this.activePointers.delete(event.pointerId);
@@ -1127,7 +1189,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         this.touchGestureState = {
           center,
           distance,
-          depth: this.getDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
+          depth: this.getInteractionDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
         };
         return;
       }
@@ -1145,9 +1207,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       if (gesture === 'dolly') {
         const factor = clamp(distance / Math.max(1, this.touchGestureState.distance), 0.88, 1.14);
         const maxStep = Math.max(this.sceneRadius * 0.035, 0.08);
-        const step = clamp(Math.log(factor) * this.touchGestureState.depth * 0.75, -maxStep, maxStep);
+        const rawStep = clamp(Math.log(factor) * this.touchGestureState.depth * 0.75, -maxStep, maxStep);
+        const step = clampDollyStepToDepth({
+          step: rawStep,
+          hitDepth: this.touchGestureState.depth,
+          sceneRadius: this.sceneRadius,
+          nearSurfaceStop: this.getNearSurfaceStopDistance(),
+          forwardLimitRatio: 0.35,
+        });
         this.dollyAlongClientPoint(center.x, center.y, step);
-        const liveDepth = this.getDepthPickAtClientPoint(center.x, center.y);
+        const liveDepth = this.getInteractionDepthPickAtClientPoint(center.x, center.y);
         nextDepth = liveDepth && liveDepth.source === 'scene' && liveDepth.confidence >= 0.45
           ? this.clampInteractionDepth(this.touchGestureState.depth * 0.85 + liveDepth.distance * 0.15)
           : this.clampInteractionDepth(this.touchGestureState.depth - step);
@@ -1177,7 +1246,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       this.touchGestureState = {
         center,
         distance: distance2D(a, b),
-        depth: this.getDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
+        depth: this.getInteractionDepthPickAtClientPoint(center.x, center.y)?.distance ?? this.getFallbackInteractionDepth(),
       };
     } else {
       this.touchGestureState = null;
@@ -1185,6 +1254,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private orbitByPointerDelta(dx: number, dy: number): void {
+    this.orbitAnchorTransition = null;
     this.yaw -= dx * 0.006;
     this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
     this.updateCamera();
@@ -1192,6 +1262,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private panOrbitTarget(dx: number, dy: number, depth = this.distance): void {
     if (!this.camera) return;
+    this.orbitAnchorTransition = null;
     const right = this.camera.right.clone();
     const up = this.camera.up.clone();
     right.normalize();
@@ -1245,6 +1316,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     return this.clampInteractionDepth(Math.max(this.distance, this.sceneRadius, 0.25));
   }
 
+  private getNearSurfaceStopDistance(): number {
+    return clamp(this.sceneRadius * 0.004, 0.03, 1.5);
+  }
+
   private clampInteractionDepth(depth: number): number {
     const radius = Math.max(this.sceneRadius, 0.5);
     const minDepth = Math.max(radius * 0.035, 0.05);
@@ -1281,14 +1356,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       if (hit) samples.push(this.clampInteractionDepth(hit.distance));
     }
 
-    const consensus = computeDepthConsensus({
+    const consensus = computeFrontDepthConsensus({
       samples,
       fallbackDepth,
       minSamples: 4,
-      maxRelativeSpread: 0.55,
+      minClusterSamples: 2,
+      maxClusterRelativeSpread: 0.35,
     });
 
-    if (consensus.sampleCount >= 4 && consensus.confidence >= 0.35) {
+    if (consensus.sampleCount >= 2 && consensus.confidence >= 0.25) {
       const distance = this.clampInteractionDepth(consensus.distance);
       return {
         point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(distance)),
@@ -1317,12 +1393,147 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     };
   }
 
+  private getCachedDepthPickAtClientPoint(clientX: number, clientY: number): DepthPick | null {
+    if (!this.cachedDepthPick || !this.camera) return null;
+    const now = performance.now();
+    if (now - this.cachedDepthPick.time > 300) return null;
+    if (distance2D({ x: clientX, y: clientY }, this.cachedDepthPick) > 32) return null;
+
+    const cameraMoved = this.camera.getPosition().distance(this.cachedDepthPick.cameraPosition);
+    const targetMoved = this.target.distance(this.cachedDepthPick.target);
+    const movementTolerance = Math.max(this.sceneRadius * 0.01, 0.05);
+    if (cameraMoved > movementTolerance || targetMoved > movementTolerance) return null;
+
+    return this.cachedDepthPick.pick;
+  }
+
+  private getInteractionDepthPickAtClientPoint(clientX: number, clientY: number): DepthPick | null {
+    const cached = this.getCachedDepthPickAtClientPoint(clientX, clientY);
+    if (cached) return cached;
+
+    const fallback = this.getDepthPickAtClientPoint(clientX, clientY);
+    this.scheduleDepthPickAtClientPoint(clientX, clientY);
+    return fallback;
+  }
+
+  private scheduleDepthPickAtClientPoint(clientX: number, clientY: number): void {
+    if (!this.app || !this.camera?.camera || this.vrActive || this.destroyed) return;
+    const now = performance.now();
+    if (now - this.lastDepthPickRequestTime < 70) return;
+    this.lastDepthPickRequestTime = now;
+    const requestId = ++this.depthPickRequestId;
+
+    void this.resolveDepthPickAtClientPoint(clientX, clientY).then((pick) => {
+      if (this.destroyed || requestId !== this.depthPickRequestId || !pick || pick.source === 'fallback') return;
+      this.cachedDepthPick = {
+        x: clientX,
+        y: clientY,
+        time: performance.now(),
+        cameraPosition: this.camera?.getPosition().clone() ?? new Vec3(),
+        target: this.target.clone(),
+        pick,
+      };
+    }).catch(() => {
+      // Depth picking is opportunistic; the CPU fallback remains active.
+    });
+  }
+
+  private async resolveDepthPickAtClientPoint(clientX: number, clientY: number): Promise<DepthPick | null> {
+    const pickerPick = await this.getPickerDepthPickAtClientPoint(clientX, clientY);
+    if (pickerPick) return pickerPick;
+    return this.getDepthPickAtClientPoint(clientX, clientY);
+  }
+
+  private getPickerPoint(clientX: number, clientY: number, width: number, height: number, offsetX = 0, offsetY = 0): { x: number; y: number } {
+    const rect = this.canvas.getBoundingClientRect();
+    return {
+      x: clamp(clientX - rect.left + offsetX, 0, Math.max(0, width - 1)),
+      y: clamp(clientY - rect.top + offsetY, 0, Math.max(0, height - 1)),
+    };
+  }
+
+  private ensureDepthPicker(width: number, height: number): Picker | null {
+    if (!this.app) return null;
+    if (!this.depthPicker) {
+      this.depthPicker = new Picker(this.app, width, height, true);
+    } else {
+      this.depthPicker.resize(width, height);
+    }
+    return this.depthPicker;
+  }
+
+  private async getPickerDepthPickAtClientPoint(clientX: number, clientY: number): Promise<DepthPick | null> {
+    if (!this.app || !this.camera?.camera || this.vrActive) return null;
+    const rect = this.canvas.getBoundingClientRect();
+    const width = Math.max(1, Math.round(rect.width));
+    const height = Math.max(1, Math.round(rect.height));
+    if (width <= 1 || height <= 1) return null;
+
+    const picker = this.ensureDepthPicker(width, height);
+    const centerRay = this.getRayFromClientPoint(clientX, clientY);
+    if (!picker || !centerRay) return null;
+
+    try {
+      picker.prepare(this.camera.camera, this.app.scene);
+    } catch {
+      return null;
+    }
+
+    const cameraPosition = this.camera.getPosition().clone();
+    const sampleResults = await Promise.all(DEPTH_RAY_OFFSETS.map(async ([offsetX, offsetY], index) => {
+      const pickerPoint = this.getPickerPoint(clientX, clientY, width, height, offsetX, offsetY);
+      const ray = this.getRayFromClientPoint(clientX, clientY, offsetX, offsetY);
+      if (!ray) return null;
+      const point = await picker.getWorldPointAsync(pickerPoint.x, pickerPoint.y);
+      if (!point) return null;
+      const distance = point.clone().sub(cameraPosition).dot(ray.direction);
+      if (!Number.isFinite(distance) || distance <= 0) return null;
+      return {
+        index,
+        point,
+        distance: this.clampInteractionDepth(distance),
+      };
+    }));
+
+    const samples = sampleResults.filter((sample): sample is { index: number; point: Vec3; distance: number } => Boolean(sample));
+    if (samples.length === 0) return null;
+
+    const centerSample = samples.find((sample) => sample.index === 0);
+    if (centerSample) {
+      return {
+        point: centerSample.point,
+        distance: centerSample.distance,
+        confidence: 0.8,
+        source: 'scene',
+      };
+    }
+
+    const fallbackDepth = this.getFallbackInteractionDepth();
+    const consensus = computeFrontDepthConsensus({
+      samples: samples.map((sample) => sample.distance),
+      fallbackDepth,
+      minSamples: 3,
+      minClusterSamples: 2,
+      maxClusterRelativeSpread: 0.32,
+    });
+
+    if (consensus.sampleCount < 2 || consensus.confidence < 0.25) return null;
+    const distance = this.clampInteractionDepth(consensus.distance);
+    return {
+      point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(distance)),
+      distance,
+      confidence: consensus.confidence,
+      source: 'scene',
+    };
+  }
+
   private getDepthAtClientPoint(clientX: number, clientY: number): number {
-    return this.getDepthPickAtClientPoint(clientX, clientY)?.distance ?? this.getFallbackInteractionDepth();
+    return this.getInteractionDepthPickAtClientPoint(clientX, clientY)?.distance ?? this.getFallbackInteractionDepth();
   }
 
   private dollyAlongClientPoint(clientX: number, clientY: number, step: number): void {
     if (!Number.isFinite(step) || Math.abs(step) < 1e-8) return;
+    this.orbitAnchorTransition = null;
     const ray = this.getRayFromClientPoint(clientX, clientY);
     const direction = ray?.direction ?? this.camera?.forward.clone();
     if (!direction) return;
@@ -1331,20 +1542,62 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.updateCamera();
   }
 
-  private setOrbitTargetFromClientPoint(clientX: number, clientY: number): void {
-    const hit = this.getDepthPickAtClientPoint(clientX, clientY);
+  private async setOrbitTargetFromClientPoint(clientX: number, clientY: number): Promise<void> {
+    const hit = await this.resolveDepthPickAtClientPoint(clientX, clientY);
+    if (this.destroyed) return;
     if (!hit || !this.camera) return;
+    if (hit.source === 'fallback') return;
+    this.setOrbitTargetFromDepthPick(hit, true);
+  }
+
+  private setOrbitTargetFromDepthPick(hit: DepthPick, smooth: boolean): void {
+    if (!this.camera) return;
     const pos = this.camera.getPosition().clone();
-    const offset = pos.sub(hit.point);
+    const offset = pos.clone().sub(hit.point);
     const distance = offset.length();
     if (!Number.isFinite(distance) || distance <= 0.05) return;
 
-    this.target.copy(hit.point);
-    this.distance = Math.max(0.2, Math.min(200, distance));
+    if (smooth) {
+      this.orbitAnchorTransition = {
+        from: this.target.clone(),
+        to: hit.point.clone(),
+        cameraPosition: pos,
+        startTime: performance.now(),
+        durationMs: 180,
+      };
+      this.requestRender();
+      return;
+    }
+
+    this.applyOrbitPoseFromCameraAndTarget(pos, hit.point);
+  }
+
+  private applyOrbitPoseFromCameraAndTarget(cameraPosition: Vec3, target: Vec3): void {
+    if (!this.camera) return;
+    const offset = cameraPosition.clone().sub(target);
+    const distance = offset.length();
+    if (!Number.isFinite(distance) || distance <= 0.05) return;
+
+    this.target.copy(target);
+    this.distance = clamp(distance, 0.2, Math.max(200, this.sceneRadius * 20));
     this.yaw = Math.atan2(offset.x, offset.z);
     const horizontalLen = Math.sqrt(offset.x * offset.x + offset.z * offset.z);
-    this.pitch = Math.max(-1.5, Math.min(1.5, Math.atan2(offset.y, horizontalLen)));
-    this.updateCamera();
+    this.pitch = clamp(Math.atan2(offset.y, horizontalLen), -1.5, 1.5);
+    this.camera.setPosition(cameraPosition.x, cameraPosition.y, cameraPosition.z);
+    this.camera.lookAt(this.target);
+    this.requestRender();
+  }
+
+  private updateOrbitAnchorTransition(now: number): void {
+    const transition = this.orbitAnchorTransition;
+    if (!transition) return;
+    const t = clamp((now - transition.startTime) / transition.durationMs, 0, 1);
+    const eased = 1 - (1 - t) * (1 - t) * (1 - t);
+    const target = new Vec3().lerp(transition.from, transition.to, eased);
+    this.applyOrbitPoseFromCameraAndTarget(transition.cameraPosition, target);
+    if (t >= 1) {
+      this.orbitAnchorTransition = null;
+    }
   }
 
   private onWheel = (event: WheelEvent): void => {
@@ -1358,16 +1611,43 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       return;
     }
 
-    const step = computeDepthAwareDollyStep({
-      deltaY: event.deltaY,
-      deltaMode: event.deltaMode,
-      hitDepth: this.getDepthAtClientPoint(event.clientX, event.clientY),
-      sceneRadius: this.sceneRadius,
-      maxStep: Math.max(this.sceneRadius * 0.08, 0.2),
-    });
-    this.dollyAlongClientPoint(event.clientX, event.clientY, step);
-    this.requestRender();
+    this.pendingWheelDeltaY += normalizeWheelDeltaY(event.deltaY, event.deltaMode);
+    this.pendingWheelClientX = event.clientX;
+    this.pendingWheelClientY = event.clientY;
+    void this.processPendingWheelDolly();
   };
+
+  private async processPendingWheelDolly(): Promise<void> {
+    if (this.wheelProcessing) return;
+    this.wheelProcessing = true;
+    try {
+      while (!this.destroyed && Math.abs(this.pendingWheelDeltaY) > 0.001) {
+        const deltaY = clamp(this.pendingWheelDeltaY, -400, 400);
+        this.pendingWheelDeltaY -= deltaY;
+        const clientX = this.pendingWheelClientX;
+        const clientY = this.pendingWheelClientY;
+        const hit = await this.resolveDepthPickAtClientPoint(clientX, clientY);
+        if (this.destroyed) return;
+        const hitDepth = hit?.distance ?? this.getDepthAtClientPoint(clientX, clientY);
+        const step = computeDepthAwareDollyStep({
+          deltaY,
+          deltaMode: 0,
+          hitDepth,
+          sceneRadius: this.sceneRadius,
+          maxStep: Math.max(this.sceneRadius * 0.08, 0.2),
+          nearSurfaceStop: this.getNearSurfaceStopDistance(),
+          forwardLimitRatio: 0.35,
+        });
+        this.dollyAlongClientPoint(clientX, clientY, step);
+        this.requestRender();
+      }
+    } finally {
+      this.wheelProcessing = false;
+      if (!this.destroyed && Math.abs(this.pendingWheelDeltaY) > 0.001) {
+        void this.processPendingWheelDolly();
+      }
+    }
+  }
 
   private onPointerLockChange = (): void => {
     const locked = document.pointerLockElement === this.canvas;
@@ -1557,6 +1837,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
     this.updateAdaptiveQuality(now);
     this.updateRenderPolicy();
+
+    if (!this.vrActive && this.currentCameraMode === 'orbit') {
+      this.updateOrbitAnchorTransition(now);
+    }
 
     // VR locomotion takes priority — use gamepad joysticks
     if (this.vrActive) {
@@ -1805,7 +2089,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private updateMarkerPositions(): void {
-    if (!this.camera?.camera || !this.markerLayer || this.markerButtons.size === 0) return;
+    if (!this.camera?.camera) {
+      this.updateOrbitAnchorGizmo();
+      return;
+    }
+    if (!this.markerLayer || this.markerButtons.size === 0) {
+      this.updateOrbitAnchorGizmo();
+      return;
+    }
 
     // PlayCanvas CameraComponent.worldToScreen passes device.clientRect
     // (CSS layout dimensions from getBoundingClientRect) as cw/ch to the
@@ -1840,6 +2131,29 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         button.style.left = `${screen.x}px`;
         button.style.top = `${screen.y}px`;
       }
+    }
+    this.updateOrbitAnchorGizmo();
+  }
+
+  private updateOrbitAnchorGizmo(): void {
+    if (!this.orbitAnchorGizmo || !this.camera?.camera) return;
+    if (this.currentCameraMode !== 'orbit' || this.vrActive) {
+      this.orbitAnchorGizmo.style.display = 'none';
+      return;
+    }
+
+    const canvasRect = this.canvas.getBoundingClientRect();
+    const screen = this.camera.camera.worldToScreen(this.target, new Vec3());
+    const visible = screen.z > 0 &&
+      screen.x >= -20 &&
+      screen.y >= -20 &&
+      screen.x <= canvasRect.width + 20 &&
+      screen.y <= canvasRect.height + 20;
+
+    this.orbitAnchorGizmo.style.display = visible ? 'block' : 'none';
+    if (visible) {
+      this.orbitAnchorGizmo.style.left = `${screen.x}px`;
+      this.orbitAnchorGizmo.style.top = `${screen.y}px`;
     }
   }
 

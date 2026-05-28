@@ -7,8 +7,8 @@ import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
 import {
   applyDeadzone,
   clamp,
-  computeDepthConsensus,
   computeDepthAwareDollyStep,
+  computeFrontDepthConsensus,
   extractGsplatPointCenters,
   pickMarkerPoint,
   type SplatAssetFormat,
@@ -638,6 +638,21 @@ export default function Annotation3DEditorPage() {
     orbit.zoomToCursor = true;
     orbit.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_PAN };
 
+    const orbitAnchorEl = document.createElement('div');
+    orbitAnchorEl.setAttribute('aria-hidden', 'true');
+    orbitAnchorEl.style.position = 'absolute';
+    orbitAnchorEl.style.width = '14px';
+    orbitAnchorEl.style.height = '14px';
+    orbitAnchorEl.style.borderRadius = '50%';
+    orbitAnchorEl.style.border = '1px solid rgba(255,255,255,0.9)';
+    orbitAnchorEl.style.background = 'rgba(255,255,255,0.24)';
+    orbitAnchorEl.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.28)';
+    orbitAnchorEl.style.pointerEvents = 'none';
+    orbitAnchorEl.style.transform = 'translate(-50%, -50%)';
+    orbitAnchorEl.style.zIndex = '12';
+    orbitAnchorEl.style.display = 'none';
+    container.appendChild(orbitAnchorEl);
+
     const depthRayOffsets: readonly (readonly [number, number])[] = [
       [0, 0],
       [5, 0],
@@ -664,6 +679,10 @@ export default function Annotation3DEditorPage() {
       const maxDepth = Math.max(radius * 8, camera.position.distanceTo(orbit.target) * 3, 2);
       const fallback = Math.max(camera.position.distanceTo(orbit.target), radius, 0.25);
       return clamp(Number.isFinite(depth) && depth > 0 ? depth : fallback, minDepth, maxDepth);
+    }
+
+    function getNearSurfaceStopDistance() {
+      return clamp(sceneRadiusRef.current * 0.004, 0.03, 1.5);
     }
 
     function intersectSceneDepth(ray: THREE.Ray) {
@@ -710,14 +729,15 @@ export default function Annotation3DEditorPage() {
         if (depth) samples.push(clampDepth(depth));
       }
 
-      const consensus = computeDepthConsensus({
+      const consensus = computeFrontDepthConsensus({
         samples,
         fallbackDepth,
         minSamples: 4,
-        maxRelativeSpread: 0.55,
+        minClusterSamples: 2,
+        maxClusterRelativeSpread: 0.35,
       });
 
-      if (consensus.sampleCount >= 4 && consensus.confidence >= 0.35) {
+      if (consensus.sampleCount >= 2 && consensus.confidence >= 0.25) {
         const distance = clampDepth(consensus.distance);
         return {
           point: centerRay.origin.clone().add(centerRay.direction.clone().multiplyScalar(distance)),
@@ -750,15 +770,45 @@ export default function Annotation3DEditorPage() {
       return getDepthPickAtClientPoint(clientX, clientY).distance;
     }
 
+    let orbitAnchorTransition: {
+      from: THREE.Vector3;
+      to: THREE.Vector3;
+      cameraPosition: THREE.Vector3;
+      startTime: number;
+      durationMs: number;
+    } | null = null;
+    orbit.addEventListener('start', () => { orbitAnchorTransition = null; });
+
+    function applyOrbitPoseFromCameraAndTarget(cameraPosition: THREE.Vector3, target: THREE.Vector3) {
+      const distance = cameraPosition.distanceTo(target);
+      if (!Number.isFinite(distance) || distance <= 0.05) return;
+      orbit.target.copy(target);
+      camera.position.copy(cameraPosition);
+      camera.lookAt(orbit.target);
+      orbit.update();
+    }
+
+    function updateOrbitAnchorTransition() {
+      if (!orbitAnchorTransition) return;
+      const t = clamp((performance.now() - orbitAnchorTransition.startTime) / orbitAnchorTransition.durationMs, 0, 1);
+      const eased = 1 - (1 - t) * (1 - t) * (1 - t);
+      const target = orbitAnchorTransition.from.clone().lerp(orbitAnchorTransition.to, eased);
+      applyOrbitPoseFromCameraAndTarget(orbitAnchorTransition.cameraPosition, target);
+      if (t >= 1) orbitAnchorTransition = null;
+    }
+
     function setOrbitTargetFromClientPoint(clientX: number, clientY: number) {
       const pick = getDepthPickAtClientPoint(clientX, clientY);
       const pos = camera.position.clone();
       const distance = pos.distanceTo(pick.point);
       if (!Number.isFinite(distance) || distance <= 0.05) return;
-      orbit.target.copy(pick.point);
-      orbit.update();
-      camera.position.copy(pos);
-      camera.lookAt(orbit.target);
+      orbitAnchorTransition = {
+        from: orbit.target.clone(),
+        to: pick.point.clone(),
+        cameraPosition: pos,
+        startTime: performance.now(),
+        durationMs: 180,
+      };
     }
 
     function onCustomWheel(e: WheelEvent) {
@@ -770,6 +820,7 @@ export default function Annotation3DEditorPage() {
         flyMoveSpeedRef.current = Math.max(0.5, Math.min(50, flyMoveSpeedRef.current * speedFactor));
         return;
       }
+      orbitAnchorTransition = null;
       const ray = setPointerFromClient(e.clientX, e.clientY);
       const step = computeDepthAwareDollyStep({
         deltaY: e.deltaY,
@@ -777,6 +828,8 @@ export default function Annotation3DEditorPage() {
         hitDepth: getDepthAtClientPoint(e.clientX, e.clientY),
         sceneRadius: sceneRadiusRef.current,
         maxStep: Math.max(sceneRadiusRef.current * 0.08, 0.2),
+        nearSurfaceStop: getNearSurfaceStopDistance(),
+        forwardLimitRatio: 0.35,
       });
       const delta = ray.direction.clone().multiplyScalar(step);
       camera.position.add(delta);
@@ -784,12 +837,13 @@ export default function Annotation3DEditorPage() {
       orbit.update();
     }
     renderer.domElement.addEventListener('wheel', onCustomWheel, { passive: false, capture: true });
-    function onOrbitAnchorPointerDown(e: PointerEvent) {
-      if (e.pointerType !== 'mouse' || e.button !== 0 || flyModeRef.current || placeModeRef.current) return;
+    function onOrbitAnchorDoubleClick(e: MouseEvent) {
+      if (e.button !== 0 || flyModeRef.current || placeModeRef.current) return;
       if ((transformRef.current as unknown as { dragging?: boolean } | null)?.dragging) return;
+      e.preventDefault();
       setOrbitTargetFromClientPoint(e.clientX, e.clientY);
     }
-    renderer.domElement.addEventListener('pointerdown', onOrbitAnchorPointerDown, { capture: true });
+    renderer.domElement.addEventListener('dblclick', onOrbitAnchorDoubleClick, { capture: true });
 
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
@@ -959,15 +1013,37 @@ export default function Annotation3DEditorPage() {
     window.addEventListener('keydown', onFlyKeyDown);
     window.addEventListener('keyup', onFlyKeyUp);
 
+    function updateOrbitAnchorGizmo() {
+      if (flyModeRef.current) {
+        orbitAnchorEl.style.display = 'none';
+        return;
+      }
+      const rect = renderer.domElement.getBoundingClientRect();
+      const projected = orbit.target.clone().project(camera);
+      const visible = projected.z >= -1 &&
+        projected.z <= 1 &&
+        projected.x >= -1.05 &&
+        projected.x <= 1.05 &&
+        projected.y >= -1.05 &&
+        projected.y <= 1.05;
+      orbitAnchorEl.style.display = visible ? 'block' : 'none';
+      if (visible) {
+        orbitAnchorEl.style.left = `${(projected.x * 0.5 + 0.5) * rect.width}px`;
+        orbitAnchorEl.style.top = `${(-projected.y * 0.5 + 0.5) * rect.height}px`;
+      }
+    }
+
     function animate() {
       animFrameRef.current = requestAnimationFrame(animate);
       if (flyModeRef.current) {
         updateFlyCamera(0.016);
       } else {
+        updateOrbitAnchorTransition();
         updateOrbitPan(0.016);
         orbit.update();
       }
       (transform as unknown as { update?: () => void }).update?.();
+      updateOrbitAnchorGizmo();
       renderer.render(scene, camera);
     }
 
@@ -1002,6 +1078,7 @@ export default function Annotation3DEditorPage() {
       if (k.has('q')) move.y -= 1;
       if (k.has('e')) move.y += 1;
       if (move.lengthSq() > 0) {
+        orbitAnchorTransition = null;
         move.normalize().multiplyScalar(speed * dt);
         const t = orbit.target;
         t.set(t.x + move.x, t.y + move.y, t.z + move.z);
@@ -1026,9 +1103,10 @@ export default function Annotation3DEditorPage() {
       window.removeEventListener('keydown', onFlyKeyDown);
       window.removeEventListener('keyup', onFlyKeyUp);
       renderer.domElement.removeEventListener('wheel', onCustomWheel, { capture: true });
-      renderer.domElement.removeEventListener('pointerdown', onOrbitAnchorPointerDown, { capture: true });
+      renderer.domElement.removeEventListener('dblclick', onOrbitAnchorDoubleClick, { capture: true });
       document.exitPointerLock();
       renderer.dispose();
+      orbitAnchorEl.remove();
       if (splatCloudRef.current) {
         splatCloudRef.current.geometry.dispose();
         (splatCloudRef.current.material as THREE.Material).dispose();
@@ -1223,13 +1301,6 @@ export default function Annotation3DEditorPage() {
         : null;
 
       if (!placeMode) {
-        const target = pointHit?.position
-          ? new THREE.Vector3(pointHit.position[0], pointHit.position[1], pointHit.position[2])
-          : null;
-        if (target) {
-          orbitRef.current?.target.copy(target);
-          orbitRef.current?.update();
-        }
         return;
       }
 

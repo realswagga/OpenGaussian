@@ -3,8 +3,10 @@ import {
   applyDeadzone,
   center2D,
   classifyTwoPointerGesture,
+  clampDollyStepToDepth,
   computeDepthConsensus,
   computeDepthAwareDollyStep,
+  computeFrontDepthConsensus,
   computePinchScale,
   readGamepadStick,
 } from '../navigationControls.js';
@@ -56,6 +58,46 @@ describe('navigationControls', () => {
     const stable = computeDepthConsensus({ samples: [9.9, 10, 10.1], fallbackDepth: 3 });
     const scattered = computeDepthConsensus({ samples: [3, 10, 80], fallbackDepth: 3 });
     expect(stable.confidence).toBeGreaterThan(scattered.confidence);
+  });
+
+  it('prefers the nearest coherent front depth cluster over background samples', () => {
+    const consensus = computeFrontDepthConsensus({
+      samples: [1, 1.08, 1.12, 7.8, 8, 8.2, 8.4],
+      fallbackDepth: 4,
+      minSamples: 3,
+      minClusterSamples: 2,
+      maxClusterRelativeSpread: 0.25,
+    });
+
+    expect(consensus.distance).toBeCloseTo(1.08);
+    expect(consensus.sampleCount).toBe(3);
+    expect(consensus.confidence).toBeGreaterThan(0.5);
+  });
+
+  it('clamps forward dolly steps before crossing the picked surface', () => {
+    expect(clampDollyStepToDepth({
+      step: 2,
+      hitDepth: 3,
+      sceneRadius: 10,
+      nearSurfaceStop: 0.5,
+      forwardLimitRatio: 0.35,
+    })).toBeCloseTo(1.05);
+
+    expect(computeDepthAwareDollyStep({
+      deltaY: -100,
+      hitDepth: 0.2,
+      sceneRadius: 10,
+      nearSurfaceStop: 0.08,
+      forwardLimitRatio: 0.35,
+    })).toBeLessThanOrEqual(0.07);
+
+    expect(clampDollyStepToDepth({
+      step: -2,
+      hitDepth: 0.2,
+      sceneRadius: 10,
+      nearSurfaceStop: 0.08,
+      forwardLimitRatio: 0.35,
+    })).toBe(-2);
   });
 
   it('normalizes deadzones and reads WebXR stick fallback axes', () => {
