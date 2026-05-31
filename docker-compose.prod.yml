@@ -1,0 +1,53 @@
+services:
+  nginx:
+    ports:
+      - "127.0.0.1:8082:80"   # ← was "127.0.0.1:8080:80"
+
+  api:
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+      - JWT_SECRET=${JWT_SECRET}
+      - ADMIN_SEED_EMAIL=${ADMIN_SEED_EMAIL}
+      - ADMIN_SEED_PASSWORD=${ADMIN_SEED_PASSWORD}
+      - MAX_UPLOAD_MB=${MAX_UPLOAD_MB}
+      - ASSET_PUBLIC_URL=${ASSET_PUBLIC_URL}
+      - API_PUBLIC_URL=${API_PUBLIC_URL}
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL}
+      - S3_PUBLIC_ENDPOINT=${S3_PUBLIC_ENDPOINT}
+      - DEFAULT_LOD_BUDGET=${DEFAULT_LOD_BUDGET}
+      - DEFAULT_MOBILE_LOD_BUDGET=${DEFAULT_MOBILE_LOD_BUDGET}
+      - DEFAULT_VR_LOD_BUDGET=${DEFAULT_VR_LOD_BUDGET}
+
+  worker:
+    env_file:
+      - .env.production
+    environment:
+      - DATABASE_URL=${DATABASE_URL}
+      - REDIS_URL=${REDIS_URL}
+      - S3_ENDPOINT=${S3_ENDPOINT}
+      - S3_ACCESS_KEY=${S3_ACCESS_KEY}
+      - S3_SECRET_KEY=${S3_SECRET_KEY}
+      - S3_BUCKET=${S3_BUCKET}
+      - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE}
+
+  postgres:
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+
+  redis:
+
+
+  minio:
+    environment:
+      - MINIO_ROOT_USER=${S3_ACCESS_KEY}
+      - MINIO_ROOT_PASSWORD=${S3_SECRET_KEY}
