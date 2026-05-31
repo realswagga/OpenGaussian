@@ -998,6 +998,26 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     await new Promise<void>((resolve, reject) => {
       asset.on('load', () => {
         if (this.destroyed) return;
+
+        // Diagnostic: log resource state and canvas dimensions
+        const hasResource = asset.resource != null;
+        const canvasW = this.canvas?.clientWidth ?? 0;
+        const canvasH = this.canvas?.clientHeight ?? 0;
+        const bufferW = this.canvas?.width ?? 0;
+        const bufferH = this.canvas?.height ?? 0;
+        const gl = this.canvas?.getContext('webgl2') as WebGL2RenderingContext | null;
+        const glError = gl?.getError() ?? 0;
+        console.log(`[GsplatViewer] Asset loaded:`, {
+          url: this.resolvedAsset.url,
+          format: this.resolvedAsset.format,
+          hasResource,
+          resourceType: asset.resource?.constructor?.name ?? 'null',
+          canvasClient: `${canvasW}x${canvasH}`,
+          canvasBuffer: `${bufferW}x${bufferH}`,
+          glError: glError !== 0 ? glError : 'none',
+          crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : 'n/a',
+        });
+
         this.sceneRadius = readAabbRadius(asset.resource) || readAabbRadius(asset) || this.sceneRadius;
         const rawCenter = readAabbCenter(asset.resource) || readAabbCenter(asset) || new Vec3(0, 0, 0);
         const settings = this.getEffectiveQualitySettings();
@@ -1034,6 +1054,25 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         this.applyGsplatSettings();
         this.loadedSplats = readPossibleCount(asset.resource) || readPossibleCount(asset) || this.manifestHasCount();
         this.emitProgress('renderable', 'First renderable splat frame is available', undefined, undefined, this.resolvedAsset.url);
+
+        // Delayed diagnostic: check rendering state after 3 seconds
+        setTimeout(() => {
+          if (this.destroyed) return;
+          const frameStats = (this.app?.stats as { frame?: { gsplats?: number } } | undefined)?.frame;
+          const gsplatComp = (this.splatEntity as unknown as { gsplat?: { _placement?: unknown; _instance?: unknown; enabled?: boolean } } | null)?.gsplat;
+          console.log(`[GsplatViewer] Render diagnostic (3s):`, {
+            sortTimeMs: this.lastSortTimeMs,
+            frameGsplats: frameStats?.gsplats,
+            loadedSplats: this.loadedSplats,
+            hasPlacement: gsplatComp?._placement != null,
+            hasInstance: gsplatComp?._instance != null,
+            componentEnabled: gsplatComp?.enabled,
+            entityEnabled: this.splatEntity?.enabled,
+            sceneChildren: this.app?.root?.children?.length,
+            canvasPixels: `${this.canvas?.width}x${this.canvas?.height}`,
+          });
+        }, 3000);
+
         resolve();
       });
       asset.on('progress', (received: number, length: number) => {
@@ -1488,7 +1527,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private orbitByPointerDelta(dx: number, dy: number): void {
     this.orbitAnchorTransition = null;
     this.yaw -= dx * 0.006;
-    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch + dy * 0.004));
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
     this.updateCamera();
   }
 
