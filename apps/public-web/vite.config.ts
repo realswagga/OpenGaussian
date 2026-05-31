@@ -28,23 +28,17 @@ function patchPlaycanvasSortWorker(): Plugin {
       if (normalizedId.endsWith('gsplat-sort-worker.js') && normalizedId.includes('playcanvas')) {
         if (code.includes('SortWorkerSource')) return null; // already patched
 
-        // Wrap the SortWorker function body in a raw template-literal string
-        // so the minifier cannot mangle its internal variable names.
-        let patched = code.replace(
-          /^function SortWorker\(\) \{/m,
-          'const SortWorkerSource = `function SortWorker() {',
-        );
-        patched = patched.replace(
-          /\}\s*\n\s*export \{ SortWorker \};\s*$/,
-          '}`;\n\nfunction SortWorker() {\n\t// Stub — worker source uses SortWorkerSource\n}\n\nexport { SortWorker, SortWorkerSource };\n',
-        );
+        const fnMatch = code.match(/^(function SortWorker\(\) \{[\s\S]*?\n\})\s*\n\s*export \{ SortWorker \};\s*$/);
+        if (!fnMatch) return null;
 
-        // Extra safety: rename the problematic loop variable `c` to `chunkIdx`
-        // so even if something else stringifies it, there's no scope collision.
-        patched = patched.replace(/\bfor\(let c = 0; c < numChunks;/g, 'for(let chunkIdx = 0; chunkIdx < numChunks;');
-        patched = patched.replace(/\bconst start = c \* 256;/g, 'const start = chunkIdx * 256;');
-        patched = patched.replace(/\bconst end = Math\.min\(numVertices, \(c \+ 1\) \* 256\);/g, 'const end = Math.min(numVertices, (chunkIdx + 1) * 256);');
-        patched = patched.replace(/\bchunks\[c \* 4 \+/g, 'chunks[chunkIdx * 4 +');
+        let fnSource = fnMatch[1];
+
+        fnSource = fnSource.replace(/\bfor\(let c = 0; c < numChunks;/g, 'for(let chunkIdx = 0; chunkIdx < numChunks;');
+        fnSource = fnSource.replace(/\bconst start = c \* 256;/g, 'const start = chunkIdx * 256;');
+        fnSource = fnSource.replace(/\bconst end = Math\.min\(numVertices, \(c \+ 1\) \* 256\);/g, 'const end = Math.min(numVertices, (chunkIdx + 1) * 256);');
+        fnSource = fnSource.replace(/\bchunks\[c \* 4 \+/g, 'chunks[chunkIdx * 4 +');
+
+        const patched = `const SortWorkerSource = ${JSON.stringify(fnSource)};\n\nfunction SortWorker() {\n\t// Stub — worker source uses SortWorkerSource\n}\n\nexport { SortWorker, SortWorkerSource };\n`;
 
         return { code: patched, map: null };
       }

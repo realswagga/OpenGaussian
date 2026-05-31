@@ -10,12 +10,19 @@ function patchPlaycanvasSortWorker(): Plugin {
       const normalizedId = id.replace(/\\/g, '/');
       if (normalizedId.endsWith('gsplat-sort-worker.js') && normalizedId.includes('playcanvas')) {
         if (code.includes('SortWorkerSource')) return null;
-        let patched = code.replace(/^function SortWorker\(\) \{/m, 'const SortWorkerSource = `function SortWorker() {');
-        patched = patched.replace(/\}\s*\n\s*export \{ SortWorker \};\s*$/, '}`;\n\nfunction SortWorker() {}\n\nexport { SortWorker, SortWorkerSource };\n');
-        patched = patched.replace(/\bfor\(let c = 0; c < numChunks;/g, 'for(let chunkIdx = 0; chunkIdx < numChunks;');
-        patched = patched.replace(/\bconst start = c \* 256;/g, 'const start = chunkIdx * 256;');
-        patched = patched.replace(/\bconst end = Math\.min\(numVertices, \(c \+ 1\) \* 256\);/g, 'const end = Math.min(numVertices, (chunkIdx + 1) * 256);');
-        patched = patched.replace(/\bchunks\[c \* 4 \+/g, 'chunks[chunkIdx * 4 +');
+
+        const fnMatch = code.match(/^(function SortWorker\(\) \{[\s\S]*?\n\})\s*\n\s*export \{ SortWorker \};\s*$/);
+        if (!fnMatch) return null;
+
+        let fnSource = fnMatch[1];
+
+        fnSource = fnSource.replace(/\bfor\(let c = 0; c < numChunks;/g, 'for(let chunkIdx = 0; chunkIdx < numChunks;');
+        fnSource = fnSource.replace(/\bconst start = c \* 256;/g, 'const start = chunkIdx * 256;');
+        fnSource = fnSource.replace(/\bconst end = Math\.min\(numVertices, \(c \+ 1\) \* 256\);/g, 'const end = Math.min(numVertices, (chunkIdx + 1) * 256);');
+        fnSource = fnSource.replace(/\bchunks\[c \* 4 \+/g, 'chunks[chunkIdx * 4 +');
+
+        const patched = `const SortWorkerSource = ${JSON.stringify(fnSource)};\n\nfunction SortWorker() {}\n\nexport { SortWorker, SortWorkerSource };\n`;
+
         return { code: patched, map: null };
       }
       if (normalizedId.endsWith('gsplat-sorter.js') && normalizedId.includes('playcanvas')) {
