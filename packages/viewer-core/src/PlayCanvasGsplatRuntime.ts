@@ -1526,8 +1526,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private orbitByPointerDelta(dx: number, dy: number): void {
     this.orbitAnchorTransition = null;
-    this.yaw -= dx * 0.006;
-    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.004));
+    this.yaw -= dx * 0.0048;
+    this.pitch = Math.max(-1.5, Math.min(1.5, this.pitch - dy * 0.0032));
     this.updateCamera();
   }
 

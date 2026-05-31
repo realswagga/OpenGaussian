@@ -162,8 +162,8 @@ export class OrbitControls {
     this.prevPointerPos.copy(currPos as THREE.Vector2);
 
     if (this.state === STATE.ROTATE && this.enableRotate) {
-      this.sphericalDelta.theta -= (2 * Math.PI * deltaX) / this.domElement.clientHeight;
-      this.sphericalDelta.phi -= (2 * Math.PI * deltaY) / this.domElement.clientHeight;
+      this.sphericalDelta.theta -= (1.6 * Math.PI * deltaX) / this.domElement.clientHeight;
+      this.sphericalDelta.phi -= (1.6 * Math.PI * deltaY) / this.domElement.clientHeight;
     } else if (this.state === STATE.PAN && this.enablePan) {
       const panSpeed = 0.001;
       const offset = new THREE.Vector3();
