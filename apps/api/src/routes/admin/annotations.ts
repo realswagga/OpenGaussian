@@ -1,7 +1,8 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Annotation, PrismaClient } from '@prisma/client';
 import { createAnnotationSchema, updateAnnotationSchema } from '@gsplat/shared';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
+import { canAccessSplat } from './permissions.js';
 
 export async function adminAnnotationRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -46,10 +47,15 @@ export async function adminAnnotationRoutes(app: FastifyInstance) {
   async function listMarkers(request: FastifyRequest, reply: FastifyReply) {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
       });
     }
 
@@ -67,10 +73,15 @@ export async function adminAnnotationRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const data = createAnnotationSchema.parse(request.body);
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'markers');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit markers for this splat' },
       });
     }
 
@@ -95,6 +106,12 @@ export async function adminAnnotationRoutes(app: FastifyInstance) {
         error: { code: 'NOT_FOUND', message: 'Annotation not found' },
       });
     }
+    const access = await canAccessSplat(prisma, request as AuthRequest, existing.splatId, 'markers');
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit markers for this splat' },
+      });
+    }
 
     const annotation = await prisma.annotation.update({ where: { id }, data });
 
@@ -109,6 +126,12 @@ export async function adminAnnotationRoutes(app: FastifyInstance) {
     if (!existing) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Annotation not found' },
+      });
+    }
+    const access = await canAccessSplat(prisma, request as AuthRequest, existing.splatId, 'markers');
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit markers for this splat' },
       });
     }
 

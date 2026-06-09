@@ -14,6 +14,7 @@ RUN pnpm install --no-frozen-lockfile
 COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
 COPY packages/viewer-core/src ./packages/viewer-core/src
+COPY tokens.css ./tokens.css
 COPY apps/admin-web/src ./apps/admin-web/src
 COPY apps/admin-web/index.html apps/admin-web/vite.config.ts ./apps/admin-web/
 

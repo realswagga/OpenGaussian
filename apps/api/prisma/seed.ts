@@ -46,14 +46,67 @@ async function main() {
 
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
-    update: {},
+    update: {
+      role: 'MASTER_ADMIN',
+      passwordHash,
+    },
     create: {
       email: adminEmail,
       passwordHash,
-      role: 'ADMIN',
+      role: 'MASTER_ADMIN',
     },
   });
   console.log(`Admin: ${admin.email}`);
+
+  await prisma.user.updateMany({
+    where: { role: 'ADMIN' },
+    data: { role: 'MASTER_ADMIN' },
+  });
+
+  const defaultOrg = await prisma.organization.upsert({
+    where: { slug: 'opengaussian' },
+    update: {},
+    create: {
+      slug: 'opengaussian',
+      name: 'OpenGaussian',
+      description: 'Default organization for published Gaussian splats.',
+      isPublic: true,
+      createdByUserId: admin.id,
+    },
+  });
+
+  await prisma.organizationMembership.upsert({
+    where: {
+      organizationId_userId: {
+        organizationId: defaultOrg.id,
+        userId: admin.id,
+      },
+    },
+    update: {
+      role: 'MANAGER',
+      status: 'ACTIVE',
+    },
+    create: {
+      organizationId: defaultOrg.id,
+      userId: admin.id,
+      role: 'MANAGER',
+      status: 'ACTIVE',
+      canCreateSplats: true,
+      canUploadSplats: true,
+      canEditSplats: true,
+      canDeleteSplats: true,
+      canPublishSplats: true,
+      canEditMarkers: true,
+    },
+  });
+
+  const attached = await prisma.splat.updateMany({
+    where: { organizationId: null },
+    data: { organizationId: defaultOrg.id },
+  });
+  if (attached.count > 0) {
+    console.log(`Attached ${attached.count} unassigned splat(s) to ${defaultOrg.name}.`);
+  }
 
   console.log('[seed] Done.');
 }

@@ -2,6 +2,9 @@ node_modules/
 dist/
 build/
 plans/
+agents/
+.hallmark/
+hallmark/
 .env
 *.log
 .turbo/

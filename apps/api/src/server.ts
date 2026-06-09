@@ -15,6 +15,7 @@ import { adminAnnotationRoutes } from './routes/admin/annotations.js';
 import { adminJobRoutes } from './routes/admin/jobs.js';
 import { adminUploadRoutes } from './routes/admin/upload.js';
 import { adminStatsRoutes } from './routes/admin/stats.js';
+import { adminOrganizationRoutes } from './routes/admin/organizations.js';
 import { errorHandler } from './middleware/error-handler.js';
 
 const prisma = new PrismaClient();
@@ -66,6 +67,7 @@ async function start() {
   await app.register(publicSplatRoutes, { prefix: '/api' });
   await app.register(widgetRoutes, { prefix: '/api' });
   await app.register(adminStatsRoutes, { prefix: '/api/admin' });
+  await app.register(adminOrganizationRoutes, { prefix: '/api/admin' });
   await app.register(adminSplatRoutes, { prefix: '/api/admin' });
   await app.register(adminAnnotationRoutes, { prefix: '/api/admin' });
   await app.register(adminJobRoutes, { prefix: '/api/admin' });

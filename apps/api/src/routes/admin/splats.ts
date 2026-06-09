@@ -3,6 +3,7 @@ import type { PrismaClient } from '@prisma/client';
 import { Prisma } from '@prisma/client';
 import { createSplatSchema, updateSplatSchema, pretransformSchema, pretransformUpdateSchema, defaultCameraSchema } from '@gsplat/shared';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
+import { accessibleOrganizationIds, canAccessSplat, canCreateSplatInOrganization } from './permissions.js';
 
 export async function adminSplatRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -11,11 +12,14 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.addHook('onRequest', requireAdmin);
 
   // GET /api/admin/splats
-  app.get('/splats', async () => {
+  app.get('/splats', async (request) => {
+    const orgIds = await accessibleOrganizationIds(prisma, request as AuthRequest);
     const splats = await prisma.splat.findMany({
+      where: orgIds === null ? {} : { organizationId: { in: orgIds } },
       orderBy: { updatedAt: 'desc' },
       include: {
         _count: { select: { annotations: true, versions: true } },
+        organization: { select: { id: true, slug: true, name: true, description: true } },
       },
     });
 
@@ -27,6 +31,13 @@ export async function adminSplatRoutes(app: FastifyInstance) {
         description: s.description,
         status: s.status,
         sourceFormat: s.sourceFormat,
+        organizationId: s.organizationId,
+        organization: s.organization ? {
+          id: s.organization.id,
+          slug: s.organization.slug,
+          name: s.organization.name,
+          description: s.organization.description,
+        } : null,
         splatCount: s.splatCount,
         sizeBytes: s.sizeBytes ? Number(s.sizeBytes) : null,
         annotationCount: s._count.annotations,
@@ -41,12 +52,26 @@ export async function adminSplatRoutes(app: FastifyInstance) {
 
   // POST /api/admin/splats
   app.post('/splats', async (request, reply) => {
+    const auth = request as AuthRequest;
     const data = createSplatSchema.parse(request.body);
 
     const existing = await prisma.splat.findUnique({ where: { slug: data.slug } });
     if (existing) {
       return reply.status(409).send({
         error: { code: 'CONFLICT', message: 'A splat with this slug already exists' },
+      });
+    }
+
+    if (!data.organizationId) {
+      return reply.status(400).send({
+        error: { code: 'ORG_REQUIRED', message: 'Select an organization before creating a splat' },
+      });
+    }
+
+    const canCreate = await canCreateSplatInOrganization(prisma, auth, data.organizationId);
+    if (!canCreate) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot create splats in this organization' },
       });
     }
 
@@ -58,11 +83,24 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   // GET /api/admin/splats/:id
   app.get('/splats/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
+    if (!access.splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
+      });
+    }
+
     const splat = await prisma.splat.findUnique({
       where: { id },
       include: {
         annotations: true,
         versions: { orderBy: { version: 'desc' } },
+        organization: { select: { id: true, slug: true, name: true, description: true } },
       },
     });
 
@@ -85,10 +123,16 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const data = updateSplatSchema.parse(request.body);
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    const splat = access.splat;
     if (!splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
       });
     }
 
@@ -97,6 +141,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       if (existing) {
         return reply.status(409).send({
           error: { code: 'CONFLICT', message: 'Slug already in use' },
+        });
+      }
+    }
+
+    if (data.organizationId && data.organizationId !== splat.organizationId) {
+      const canMove = await canCreateSplatInOrganization(prisma, request as AuthRequest, data.organizationId);
+      if (!canMove) {
+        return reply.status(403).send({
+          error: { code: 'FORBIDDEN', message: 'You cannot move this splat to that organization' },
         });
       }
     }
@@ -121,10 +174,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.delete('/splats/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'delete');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot delete this splat' },
       });
     }
 
@@ -137,10 +195,16 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.post('/splats/:id/publish', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'publish');
+    const splat = access.splat;
     if (!splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot publish this splat' },
       });
     }
 
@@ -171,6 +235,17 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   // GET /api/admin/splats/:id/transform
   app.get('/splats/:id/transform', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    if (!access.splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
+      });
+    }
     const splat = await prisma.splat.findUnique({
       where: { id },
       select: { pretransformJson: true },
@@ -188,10 +263,16 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const data = pretransformUpdateSchema.parse(request.body);
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    const splat = access.splat;
     if (!splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
       });
     }
 
@@ -222,10 +303,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
     const data = defaultCameraSchema.parse(request.body);
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
       });
     }
 
@@ -242,10 +328,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.delete('/splats/:id/camera', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
       });
     }
 
@@ -262,10 +353,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.get('/splats/:id/versions', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
       });
     }
 
@@ -295,10 +391,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
   app.post('/splats/:id/unpublish', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
-    if (!splat) {
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'publish');
+    if (!access.splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot unpublish this splat' },
       });
     }
 

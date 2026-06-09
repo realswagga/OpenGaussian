@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
+import { accessibleOrganizationIds } from './permissions.js';
 
 export async function adminStatsRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -8,7 +9,12 @@ export async function adminStatsRoutes(app: FastifyInstance) {
   app.addHook('onRequest', requireAdmin);
 
   // GET /api/admin/stats
-  app.get('/stats', async () => {
+  app.get('/stats', async (request) => {
+    const orgIds = await accessibleOrganizationIds(prisma, request as AuthRequest);
+    const splatWhere = orgIds === null ? {} : { organizationId: { in: orgIds } };
+    const versionWhere = orgIds === null ? {} : { splat: splatWhere };
+    const annotationWhere = orgIds === null ? {} : { splat: splatWhere };
+
     const [
       totalSplats,
       publishedSplats,
@@ -20,19 +26,20 @@ export async function adminStatsRoutes(app: FastifyInstance) {
       totalAnnotations,
       activeJobs,
     ] = await Promise.all([
-      prisma.splat.count(),
-      prisma.splat.count({ where: { status: 'PUBLISHED' } }),
-      prisma.splat.count({ where: { status: 'DRAFT' } }),
-      prisma.splat.count({ where: { status: 'PROCESSING' } }),
-      prisma.splat.count({ where: { status: 'FAILED' } }),
-      prisma.splat.count({ where: { status: 'READY' } }),
-      prisma.splat.count({ where: { status: 'ARCHIVED' } }),
-      prisma.annotation.count(),
-      prisma.splatVersion.count({ where: { processingStatus: { in: ['PENDING', 'RUNNING'] } } }),
+      prisma.splat.count({ where: splatWhere }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'PUBLISHED' } }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'DRAFT' } }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'PROCESSING' } }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'FAILED' } }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'READY' } }),
+      prisma.splat.count({ where: { ...splatWhere, status: 'ARCHIVED' } }),
+      prisma.annotation.count({ where: annotationWhere }),
+      prisma.splatVersion.count({ where: { ...versionWhere, processingStatus: { in: ['PENDING', 'RUNNING'] } } }),
     ]);
 
     // Recent jobs (last 10 version records)
     const recentVersions = await prisma.splatVersion.findMany({
+      where: versionWhere,
       orderBy: { updatedAt: 'desc' },
       take: 10,
       include: { splat: { select: { title: true } } },
@@ -52,6 +59,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
     let storageBytesEstimate = 0;
     try {
       const versions = await prisma.splatVersion.findMany({
+        where: versionWhere,
         select: { metricsJson: true },
       });
       for (const v of versions) {
@@ -66,7 +74,7 @@ export async function adminStatsRoutes(app: FastifyInstance) {
 
     // Also add splat sizeBytes
     const splats = await prisma.splat.findMany({
-      where: { sizeBytes: { not: null } },
+      where: { ...splatWhere, sizeBytes: { not: null } },
       select: { sizeBytes: true },
     });
     for (const s of splats) {

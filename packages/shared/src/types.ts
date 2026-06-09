@@ -2,7 +2,11 @@
 // Enums
 // ============================================================
 
-export type UserRole = 'ADMIN' | 'EDITOR' | 'VIEWER';
+export type UserRole = 'MASTER_ADMIN' | 'CLIENT' | 'ADMIN' | 'EDITOR' | 'VIEWER';
+
+export type OrganizationRole = 'MANAGER' | 'EDITOR';
+
+export type MembershipStatus = 'ACTIVE' | 'INVITED' | 'DISABLED';
 
 export type SplatStatus = 'DRAFT' | 'PROCESSING' | 'READY' | 'PUBLISHED' | 'FAILED' | 'ARCHIVED';
 
@@ -69,6 +73,8 @@ export interface SplatSummary {
   description: string | null;
   posterUrl: string | null;
   posterKey?: string | null;
+  organization?: OrganizationSummary | null;
+  organizationId?: string | null;
   sourceFormat?: string | null;
   sizeBytes?: number | null;
   splatCount: number | null;
@@ -82,8 +88,20 @@ export interface SplatListItem {
   title: string;
   description: string | null;
   posterUrl: string | null;
+  organization?: OrganizationSummary | null;
   splatCount: number | null;
   publishedAt: string | null;
+}
+
+export interface OrganizationSummary {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  websiteUrl?: string | null;
+  splatCount?: number;
+  publishedSplatCount?: number;
+  createdAt?: string;
 }
 
 export interface DefaultCamera {
@@ -273,6 +291,24 @@ export interface AuthUser {
   id: string;
   email: string;
   role: UserRole;
+  name?: string | null;
+  memberships?: AuthMembership[];
+  capabilities?: AuthCapabilities;
+}
+
+export interface AuthMembership {
+  id: string;
+  organizationId: string;
+  organizationSlug: string;
+  organizationName: string;
+  role: OrganizationRole;
+  status: MembershipStatus;
+  permissions: EditorPermissions;
+}
+
+export interface AuthCapabilities {
+  isMasterAdmin: boolean;
+  canAccessAdmin: boolean;
 }
 
 export interface LoginRequest {
@@ -280,9 +316,66 @@ export interface LoginRequest {
   password: string;
 }
 
+export interface SignupRequest {
+  email: string;
+  password: string;
+  name?: string;
+}
+
 export interface LoginResponse {
   token: string;
   user: AuthUser;
+}
+
+export interface EditorPermissions {
+  canCreateSplats: boolean;
+  canUploadSplats: boolean;
+  canEditSplats: boolean;
+  canDeleteSplats: boolean;
+  canPublishSplats: boolean;
+  canEditMarkers: boolean;
+}
+
+export interface AdminOrganization extends OrganizationSummary {
+  isPublic: boolean;
+  memberCount: number;
+  splatCount: number;
+  publishedSplatCount: number;
+  currentUserRole?: OrganizationRole | 'MASTER_ADMIN';
+}
+
+export interface AdminMembership {
+  id: string;
+  userId: string;
+  email: string;
+  name: string | null;
+  organizationId: string;
+  organizationName: string;
+  organizationSlug: string;
+  role: OrganizationRole;
+  status: MembershipStatus;
+  permissions: EditorPermissions;
+  createdAt: string;
+}
+
+export interface AdminUserListItem {
+  id: string;
+  email: string;
+  name: string | null;
+  role: UserRole;
+  memberships: Array<{
+    organizationId: string;
+    organizationName: string;
+    role: OrganizationRole;
+    status: MembershipStatus;
+  }>;
+  createdAt: string;
+}
+
+export interface SearchResponse {
+  query: string;
+  splats: SplatListItem[];
+  organizations: OrganizationSummary[];
 }
 
 // ============================================================

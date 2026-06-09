@@ -1,7 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
+import { canAccessSplat } from './permissions.js';
 
 // Accepted source formats
 const ACCEPTED_EXTENSIONS = ['.ply', '.spz', '.sog', '.meta.json', '.lod-meta.json', '.compressed.ply', '.splat', '.ksplat'];
@@ -38,10 +39,16 @@ export async function adminUploadRoutes(app: FastifyInstance) {
   app.post('/splats/:id/upload', async (request, reply) => {
     const { id } = request.params as { id: string };
 
-    const splat = await prisma.splat.findUnique({ where: { id } });
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'upload');
+    const splat = access.splat;
     if (!splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot upload files for this splat' },
       });
     }
 

@@ -8,6 +8,10 @@ export interface AuthRequest extends FastifyRequest {
   user?: AuthUser;
 }
 
+export function isMasterRole(role?: string | null): boolean {
+  return role === 'MASTER_ADMIN' || role === 'ADMIN';
+}
+
 export async function requireAuth(request: FastifyRequest, reply: FastifyReply) {
   const token = extractToken(request);
   if (!token) {
@@ -29,9 +33,38 @@ export async function requireAuth(request: FastifyRequest, reply: FastifyReply) 
 export async function requireAdmin(request: FastifyRequest, reply: FastifyReply) {
   await requireAuth(request, reply);
   const user = (request as AuthRequest).user;
-  if (!user || (user.role !== 'ADMIN' && user.role !== 'EDITOR')) {
+  if (!user) {
+    return;
+  }
+
+  if (isMasterRole(user.role)) {
+    return;
+  }
+
+  const prisma = (request.server as any).prisma;
+  const activeMemberships = prisma
+    ? await prisma.organizationMembership.count({
+      where: {
+        userId: user.id,
+        status: 'ACTIVE',
+        role: { in: ['MANAGER', 'EDITOR'] },
+      },
+    })
+    : 0;
+
+  if (activeMemberships < 1) {
     return reply.status(403).send({
-      error: { code: 'FORBIDDEN', message: 'Admin or editor role required' },
+      error: { code: 'FORBIDDEN', message: 'Admin workspace access required' },
+    });
+  }
+}
+
+export async function requireMasterAdmin(request: FastifyRequest, reply: FastifyReply) {
+  await requireAuth(request, reply);
+  const user = (request as AuthRequest).user;
+  if (!user || !isMasterRole(user.role)) {
+    return reply.status(403).send({
+      error: { code: 'FORBIDDEN', message: 'Master admin access required' },
     });
   }
 }

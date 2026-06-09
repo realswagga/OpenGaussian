@@ -1,199 +1,196 @@
-import { BrowserRouter, Routes, Route, Navigate, useLocation, Link, useNavigate } from 'react-router-dom';
-import { useState, useEffect } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, NavLink, Link, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import type { AuthUser } from '@gsplat/shared';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import SplatsPage from './pages/SplatsPage';
 import SplatEditPage from './pages/SplatEditPage';
 import UploadPage from './pages/UploadPage';
 import Annotation3DEditorPage from './pages/Annotation3DEditorPage';
+import OrganizationsPage from './pages/OrganizationsPage';
+import MembersPage from './pages/MembersPage';
+import WidgetPage from './pages/WidgetPage';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
-function Sidebar({ email, onLogout }: { email: string; onLogout: () => void }) {
+type IconName = 'overview' | 'splats' | 'organizations' | 'members' | 'widget' | 'plus' | 'external' | 'logout';
+
+function Icon({ name }: { name: IconName }) {
+  const common = { stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
+  return (
+    <svg className="admin-icon" aria-hidden="true" viewBox="0 0 24 24" fill="none">
+      {name === 'overview' && (
+        <>
+          <path {...common} d="M4 13.5 12 6l8 7.5" />
+          <path {...common} d="M6.5 12v7h11v-7" />
+        </>
+      )}
+      {name === 'splats' && (
+        <>
+          <circle {...common} cx="8" cy="8" r="2.6" />
+          <circle {...common} cx="16" cy="7" r="1.8" />
+          <circle {...common} cx="15" cy="16" r="3" />
+          <path {...common} d="m10.2 9.5 2.9 4.2M10.5 7.7l3.8-.4" />
+        </>
+      )}
+      {name === 'organizations' && (
+        <>
+          <path {...common} d="M5 20V7.5L12 4l7 3.5V20" />
+          <path {...common} d="M8 20v-7h8v7M9 9h.01M12 9h.01M15 9h.01" />
+        </>
+      )}
+      {name === 'members' && (
+        <>
+          <circle {...common} cx="9" cy="8" r="3" />
+          <path {...common} d="M3.5 19c.9-3 2.8-4.5 5.5-4.5s4.6 1.5 5.5 4.5" />
+          <path {...common} d="M16 7.5c1.9.2 3 1.4 3 3s-1.1 2.8-3 3M18 15c1.3.7 2.2 2 2.7 4" />
+        </>
+      )}
+      {name === 'widget' && (
+        <>
+          <path {...common} d="M7 7h10v10H7z" />
+          <path {...common} d="M4 4h4M16 4h4M4 20h4M16 20h4M4 8V4M20 8V4M4 16v4M20 16v4" />
+        </>
+      )}
+      {name === 'plus' && <path {...common} d="M12 5v14M5 12h14" />}
+      {name === 'external' && (
+        <>
+          <path {...common} d="M14 5h5v5" />
+          <path {...common} d="m19 5-8 8" />
+          <path {...common} d="M19 14v5H5V5h5" />
+        </>
+      )}
+      {name === 'logout' && (
+        <>
+          <path {...common} d="M10 6H5v12h5" />
+          <path {...common} d="M14 8l4 4-4 4M18 12H9" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function isMaster(user: AuthUser | null) {
+  return user?.capabilities?.isMasterAdmin || user?.role === 'MASTER_ADMIN' || user?.role === 'ADMIN';
+}
+
+function isManager(user: AuthUser | null) {
+  return Boolean(user?.memberships?.some((m) => m.role === 'MANAGER' && m.status === 'ACTIVE'));
+}
+
+function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   const location = useLocation();
-  const path = location.pathname;
+  const roleLabel = isMaster(user)
+    ? 'Master admin'
+    : isManager(user)
+      ? 'Manager'
+      : 'Editor';
+  const canManageOrg = isMaster(user) || isManager(user);
+  const canUseWidget = canManageOrg;
+  const title = useMemo(() => {
+    if (location.pathname.startsWith('/splats')) return 'Splats';
+    if (location.pathname.startsWith('/organizations')) return 'Organizations';
+    if (location.pathname.startsWith('/members')) return 'Members';
+    if (location.pathname.startsWith('/widget')) return 'Widget';
+    return 'Overview';
+  }, [location.pathname]);
 
-  const isActive = (href: string) => {
-    if (href === '/' || href === '') return path === '/';
-    return path.startsWith(href);
-  };
-
-  const navItems = [
-    { href: '/', label: 'Dashboard', icon: '◻' },
-    { href: '/splats', label: 'Splats', icon: '◫' },
+  const nav: Array<{ to: string; label: string; icon: IconName; show: boolean }> = [
+    { to: '/', label: 'Home', icon: 'overview', show: true },
+    { to: '/splats', label: 'Splats', icon: 'splats', show: true },
+    { to: '/organizations', label: 'Orgs', icon: 'organizations', show: true },
+    { to: '/members', label: 'Members', icon: 'members', show: canManageOrg },
+    { to: '/widget', label: 'Widget', icon: 'widget', show: canUseWidget },
   ];
 
-  // Context actions for splat edit pages
-  const splatIdMatch = path.match(/^\/splats\/([^/]+)/);
-  const splatId = splatIdMatch ? splatIdMatch[1] : null;
-  const isNewSplat = path === '/splats/new';
-  const showSplatActions = splatId && !isNewSplat;
-
-  const linkStyle = (active: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.625rem',
-    padding: '0.5rem 0.875rem',
-    borderRadius: 6,
-    fontSize: '0.8125rem',
-    fontWeight: 500,
-    color: active ? '#f5f5f5' : '#a3a3a3',
-    background: active ? '#171717' : 'transparent',
-    border: active ? '1px solid #2a2a2a' : '1px solid transparent',
-    textDecoration: 'none',
-    transition: 'background 150ms, border-color 150ms, color 150ms',
-  });
-
-  const subLinkStyle = (active: boolean): React.CSSProperties => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.5rem',
-    padding: '0.375rem 0.875rem 0.375rem 2rem',
-    borderRadius: 4,
-    fontSize: '0.75rem',
-    fontWeight: 400,
-    color: active ? '#f5f5f5' : '#737373',
-    background: active ? '#171717' : 'transparent',
-    textDecoration: 'none',
-    transition: 'color 150ms',
-  });
-
   return (
-    <div style={{
-      width: 220,
-      minWidth: 220,
-      background: '#0d0d0d',
-      borderRight: '1px solid #2a2a2a',
-      display: 'flex',
-      flexDirection: 'column',
-      height: '100vh',
-      position: 'sticky',
-      top: 0,
-    }}>
-      {/* Logo */}
-      <div style={{ padding: '1.25rem 1rem 0.75rem' }}>
-        <Link to="/" style={{ textDecoration: 'none', color: '#f5f5f5', fontWeight: 700, fontSize: '0.9375rem', letterSpacing: '-0.01em' }}>
-          GSplat Admin
-        </Link>
-      </div>
+    <div className="admin-shell">
+      <aside className="admin-sidebar">
+        <div className="admin-brand">
+          <Link to="/" aria-label="OpenGaussian admin">OG</Link>
+          <span>{roleLabel}</span>
+        </div>
+        <nav className="admin-nav" aria-label="Admin navigation">
+          {nav.filter((item) => item.show).map((item) => (
+            <NavLink key={item.to} to={item.to} end={item.to === '/'} title={item.label} className={({ isActive }) => (isActive ? 'active' : '')}>
+              <Icon name={item.icon} />
+              <span>{item.label}</span>
+            </NavLink>
+          ))}
+        </nav>
+        <div className="admin-user">
+          <span className="admin-avatar" aria-hidden="true">{(user.name || user.email).slice(0, 2).toUpperCase()}</span>
+          <button className="admin-icon-button" type="button" onClick={onLogout} title="Sign out">
+            <Icon name="logout" />
+            <span className="admin-sr-only">Sign out</span>
+          </button>
+        </div>
+      </aside>
 
-      {/* Nav links */}
-      <nav style={{ padding: '0.5rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.25rem', flex: 1 }}>
-        {navItems.map((item) => (
-          <Link key={item.href} to={item.href} style={linkStyle(isActive(item.href))}>
-            <span style={{ width: 16, textAlign: 'center', fontSize: '0.875rem' }}>{item.icon}</span>
-            {item.label}
-          </Link>
-        ))}
-
-        {/* Splat context sub-navigation */}
-        {showSplatActions && (
-          <>
-            <div style={{ fontSize: '0.625rem', color: '#737373', padding: '0.625rem 0.875rem 0.25rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-              Splat Actions
-            </div>
-            <Link to={`/splats/${splatId}`} style={subLinkStyle(isActive(`/splats/${splatId}`) && !path.includes('/upload') && !path.includes('/annotations') && !path.includes('/markers'))}>
-              ✎ Edit Details
-            </Link>
-            <Link to={`/splats/${splatId}/upload`} style={subLinkStyle(isActive(`/splats/${splatId}/upload`))}>
-              ↑ Upload
-            </Link>
-            <Link to={`/splats/${splatId}/markers-3d`} style={subLinkStyle(isActive(`/splats/${splatId}/markers-3d`) || isActive(`/splats/${splatId}/annotations-3d`))}>
-              ◧ 3D Editor
-            </Link>
-          </>
-        )}
-      </nav>
-
-      {/* User section */}
-      <div style={{
-        padding: '0.75rem 1rem',
-        borderTop: '1px solid #2a2a2a',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: '0.5rem',
-      }}>
-        <span style={{ fontSize: '0.6875rem', color: '#737373', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-          {email}
-        </span>
-        <button
-          onClick={onLogout}
-          title="Logout"
-          style={{
-            background: 'none',
-            border: '1px solid #2a2a2a',
-            borderRadius: 4,
-            color: '#737373',
-            cursor: 'pointer',
-            fontSize: '0.6875rem',
-            padding: '0.2rem 0.5rem',
-          }}
-        >
-          ↪
-        </button>
-      </div>
+      <main className="admin-main">
+        <header className="admin-topbar">
+          <div className="admin-topbar-title">
+            <h1>{title}</h1>
+            <span>{roleLabel} / {user.email}</span>
+          </div>
+          <div className="admin-actions">
+            <a className="admin-button-secondary" href="/" target="_blank" rel="noreferrer"><Icon name="external" />Public site</a>
+            <Link className="admin-button" to="/splats/new"><Icon name="plus" />New splat</Link>
+          </div>
+        </header>
+        <div className="admin-content">
+          <Routes>
+            <Route path="/" element={<DashboardPage user={user} />} />
+            <Route path="/splats" element={<SplatsPage user={user} />} />
+            <Route path="/splats/new" element={<SplatEditPage user={user} />} />
+            <Route path="/splats/:id" element={<SplatEditPage user={user} />} />
+            <Route path="/splats/:id/upload" element={<UploadPage />} />
+            <Route path="/splats/:id/markers-3d" element={<Annotation3DEditorPage />} />
+            <Route path="/splats/:id/annotations-3d" element={<Annotation3DEditorPage />} />
+            <Route path="/organizations" element={<OrganizationsPage user={user} />} />
+            <Route path="/members" element={canManageOrg ? <MembersPage user={user} /> : <Navigate to="/" replace />} />
+            <Route path="/widget" element={canUseWidget ? <WidgetPage /> : <Navigate to="/" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </div>
+      </main>
     </div>
   );
 }
 
-function Breadcrumbs() {
-  const location = useLocation();
-  const segments = location.pathname.split('/').filter(Boolean);
-
-  const breadcrumbStyle: React.CSSProperties = {
-    display: 'flex',
-    alignItems: 'center',
-    gap: '0.375rem',
-    fontSize: '0.75rem',
-    color: '#737373',
-    padding: '0.625rem 0',
-  };
-
-  const linkStyle: React.CSSProperties = {
-    color: '#a3a3a3',
-    textDecoration: 'none',
-  };
-
-  const activeStyle: React.CSSProperties = {
-    color: '#f5f5f5',
-    fontWeight: 500,
-  };
-
-  // Build breadcrumb items (paths are relative to basename, no /admin prefix)
-  const items: { label: string; href: string; active: boolean }[] = [];
-  let accum = '';
-  for (let i = 0; i < segments.length; i++) {
-    const seg = segments[i]!;
-    accum += '/' + seg;
-    const isLast = i === segments.length - 1;
-    items.push({
-      label: seg.charAt(0).toUpperCase() + seg.slice(1).replace(/-/g, ' '),
-      href: accum,
-      active: isLast,
-    });
-  }
-
-  if (items.length === 0) return null;
-
+function NoAccess({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
   return (
-    <div style={breadcrumbStyle}>
-      {items.map((item, i) => (
-        <span key={item.href} style={{ display: 'flex', alignItems: 'center', gap: '0.375rem' }}>
-          {i > 0 && <span style={{ color: '#2a2a2a' }}>/</span>}
-          {item.active ? (
-            <span style={activeStyle}>{item.label}</span>
-          ) : (
-            <Link to={item.href} style={linkStyle}>{item.label}</Link>
-          )}
-        </span>
-      ))}
+    <div className="admin-auth-wrap">
+      <section className="admin-auth-card">
+        <p className="admin-eyebrow">Client account</p>
+        <h1>No admin workspace yet</h1>
+        <p className="admin-muted">
+          {user.email} is signed in as a client. A master admin can promote clients to manager, and managers can add clients as editors.
+        </p>
+        <div className="admin-actions" style={{ marginTop: 20 }}>
+          <a className="admin-button" href="/">Open public catalog</a>
+          <button className="admin-button-secondary" type="button" onClick={onLogout}>Sign out</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AdminBootSkeleton() {
+  return (
+    <div className="admin-auth-wrap">
+      <section className="admin-auth-card admin-auth-card--skeleton" aria-label="Loading workspace">
+        <div className="admin-skeleton-line short" />
+        <div className="admin-skeleton-line title" />
+        <div className="admin-skeleton-line" />
+        <div className="admin-skeleton-line" />
+      </section>
     </div>
   );
 }
 
 function AppInner() {
-  const [user, setUser] = useState<{ email: string; role: string } | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();
 
@@ -207,15 +204,6 @@ function AppInner() {
       .catch(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#050505', color: '#a3a3a3', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif' }}>
-        Loading...
-      </div>
-    );
-  }
-
-  const handleLogin = (u: { email: string; role: string }) => setUser(u);
   const handleLogout = () => {
     fetch(`${API_BASE}/auth/logout`, { method: 'POST', credentials: 'include' }).finally(() => {
       setUser(null);
@@ -223,31 +211,19 @@ function AppInner() {
     });
   };
 
-  if (!user) {
-    return <LoginPage onLogin={handleLogin} />;
+  if (loading) {
+    return <AdminBootSkeleton />;
   }
 
-  return (
-    <div style={{ display: 'flex', minHeight: '100vh', background: '#050505', color: '#f5f5f5', fontFamily: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif' }}>
-      <Sidebar email={user.email} onLogout={handleLogout} />
+  if (!user) {
+    return <LoginPage onLogin={setUser} />;
+  }
 
-      <main style={{ flex: 1, minWidth: 0, overflow: 'auto' }}>
-        <div style={{ maxWidth: 1400, margin: '0 auto', padding: '0 2rem 2rem' }}>
-          <Breadcrumbs />
-          <Routes>
-            <Route path="/" element={<DashboardPage />} />
-            <Route path="/splats" element={<SplatsPage />} />
-            <Route path="/splats/new" element={<SplatEditPage />} />
-            <Route path="/splats/:id" element={<SplatEditPage />} />
-            <Route path="/splats/:id/upload" element={<UploadPage />} />
-            <Route path="/splats/:id/markers-3d" element={<Annotation3DEditorPage />} />
-            <Route path="/splats/:id/annotations-3d" element={<Annotation3DEditorPage />} />
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
-        </div>
-      </main>
-    </div>
-  );
+  if (!user.capabilities?.canAccessAdmin) {
+    return <NoAccess user={user} onLogout={handleLogout} />;
+  }
+
+  return <AppShell user={user} onLogout={handleLogout} />;
 }
 
 export default function App() {

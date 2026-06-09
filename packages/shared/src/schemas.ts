@@ -9,6 +9,12 @@ export const loginRequestSchema = z.object({
   password: z.string().min(1),
 });
 
+export const signupRequestSchema = z.object({
+  email: z.string().email(),
+  password: z.string().min(8).max(200),
+  name: z.string().min(1).max(120).optional(),
+});
+
 // ============================================================
 // Splat schemas
 // ============================================================
@@ -17,6 +23,7 @@ export const createSplatSchema = z.object({
   title: z.string().min(1).max(200),
   slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
   description: z.string().max(2000).optional(),
+  organizationId: z.string().uuid().optional(),
 });
 
 export const defaultCameraSchema = z.object({
@@ -30,7 +37,54 @@ export const updateSplatSchema = z.object({
   slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   description: z.string().max(2000).optional().nullable(),
   status: z.enum(['DRAFT', 'READY', 'PUBLISHED', 'ARCHIVED']).optional(),
+  organizationId: z.string().uuid().optional().nullable(),
   defaultCameraJson: defaultCameraSchema.optional().nullable(),
+});
+
+// ============================================================
+// Organization and membership schemas
+// ============================================================
+
+export const editorPermissionsSchema = z.object({
+  canCreateSplats: z.boolean().default(false),
+  canUploadSplats: z.boolean().default(false),
+  canEditSplats: z.boolean().default(false),
+  canDeleteSplats: z.boolean().default(false),
+  canPublishSplats: z.boolean().default(false),
+  canEditMarkers: z.boolean().default(false),
+});
+
+export const createOrganizationSchema = z.object({
+  name: z.string().min(1).max(160),
+  slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
+  description: z.string().max(2000).optional().nullable(),
+  websiteUrl: z.string().url().optional().nullable(),
+  isPublic: z.boolean().default(true),
+  managerUserId: z.string().uuid().optional(),
+});
+
+export const updateOrganizationSchema = z.object({
+  name: z.string().min(1).max(160).optional(),
+  slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
+  description: z.string().max(2000).optional().nullable(),
+  websiteUrl: z.string().url().optional().nullable(),
+  isPublic: z.boolean().optional(),
+});
+
+export const createMembershipSchema = z.object({
+  email: z.string().email(),
+  role: z.enum(['MANAGER', 'EDITOR']),
+  permissions: editorPermissionsSchema.partial().optional(),
+});
+
+export const updateMembershipSchema = z.object({
+  role: z.enum(['MANAGER', 'EDITOR']).optional(),
+  status: z.enum(['ACTIVE', 'INVITED', 'DISABLED']).optional(),
+  permissions: editorPermissionsSchema.partial().optional(),
+});
+
+export const userSearchSchema = z.object({
+  q: z.string().max(120).optional(),
 });
 
 // ============================================================

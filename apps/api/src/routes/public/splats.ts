@@ -24,6 +24,32 @@ function assetUrl(assetBaseUrl: string, keyOrUrl?: string | null): string | unde
   return `${assetBaseUrl}/${keyOrUrl}`;
 }
 
+function serializeOrganization(org: any, publishedSplatCount?: number) {
+  if (!org) return null;
+  return {
+    id: org.id,
+    slug: org.slug,
+    name: org.name,
+    description: org.description,
+    websiteUrl: org.websiteUrl,
+    publishedSplatCount: publishedSplatCount ?? org._count?.splats ?? undefined,
+    createdAt: org.createdAt?.toISOString?.() ?? org.createdAt,
+  };
+}
+
+function serializePublicSplat(s: any, assetBaseUrl: string) {
+  return {
+    id: s.id,
+    slug: s.slug,
+    title: s.title,
+    description: s.description,
+    posterUrl: s.posterKey ? `${assetBaseUrl}/${s.posterKey}` : null,
+    organization: serializeOrganization(s.organization),
+    splatCount: s.splatCount,
+    publishedAt: s.publishedAt?.toISOString() ?? null,
+  };
+}
+
 function buildManifestVariants(
   settingsJson: unknown,
   assetBaseUrl: string,
@@ -56,34 +82,119 @@ export async function publicSplatRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
 
   // GET /api/splats
-  app.get('/splats', async () => {
+  app.get('/splats', async (request) => {
+    const { q, organization } = request.query as { q?: string; organization?: string };
     const splats = await prisma.splat.findMany({
-      where: { status: 'PUBLISHED' },
-      orderBy: { publishedAt: 'desc' },
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        description: true,
-        splatCount: true,
-        posterKey: true,
-        publishedAt: true,
+      where: {
+        status: 'PUBLISHED',
+        ...(q ? {
+          OR: [
+            { title: { contains: q, mode: 'insensitive' } },
+            { description: { contains: q, mode: 'insensitive' } },
+            { slug: { contains: q, mode: 'insensitive' } },
+            { organization: { name: { contains: q, mode: 'insensitive' } } },
+          ],
+        } : {}),
+        ...(organization ? { organization: { slug: organization } } : {}),
       },
+      orderBy: { publishedAt: 'desc' },
+      include: { organization: true },
     });
 
     const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
 
     return {
-      items: splats.map((s) => ({
-        id: s.id,
-        slug: s.slug,
-        title: s.title,
-        description: s.description,
-        posterUrl: s.posterKey ? `${assetBaseUrl}/${s.posterKey}` : null,
-        splatCount: s.splatCount,
-        publishedAt: s.publishedAt?.toISOString() ?? null,
-      })),
+      items: splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
       total: splats.length,
+    };
+  });
+
+  app.get('/search', async (request) => {
+    const { q = '' } = request.query as { q?: string };
+    const term = q.trim();
+    const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+
+    const [splats, organizations] = await Promise.all([
+      prisma.splat.findMany({
+        where: {
+          status: 'PUBLISHED',
+          ...(term ? {
+            OR: [
+              { title: { contains: term, mode: 'insensitive' } },
+              { description: { contains: term, mode: 'insensitive' } },
+              { slug: { contains: term, mode: 'insensitive' } },
+              { organization: { name: { contains: term, mode: 'insensitive' } } },
+            ],
+          } : {}),
+        },
+        orderBy: { publishedAt: 'desc' },
+        take: 60,
+        include: { organization: true },
+      }),
+      prisma.organization.findMany({
+        where: {
+          isPublic: true,
+          ...(term ? {
+            OR: [
+              { name: { contains: term, mode: 'insensitive' } },
+              { description: { contains: term, mode: 'insensitive' } },
+              { slug: { contains: term, mode: 'insensitive' } },
+            ],
+          } : {}),
+          splats: { some: { status: 'PUBLISHED' } },
+        },
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          _count: { select: { splats: { where: { status: 'PUBLISHED' } } } },
+        },
+        take: 30,
+      }),
+    ]);
+
+    return {
+      query: term,
+      splats: splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
+      organizations: organizations.map((org) => serializeOrganization(org, org._count.splats)),
+    };
+  });
+
+  app.get('/organizations', async () => {
+    const organizations = await prisma.organization.findMany({
+      where: { isPublic: true, splats: { some: { status: 'PUBLISHED' } } },
+      orderBy: { updatedAt: 'desc' },
+      include: {
+        _count: { select: { splats: { where: { status: 'PUBLISHED' } } } },
+      },
+    });
+    return {
+      items: organizations.map((org) => serializeOrganization(org, org._count.splats)),
+      total: organizations.length,
+    };
+  });
+
+  app.get('/organizations/:slug', async (request, reply) => {
+    const { slug } = request.params as { slug: string };
+    const organization = await prisma.organization.findFirst({
+      where: { slug, isPublic: true },
+      include: {
+        splats: {
+          where: { status: 'PUBLISHED' },
+          orderBy: { publishedAt: 'desc' },
+          include: { organization: true },
+        },
+        _count: { select: { splats: { where: { status: 'PUBLISHED' } } } },
+      },
+    });
+    if (!organization) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Organization not found' },
+      });
+    }
+
+    const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+    return {
+      organization: serializeOrganization(organization, organization._count.splats),
+      splats: organization.splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
     };
   });
 
@@ -92,6 +203,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const splat = await prisma.splat.findFirst({
       where: { slug, status: 'PUBLISHED' },
+      include: { organization: true },
     });
 
     if (!splat) {
@@ -112,6 +224,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       boundingBoxJson: splat.boundingBoxJson,
       defaultCameraJson: splat.defaultCameraJson,
       globalSettingsJson: splat.globalSettingsJson,
+      organization: serializeOrganization(splat.organization),
       createdAt: splat.createdAt.toISOString(),
       updatedAt: splat.updatedAt.toISOString(),
       publishedAt: splat.publishedAt?.toISOString() ?? null,

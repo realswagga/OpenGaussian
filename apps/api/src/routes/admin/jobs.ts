@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import { requireAdmin } from '../../middleware/auth.js';
+import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
+import { canAccessSplat } from './permissions.js';
 
 export async function adminJobRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -19,6 +20,12 @@ export async function adminJobRoutes(app: FastifyInstance) {
     if (!version) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Job/version not found' },
+      });
+    }
+    const access = await canAccessSplat(prisma, request as AuthRequest, version.splatId, 'view');
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Job access denied' },
       });
     }
 
@@ -48,6 +55,12 @@ export async function adminJobRoutes(app: FastifyInstance) {
     if (!version) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Job/version not found' },
+      });
+    }
+    const access = await canAccessSplat(prisma, request as AuthRequest, version.splatId, 'view');
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Job access denied' },
       });
     }
 
@@ -140,6 +153,18 @@ export async function adminJobRoutes(app: FastifyInstance) {
   app.post('/splats/:id/process', async (request, reply) => {
     const { id } = request.params as { id: string };
 
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'upload');
+    if (!access.splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot process this splat' },
+      });
+    }
+
     const splat = await prisma.splat.findUnique({
       where: { id },
       include: {
@@ -150,7 +175,6 @@ export async function adminJobRoutes(app: FastifyInstance) {
         },
       },
     });
-
     if (!splat) {
       return reply.status(404).send({
         error: { code: 'NOT_FOUND', message: 'Splat not found' },

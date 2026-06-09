@@ -16,6 +16,7 @@ COPY packages/shared/src ./packages/shared/src
 COPY packages/viewer-core/src ./packages/viewer-core/src
 COPY packages/viewer-widget/src ./packages/viewer-widget/src
 COPY packages/viewer-widget/vite.config.ts ./packages/viewer-widget/
+COPY tokens.css ./tokens.css
 COPY apps/public-web/src ./apps/public-web/src
 COPY apps/public-web/index.html apps/public-web/vite.config.ts ./apps/public-web/
 

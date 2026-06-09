@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
+import type { AdminOrganization, AuthUser } from '@gsplat/shared';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -8,6 +9,7 @@ interface SplatFormData {
   title: string;
   slug: string;
   description: string;
+  organizationId: string;
 }
 
 interface VersionItem {
@@ -24,7 +26,7 @@ interface VersionItem {
   updatedAt: string;
 }
 
-function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate }: {
+function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, organizations }: {
   form: SplatFormData;
   setForm: (f: SplatFormData) => void;
   saving: boolean;
@@ -32,6 +34,7 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate }
   onSubmit: (e: FormEvent) => void;
   isNew: boolean;
   navigate: ReturnType<typeof useNavigate>;
+  organizations: AdminOrganization[];
 }) {
   const fieldStyle: React.CSSProperties = {
     padding: '0.5rem 0.625rem',
@@ -59,6 +62,15 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate }
       )}
 
       <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Organization</span>
+          <select value={form.organizationId} onChange={(e) => setForm({ ...form, organizationId: e.target.value })} required style={fieldStyle}>
+            <option value="">Select organization</option>
+            {organizations.map((org) => (
+              <option key={org.id} value={org.id}>{org.name}</option>
+            ))}
+          </select>
+        </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Title</span>
           <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required style={fieldStyle} />
@@ -141,12 +153,13 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
 const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.5rem 1rem', color: '#737373', fontWeight: 400, fontSize: '0.6875rem' };
 const tdStyle: React.CSSProperties = { padding: '0.5rem 1rem' };
 
-export default function SplatEditPage() {
+export default function SplatEditPage(_props: { user?: AuthUser }) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const isNew = !id || id === 'new';
 
-  const [form, setForm] = useState<SplatFormData>({ title: '', slug: '', description: '' });
+  const [form, setForm] = useState<SplatFormData>({ title: '', slug: '', description: '', organizationId: '' });
+  const [organizations, setOrganizations] = useState<AdminOrganization[]>([]);
   const [loading, setLoading] = useState(!isNew);
   const [splatId, setSplatId] = useState<string | null>(isNew ? null : id!);
   const [saving, setSaving] = useState(false);
@@ -161,6 +174,17 @@ export default function SplatEditPage() {
   const [versionsLoading, setVersionsLoading] = useState(false);
 
   useEffect(() => {
+    fetch(`${API_BASE}/admin/organizations`, { credentials: 'include' })
+      .then((r) => (r.ok ? r.json() : { items: [] }))
+      .then((data) => {
+        const items = data.items || [];
+        setOrganizations(items);
+        setForm((current) => current.organizationId ? current : { ...current, organizationId: items[0]?.id || '' });
+      })
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
     if (isNew) return;
 
     setLoading(true);
@@ -173,7 +197,7 @@ export default function SplatEditPage() {
       .then((data) => {
         // API returns { splat: { ... } }
         const s = data.splat || data;
-        setForm({ title: s.title || '', slug: s.slug || '', description: s.description || '' });
+        setForm({ title: s.title || '', slug: s.slug || '', description: s.description || '', organizationId: s.organizationId || '' });
         setSplatId(s.id || id);
         setSplatStatus(s.status || '');
         setLoading(false);
@@ -205,7 +229,7 @@ export default function SplatEditPage() {
     try {
       const url = isNew ? `${API_BASE}/admin/splats` : `${API_BASE}/admin/splats/${splatId}`;
       const method = isNew ? 'POST' : 'PATCH';
-      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify(form) });
+      const res = await fetch(url, { method, headers: { 'Content-Type': 'application/json' }, credentials: 'include', body: JSON.stringify({ ...form, description: form.description || undefined }) });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as { error?: { message?: string } }).error?.message || 'Save failed');
@@ -265,7 +289,7 @@ export default function SplatEditPage() {
     return (
       <div style={{ paddingTop: '0.5rem', maxWidth: 600 }}>
         <h1 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '1.25rem' }}>New Splat</h1>
-        <MetadataTab form={form} setForm={setForm} saving={saving} error={error} onSubmit={handleSubmit} isNew={true} navigate={navigate} />
+        <MetadataTab form={form} setForm={setForm} saving={saving} error={error} onSubmit={handleSubmit} isNew={true} navigate={navigate} organizations={organizations} />
       </div>
     );
   }
@@ -275,7 +299,7 @@ export default function SplatEditPage() {
     {
       id: 'metadata',
       label: 'Metadata',
-      content: <MetadataTab form={form} setForm={setForm} saving={saving} error={error} onSubmit={handleSubmit} isNew={false} navigate={navigate} />,
+      content: <MetadataTab form={form} setForm={setForm} saving={saving} error={error} onSubmit={handleSubmit} isNew={false} navigate={navigate} organizations={organizations} />,
     },
     {
       id: 'versions',

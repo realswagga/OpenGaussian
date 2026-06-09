@@ -1,0 +1,62 @@
+:root {
+  color-scheme: dark;
+  --color-bg: oklch(7% 0.004 95);
+  --color-bg-2: oklch(10% 0.006 95);
+  --color-panel: oklch(13% 0.006 95 / 0.88);
+  --color-panel-2: oklch(18% 0.006 95 / 0.92);
+  --color-ink: oklch(93% 0.018 92);
+  --color-ink-soft: oklch(79% 0.018 92);
+  --color-muted: oklch(62% 0.014 92);
+  --color-rule: oklch(28% 0.01 92);
+  --color-rule-strong: oklch(40% 0.012 92);
+  --color-accent: oklch(88% 0.025 92);
+  --color-accent-ink: oklch(11% 0.006 95);
+  --color-focus: oklch(82% 0.06 92);
+  --color-error: oklch(70% 0.14 25);
+
+  --admin-bg: var(--color-bg);
+  --admin-bg-2: var(--color-bg-2);
+  --admin-panel: var(--color-panel);
+  --admin-panel-2: var(--color-panel-2);
+  --admin-ink: var(--color-ink);
+  --admin-soft: var(--color-ink-soft);
+  --admin-muted: var(--color-muted);
+  --admin-rule: 1px solid var(--color-rule);
+  --admin-rule-strong: var(--color-rule-strong);
+  --admin-accent: var(--color-accent);
+  --admin-accent-ink: var(--color-accent-ink);
+  --admin-danger: var(--color-error);
+  --admin-warning: oklch(82% 0.11 83);
+  --admin-success: oklch(78% 0.13 145);
+  --admin-focus: var(--color-focus);
+
+  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+
+  --space-3xs: 0.125rem;
+  --space-2xs: 0.25rem;
+  --space-xs: 0.5rem;
+  --space-sm: 0.75rem;
+  --space-md: 1rem;
+  --space-lg: 1.5rem;
+  --space-xl: 2.5rem;
+  --space-2xl: 4rem;
+  --space-3xl: 6rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-card: 8px;
+
+  --rule: 1px solid var(--color-rule);
+
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  --dur-micro: 120ms;
+  --dur-short: 220ms;
+  --dur-long: 420ms;
+
+  --z-sticky: 200;
+}

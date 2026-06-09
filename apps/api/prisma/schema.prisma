@@ -9,9 +9,23 @@ datasource db {
 }
 
 enum UserRole {
+  MASTER_ADMIN
+  CLIENT
+  // Legacy values kept so db push can upgrade existing local databases safely.
   ADMIN
   EDITOR
   VIEWER
+}
+
+enum OrganizationRole {
+  MANAGER
+  EDITOR
+}
+
+enum MembershipStatus {
+  ACTIVE
+  INVITED
+  DISABLED
 }
 
 enum SplatStatus {
@@ -31,12 +45,58 @@ enum ProcessingStatus {
 }
 
 model User {
-  id           String   @id @default(uuid())
-  email        String   @unique
-  passwordHash String
-  role         UserRole @default(VIEWER)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id                     String                   @id @default(uuid())
+  email                  String                   @unique
+  name                   String?
+  passwordHash           String
+  role                   UserRole                 @default(CLIENT)
+  memberships            OrganizationMembership[] @relation("MembershipUser")
+  createdOrganizations   Organization[]           @relation("OrganizationCreator")
+  invitedMemberships     OrganizationMembership[] @relation("MembershipInviter")
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+}
+
+model Organization {
+  id              String                   @id @default(uuid())
+  slug            String                   @unique
+  name            String
+  description     String?
+  websiteUrl      String?
+  isPublic        Boolean                  @default(true)
+  createdByUserId String?
+  createdBy       User?                    @relation("OrganizationCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  memberships     OrganizationMembership[]
+  splats          Splat[]
+  createdAt       DateTime                 @default(now())
+  updatedAt       DateTime                 @updatedAt
+}
+
+model OrganizationMembership {
+  id                String           @id @default(uuid())
+  organizationId    String
+  organization      Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  userId            String
+  user              User             @relation("MembershipUser", fields: [userId], references: [id], onDelete: Cascade)
+  role              OrganizationRole
+  status            MembershipStatus @default(ACTIVE)
+
+  canCreateSplats   Boolean          @default(false)
+  canUploadSplats   Boolean          @default(false)
+  canEditSplats     Boolean          @default(false)
+  canDeleteSplats   Boolean          @default(false)
+  canPublishSplats  Boolean          @default(false)
+  canEditMarkers    Boolean          @default(false)
+
+  invitedByUserId   String?
+  invitedBy         User?            @relation("MembershipInviter", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+  @@index([organizationId])
 }
 
 model Splat {
@@ -45,6 +105,9 @@ model Splat {
   title               String
   description         String?
   status              SplatStatus @default(DRAFT)
+
+  organizationId      String?
+  organization        Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
 
   sourceFormat        String?
   sourceObjectKey     String?
@@ -68,6 +131,8 @@ model Splat {
 
   updatedAt           DateTime @updatedAt
   publishedAt         DateTime?
+
+  @@index([organizationId])
 }
 
 model SplatVersion {

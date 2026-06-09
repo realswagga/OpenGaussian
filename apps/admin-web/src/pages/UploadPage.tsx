@@ -41,7 +41,7 @@ export default function UploadPage() {
     if (!id) return;
     fetch(`${API_BASE}/admin/splats/${id}`, { credentials: 'include' })
       .then((r) => r.json())
-      .then((data) => setSplat(data))
+      .then((data) => setSplat(data.splat || data))
       .catch(() => setError('Failed to load splat'));
   }, [id]);
 
