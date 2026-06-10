@@ -1,0 +1,60 @@
+import { useEffect, useState, type MouseEvent } from 'react';
+import { Link } from 'react-router-dom';
+import type { AuthUser } from '@gsplat/shared';
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+
+function initials(user: AuthUser) {
+  const source = (user.name || user.email).trim();
+  const parts = source.split(/\s+/).filter(Boolean);
+  if (parts.length > 1) {
+    const first = parts[0]?.charAt(0) ?? '';
+    const second = parts[1]?.charAt(0) ?? '';
+    return `${first}${second}`.toUpperCase();
+  }
+  return source.slice(0, 2).toUpperCase();
+}
+
+export default function PublicNav({
+  onExplore,
+  user: controlledUser,
+}: {
+  onExplore?: (event: MouseEvent<HTMLAnchorElement>) => void;
+  user?: AuthUser | null;
+}) {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const activeUser = controlledUser === undefined ? user : controlledUser;
+
+  useEffect(() => {
+    if (controlledUser !== undefined) return;
+
+    fetch(`${API_BASE}/auth/me`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.user) setUser(data.user);
+      })
+      .catch(() => undefined);
+  }, [controlledUser]);
+
+  return (
+    <nav className="og-nav" aria-label="Primary navigation">
+      <Link className="og-brand" to="/">OpenGaussian</Link>
+      <div className="og-nav-links">
+        {onExplore ? (
+          <a className="og-nav-link" href="#catalog" onClick={onExplore}>Explore</a>
+        ) : (
+          <a className="og-nav-link" href="/#catalog">Explore</a>
+        )}
+        {activeUser?.capabilities?.canAccessAdmin && <Link className="og-nav-link" to="/admin">Admin</Link>}
+        {activeUser ? (
+          <Link className="og-user-chip" to="/login" title={activeUser.email}>
+            <span className="og-user-dot" aria-hidden="true">{initials(activeUser)}</span>
+            <span>{activeUser.name || activeUser.email}</span>
+          </Link>
+        ) : (
+          <Link className="og-button-secondary og-login-button" to="/login">Log in</Link>
+        )}
+      </div>
+    </nav>
+  );
+}

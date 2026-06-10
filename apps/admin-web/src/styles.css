@@ -1,5 +1,5 @@
 /* Hallmark · macrostructure: Workbench Rail · tone: graphite operations · anchor hue: warm white */
-@import url("https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,650;9..144,760&family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@600;700&display=swap");
 @import url("../../../tokens.css");
 
 * {
@@ -87,7 +87,7 @@ button {
   color: var(--admin-ink);
   font-family: var(--font-display);
   font-size: 1.22rem;
-  font-weight: 760;
+  font-weight: 700;
   letter-spacing: 0;
   text-decoration: none;
 }
@@ -204,7 +204,7 @@ button {
   color: var(--admin-ink);
   font-family: var(--font-display);
   font-size: 1.55rem;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.1;
   letter-spacing: 0;
 }
@@ -238,7 +238,7 @@ button {
   color: var(--admin-ink);
   font-family: var(--font-display);
   font-size: 2.3rem;
-  font-weight: 650;
+  font-weight: 600;
   line-height: 1.08;
   letter-spacing: 0;
   overflow-wrap: anywhere;

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { AuthUser } from '@gsplat/shared';
+import PublicNav from '../components/PublicNav';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -62,23 +63,17 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
 
   return (
     <div className="og-shell">
-      <div className="og-noise" />
-      <nav className="og-nav" aria-label="Primary navigation">
-        <Link className="og-brand" to="/">OpenGaussian</Link>
-        <div className="og-nav-links">
-          <Link className="og-nav-link" to="/search">Search</Link>
-          <Link className="og-button-secondary" to="/admin">Admin</Link>
-        </div>
-      </nav>
+      <div className="og-backdrop" aria-hidden="true" />
+      <PublicNav user={user} />
 
       <main className="og-page og-auth-wrap">
         <section className="og-auth-card">
           {user ? (
             <>
-              <p className="og-eyebrow">Client account</p>
+              <p className="og-eyebrow">Account</p>
               <h1>{user.name || user.email}</h1>
               <p className="og-card-desc" style={{ marginTop: 12 }}>
-                You are signed in as {user.role === 'CLIENT' ? 'client' : user.role.toLowerCase()}.
+                You are signed in as {user.role === 'CLIENT' ? 'viewer' : user.role.toLowerCase()}.
               </p>
               <div className="og-hero-actions">
                 <Link className="og-button" to="/search">Browse catalog</Link>
@@ -88,8 +83,8 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
             </>
           ) : (
             <>
-              <p className="og-eyebrow">{mode === 'signup' ? 'Self signup' : 'Client login'}</p>
-              <h1>{mode === 'signup' ? 'Create a client account' : 'Sign in'}</h1>
+              <p className="og-eyebrow">{mode === 'signup' ? 'Self sign up' : 'Log in'}</p>
+              <h1>{mode === 'signup' ? 'Create account' : 'Sign in'}</h1>
               <form onSubmit={submit}>
                 {mode === 'signup' && (
                   <label className="og-label">
@@ -120,7 +115,7 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
                     navigate(next === 'signup' ? '/signup' : '/login');
                   }}
                 >
-                  {mode === 'signup' ? 'Sign in' : 'Create a client account'}
+                  {mode === 'signup' ? 'Sign in' : 'Create account'}
                 </button>
               </p>
             </>

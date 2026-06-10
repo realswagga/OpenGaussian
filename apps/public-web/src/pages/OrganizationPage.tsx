@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { OrganizationSummary, SplatListItem } from '@gsplat/shared';
+import PublicNav from '../components/PublicNav';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -32,15 +33,8 @@ export default function OrganizationPage() {
 
   return (
     <div className="og-shell">
-      <div className="og-noise" />
-      <nav className="og-nav" aria-label="Primary navigation">
-        <Link className="og-brand" to="/">OpenGaussian</Link>
-        <div className="og-nav-links">
-          <Link className="og-nav-link" to="/search">Search</Link>
-          <Link className="og-nav-link" to="/login">Client login</Link>
-          <Link className="og-button-secondary" to="/admin">Admin</Link>
-        </div>
-      </nav>
+      <div className="og-backdrop" aria-hidden="true" />
+      <PublicNav />
 
       <main className="og-page">
         {loading && <div className="og-search-layout"><div className="og-empty">Loading organization...</div></div>}

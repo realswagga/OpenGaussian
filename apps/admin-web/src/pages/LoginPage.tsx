@@ -46,7 +46,7 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         <p className="admin-eyebrow">OpenGaussian admin</p>
         <h1>Sign in</h1>
         <p className="admin-muted">
-          Client accounts can sign in here after they are promoted to manager or editor.
+          Accounts can sign in here after they are promoted to manager or editor.
         </p>
 
         <form onSubmit={handleSubmit}>
@@ -79,10 +79,10 @@ export default function LoginPage({ onLogin }: LoginPageProps) {
         </form>
 
         <p className="admin-muted" style={{ marginTop: 18 }}>
-          New clients can create accounts on the public site.
+          New users can create accounts on the public site.
         </p>
         <a className="admin-button-secondary" href="/signup" style={{ width: '100%', marginTop: 10 }}>
-          Create client account
+          Create account
         </a>
       </section>
     </div>

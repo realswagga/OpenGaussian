@@ -4,13 +4,20 @@
   --color-bg-2: oklch(10% 0.006 95);
   --color-panel: oklch(13% 0.006 95 / 0.88);
   --color-panel-2: oklch(18% 0.006 95 / 0.92);
+  --color-panel-solid: oklch(10% 0.006 95 / 0.98);
+  --color-panel-popover: oklch(12% 0.006 95 / 0.98);
   --color-ink: oklch(93% 0.018 92);
   --color-ink-soft: oklch(79% 0.018 92);
   --color-muted: oklch(62% 0.014 92);
+  --color-placeholder: oklch(50% 0.012 92);
   --color-rule: oklch(28% 0.01 92);
   --color-rule-strong: oklch(40% 0.012 92);
   --color-accent: oklch(88% 0.025 92);
   --color-accent-ink: oklch(11% 0.006 95);
+  --color-splat-glow: oklch(88% 0.025 92 / 0.34);
+  --color-search-scrim-strong: oklch(7% 0.004 95 / 0.98);
+  --color-search-scrim-soft: oklch(7% 0.004 95 / 0.78);
+  --color-search-scrim-clear: oklch(7% 0.004 95 / 0);
   --color-focus: oklch(82% 0.06 92);
   --color-error: oklch(70% 0.14 25);
 
@@ -30,7 +37,7 @@
   --admin-success: oklch(78% 0.13 145);
   --admin-focus: var(--color-focus);
 
-  --font-display: "Fraunces", ui-serif, Georgia, serif;
+  --font-display: "Space Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-body: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
 
