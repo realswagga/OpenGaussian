@@ -402,8 +402,11 @@ button {
 }
 
 .catalog-console {
+  --catalog-rim: var(--color-rule);
+  --catalog-rim-strong: var(--color-rule-strong);
+
   position: sticky;
-  top: 76px;
+  top: 68px;
   z-index: 20;
   isolation: isolate;
   display: grid;
@@ -412,12 +415,21 @@ button {
   gap: var(--space-sm);
   padding: var(--space-sm);
   border: var(--rule);
+  border-color: var(--catalog-rim);
   border-radius: var(--radius-card);
   background: var(--color-panel-solid);
   backdrop-filter: blur(18px);
   overflow-anchor: none;
   scroll-margin-top: 78px;
   box-shadow: 0 12px 38px oklch(0% 0 0 / 0.24);
+  transform-origin: top center;
+  will-change: transform;
+  transition:
+    transform var(--dur-long) var(--ease-out),
+    border-radius var(--dur-long) var(--ease-out),
+    border-color var(--dur-short) var(--ease-out),
+    background-color var(--dur-short) var(--ease-out),
+    box-shadow var(--dur-long) var(--ease-out);
 }
 
 .catalog-console::before {
@@ -433,6 +445,24 @@ button {
     var(--color-search-scrim-soft) 72%,
     var(--color-search-scrim-clear) 100%
   );
+  opacity: 0.82;
+  transition:
+    inset var(--dur-long) var(--ease-out),
+    opacity var(--dur-long) var(--ease-out);
+}
+
+.catalog-console.is-docked {
+  border-top-color: var(--catalog-rim-strong);
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  background: oklch(7% 0.004 95 / 0.92);
+  box-shadow: 0 20px 62px oklch(0% 0 0 / 0.36);
+  transform: translateY(-1px) scaleX(1.018);
+}
+
+.catalog-console.is-docked::before {
+  inset: -1px -24px -22px;
+  opacity: 0.94;
 }
 
 .catalog-console-head {
@@ -491,6 +521,7 @@ button {
   width: 100%;
   min-height: 44px;
   border: var(--rule);
+  border-color: var(--catalog-rim, var(--color-rule));
   border-radius: var(--radius-md);
   outline: 2px solid transparent;
   outline-offset: 1px;
@@ -533,6 +564,7 @@ button {
   gap: var(--space-3xs);
   padding: var(--space-2xs) calc(var(--space-lg) + var(--space-xs)) var(--space-2xs) var(--space-sm);
   border: var(--rule);
+  border-color: var(--catalog-rim, var(--color-rule));
   border-radius: var(--radius-md);
   background: var(--color-panel);
   color: var(--color-ink);
@@ -584,11 +616,12 @@ button {
   top: calc(100% + var(--space-xs));
   right: 0;
   z-index: 40;
-  width: min(360px, calc(100vw - 32px));
+  width: min(304px, calc(100vw - 32px));
   display: grid;
-  gap: var(--space-md);
-  padding: var(--space-md);
+  gap: var(--space-sm);
+  padding: var(--space-sm);
   border: var(--rule);
+  border-color: var(--catalog-rim, var(--color-rule));
   border-radius: var(--radius-card);
   background: var(--color-panel-popover);
   box-shadow: 0 24px 70px oklch(0% 0 0 / 0.42);
@@ -597,7 +630,7 @@ button {
 
 .catalog-filter-section {
   display: grid;
-  gap: var(--space-xs);
+  gap: var(--space-2xs);
 }
 
 .catalog-filter-label {
@@ -608,21 +641,45 @@ button {
   text-transform: uppercase;
 }
 
-.catalog-segmented {
+.catalog-filter-combo {
+  display: grid;
+  gap: var(--space-2xs);
+  color: var(--color-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.catalog-filter-combo select {
+  min-height: 36px;
+  width: 100%;
+  padding: 0 var(--space-sm);
+  border: var(--rule);
+  border-color: var(--catalog-rim, var(--color-rule));
+  border-radius: var(--radius-md);
+  background: var(--color-panel-solid);
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.catalog-direction-tabs {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-2xs);
-  padding: var(--space-2xs);
-  border: var(--rule);
-  border-radius: var(--radius-md);
-  background: var(--color-panel-solid);
 }
 
-.catalog-segmented button {
-  min-height: 38px;
-  padding: 0 var(--space-sm);
+.catalog-direction-tabs button {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2xs);
+  padding: 0 var(--space-xs);
+  border: var(--rule);
+  border-color: var(--catalog-rim, var(--color-rule));
   border-radius: var(--radius-sm);
-  background: transparent;
+  background: var(--color-panel-solid);
   color: var(--color-ink-soft);
   cursor: pointer;
   font-weight: 700;
@@ -632,38 +689,58 @@ button {
     transform var(--dur-micro) var(--ease-out);
 }
 
-.catalog-segmented button.active {
+.catalog-direction-tabs svg {
+  width: 0.98rem;
+  height: 0.98rem;
+  flex: 0 0 auto;
+}
+
+.catalog-direction-tabs path {
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
+}
+
+.catalog-direction-tabs button.active {
+  border-color: var(--color-accent);
   background: var(--color-accent);
   color: var(--color-accent-ink);
 }
 
 .catalog-filter-checks {
   display: grid;
-  gap: var(--space-xs);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2xs);
 }
 
 .catalog-filter-checks label {
-  min-height: 42px;
+  min-height: 34px;
   display: flex;
   align-items: center;
-  gap: var(--space-xs);
-  padding: 0 var(--space-sm);
+  justify-content: center;
+  gap: var(--space-2xs);
+  padding: 0 var(--space-xs);
   border: var(--rule);
-  border-radius: var(--radius-md);
+  border-color: var(--catalog-rim, var(--color-rule));
+  border-radius: var(--radius-sm);
   background: var(--color-panel-solid);
   color: var(--color-ink-soft);
   cursor: pointer;
+  font-weight: 700;
 }
 
 .catalog-filter-checks input {
-  width: 1rem;
-  height: 1rem;
+  width: 0.86rem;
+  height: 0.86rem;
   accent-color: var(--color-accent);
 }
 
 @media (hover: hover) {
   .catalog-filter-trigger:hover,
-  .catalog-segmented button:hover,
+  .catalog-filter-combo select:hover,
+  .catalog-direction-tabs button:hover,
   .catalog-filter-checks label:hover {
     border-color: var(--color-rule-strong);
     background: var(--color-panel-2);
@@ -674,7 +751,8 @@ button {
     transform: translateY(-1px);
   }
 
-  .catalog-segmented button.active:hover {
+  .catalog-direction-tabs button.active:hover {
+    border-color: var(--color-accent);
     background: var(--color-accent);
     color: var(--color-accent-ink);
   }
@@ -1055,6 +1133,11 @@ button {
     position: relative;
     top: auto;
     grid-template-columns: 1fr;
+  }
+
+  .catalog-console.is-docked {
+    border-radius: var(--radius-card);
+    transform: none;
   }
 
   .catalog-controls {

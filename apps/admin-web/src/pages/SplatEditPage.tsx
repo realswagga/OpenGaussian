@@ -76,8 +76,8 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, 
           <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required style={fieldStyle} />
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Slug</span>
-          <input type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} required pattern="[a-z0-9-]+" placeholder="my-scene-slug" style={fieldStyle} />
+          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>URL handle</span>
+          <input type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} required pattern="[a-z0-9-]+" placeholder="my-scene" style={fieldStyle} />
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
           <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Description</span>

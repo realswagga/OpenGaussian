@@ -135,7 +135,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
               <input className="admin-input" value={form.name} onChange={(event) => setForm((f) => ({ ...f, name: event.target.value, slug: f.slug || slugify(event.target.value) }))} required />
             </label>
             <label className="admin-label">
-              Slug
+              URL handle
               <input className="admin-input" value={form.slug} onChange={(event) => setForm((f) => ({ ...f, slug: slugify(event.target.value) }))} required />
             </label>
             <label className="admin-label">

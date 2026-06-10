@@ -1,4 +1,4 @@
-import { useEffect, useState, type MouseEvent } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AuthUser } from '@gsplat/shared';
 
@@ -15,13 +15,7 @@ function initials(user: AuthUser) {
   return source.slice(0, 2).toUpperCase();
 }
 
-export default function PublicNav({
-  onExplore,
-  user: controlledUser,
-}: {
-  onExplore?: (event: MouseEvent<HTMLAnchorElement>) => void;
-  user?: AuthUser | null;
-}) {
+export default function PublicNav({ user: controlledUser }: { user?: AuthUser | null }) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const activeUser = controlledUser === undefined ? user : controlledUser;
 
@@ -40,12 +34,7 @@ export default function PublicNav({
     <nav className="og-nav" aria-label="Primary navigation">
       <Link className="og-brand" to="/">OpenGaussian</Link>
       <div className="og-nav-links">
-        {onExplore ? (
-          <a className="og-nav-link" href="#catalog" onClick={onExplore}>Explore</a>
-        ) : (
-          <a className="og-nav-link" href="/#catalog">Explore</a>
-        )}
-        {activeUser?.capabilities?.canAccessAdmin && <Link className="og-nav-link" to="/admin">Admin</Link>}
+        {activeUser?.capabilities?.canAccessAdmin && <a className="og-nav-link" href="/admin/">Admin</a>}
         {activeUser ? (
           <Link className="og-user-chip" to="/login" title={activeUser.email}>
             <span className="og-user-dot" aria-hidden="true">{initials(activeUser)}</span>

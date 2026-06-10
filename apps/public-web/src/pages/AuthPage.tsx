@@ -77,7 +77,7 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
               </p>
               <div className="og-hero-actions">
                 <Link className="og-button" to="/search">Browse catalog</Link>
-                {user.capabilities?.canAccessAdmin && <Link className="og-button-secondary" to="/admin">Open admin</Link>}
+                {user.capabilities?.canAccessAdmin && <a className="og-button-secondary" href="/admin/">Open admin</a>}
                 <button className="og-button-secondary" type="button" onClick={logout}>Sign out</button>
               </div>
             </>

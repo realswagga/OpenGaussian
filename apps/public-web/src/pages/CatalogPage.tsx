@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent as ReactMouseEvent } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { OrganizationSummary, SearchResponse, SplatListItem } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
@@ -82,20 +82,6 @@ function organizationToItem(org: OrganizationSummary): CatalogItem {
   };
 }
 
-function useReducedMotion() {
-  const [reduced, setReduced] = useState(false);
-
-  useEffect(() => {
-    const query = window.matchMedia('(prefers-reduced-motion: reduce)');
-    setReduced(query.matches);
-    const update = () => setReduced(query.matches);
-    query.addEventListener('change', update);
-    return () => query.removeEventListener('change', update);
-  }, []);
-
-  return reduced;
-}
-
 function SplatPointField() {
   return (
     <div className="catalog-hero-pointfield" aria-hidden="true">
@@ -173,10 +159,11 @@ export default function CatalogPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
   const [featuredHeroItem, setFeaturedHeroItem] = useState<CatalogItem | null>(null);
   const [resultsMinHeight, setResultsMinHeight] = useState(560);
-  const reducedMotion = useReducedMotion();
+  const [catalogDocked, setCatalogDocked] = useState(false);
 
   useEffect(() => {
     const nextQuery = params.get('q') ?? '';
@@ -236,6 +223,21 @@ export default function CatalogPage() {
     };
   }, [settingsOpen]);
 
+  useEffect(() => {
+    const updateDocked = () => {
+      const top = consoleRef.current?.getBoundingClientRect().top ?? Number.POSITIVE_INFINITY;
+      setCatalogDocked(top <= 69);
+    };
+
+    updateDocked();
+    window.addEventListener('scroll', updateDocked, { passive: true });
+    window.addEventListener('resize', updateDocked);
+    return () => {
+      window.removeEventListener('scroll', updateDocked);
+      window.removeEventListener('resize', updateDocked);
+    };
+  }, []);
+
   const items = useMemo(() => {
     const combined: CatalogItem[] = [
       ...(includeSplats ? (data?.splats ?? []).map(splatToItem) : []),
@@ -256,8 +258,8 @@ export default function CatalogPage() {
   const feedKey = `${query}|${includeSplats}|${includeOrganizations}|${sortField}|${sortDirection}|${items.map((item) => item.id).join(':')}`;
   const isInitialLoading = loading && !data;
   const isRefreshing = loading && Boolean(data);
-  const filterCount = Number(includeSplats) + Number(includeOrganizations);
-  const filterSummary = `${sortFieldLabel(sortField)} / ${sortDirection === 'asc' ? 'Asc' : 'Desc'} / ${filterCount} type${filterCount === 1 ? '' : 's'}`;
+  const typeSummary = includeSplats && includeOrganizations ? 'Splats + Orgs' : includeSplats ? 'Splats' : includeOrganizations ? 'Orgs' : 'None';
+  const filterSummary = `${sortFieldLabel(sortField)} / ${sortDirection === 'asc' ? 'Asc' : 'Desc'} / ${typeSummary}`;
 
   useLayoutEffect(() => {
     if (!resultsRef.current || isInitialLoading || items.length === 0) return;
@@ -270,12 +272,6 @@ export default function CatalogPage() {
   useEffect(() => {
     if (heroCandidate) setFeaturedHeroItem(heroCandidate);
   }, [heroCandidate]);
-
-  const scrollToCatalog = (event: ReactMouseEvent<HTMLAnchorElement>) => {
-    event.preventDefault();
-    const target = document.getElementById('catalog');
-    target?.scrollIntoView({ behavior: reducedMotion ? 'auto' : 'smooth', block: 'start' });
-  };
 
   const heroPreview = (
     <>
@@ -300,7 +296,7 @@ export default function CatalogPage() {
   return (
     <div className="og-shell">
       <div className="og-backdrop" aria-hidden="true" />
-      <PublicNav onExplore={scrollToCatalog} />
+      <PublicNav />
 
       <main className="og-page">
         <section className="og-hero">
@@ -310,9 +306,6 @@ export default function CatalogPage() {
             <p>
               Search splats and organizations from one quiet surface, then open a scene without losing the visual thread.
             </p>
-            <div className="og-hero-actions">
-              <a className="og-button" href="#catalog" onClick={scrollToCatalog}>Explore splats</a>
-            </div>
           </div>
 
           {heroItem ? (
@@ -326,7 +319,7 @@ export default function CatalogPage() {
           )}
         </section>
 
-        <section className="catalog-console" id="catalog" aria-label="Search catalog">
+        <section ref={consoleRef} className={`catalog-console${catalogDocked ? ' is-docked' : ''}`} id="catalog" aria-label="Search catalog">
           <div className="catalog-console-head">
             <div>
               <p className="og-kicker">Search area</p>
@@ -343,7 +336,7 @@ export default function CatalogPage() {
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Find a scene, organization, or slug"
+                placeholder="Search scenes or organizations"
                 aria-label="Search splats and organizations"
               />
             </label>
@@ -362,26 +355,28 @@ export default function CatalogPage() {
 
               {settingsOpen && (
                 <div className="catalog-filter-popover" role="dialog" aria-label="Sort and filter results">
-                  <div className="catalog-filter-section">
-                    <span className="catalog-filter-label">Sort by</span>
-                    <div className="catalog-segmented" role="group" aria-label="Sort by">
-                      <button type="button" className={sortField === 'date' ? 'active' : ''} aria-pressed={sortField === 'date'} onClick={() => setSortField('date')}>
-                        Date
-                      </button>
-                      <button type="button" className={sortField === 'count' ? 'active' : ''} aria-pressed={sortField === 'count'} onClick={() => setSortField('count')}>
-                        Splat count
-                      </button>
-                    </div>
-                  </div>
+                  <label className="catalog-filter-combo">
+                    <span>Sort by</span>
+                    <select value={sortField} onChange={(event) => setSortField(event.target.value as SortField)}>
+                      <option value="date">Date</option>
+                      <option value="count">Splat count</option>
+                    </select>
+                  </label>
 
                   <div className="catalog-filter-section">
                     <span className="catalog-filter-label">Direction</span>
-                    <div className="catalog-segmented" role="group" aria-label="Sort direction">
+                    <div className="catalog-direction-tabs" role="group" aria-label="Sort direction">
                       <button type="button" className={sortDirection === 'desc' ? 'active' : ''} aria-pressed={sortDirection === 'desc'} onClick={() => setSortDirection('desc')}>
-                        Desc
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                          <path d="M12 5v14m0 0 5-5m-5 5-5-5" />
+                        </svg>
+                        <span>Desc</span>
                       </button>
                       <button type="button" className={sortDirection === 'asc' ? 'active' : ''} aria-pressed={sortDirection === 'asc'} onClick={() => setSortDirection('asc')}>
-                        Asc
+                        <svg aria-hidden="true" viewBox="0 0 24 24">
+                          <path d="M12 19V5m0 0 5 5m-5-5-5 5" />
+                        </svg>
+                        <span>Asc</span>
                       </button>
                     </div>
                   </div>
@@ -391,11 +386,11 @@ export default function CatalogPage() {
                     <div className="catalog-filter-checks" aria-label="Result type filters">
                       <label>
                         <input type="checkbox" checked={includeSplats} onChange={(event) => setIncludeSplats(event.target.checked)} />
-                        <span>Splat scenes</span>
+                        <span>Splats</span>
                       </label>
                       <label>
                         <input type="checkbox" checked={includeOrganizations} onChange={(event) => setIncludeOrganizations(event.target.checked)} />
-                        <span>Organizations</span>
+                        <span>Orgs</span>
                       </label>
                     </div>
                   </div>
