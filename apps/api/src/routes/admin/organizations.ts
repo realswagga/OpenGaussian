@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import {
   createMembershipSchema,
@@ -48,6 +48,43 @@ function assetUrl(assetBaseUrl: string, key?: string | null): string | null {
   if (!key) return null;
   if (/^https?:\/\//i.test(key) || key.startsWith('/')) return key;
   return `${assetBaseUrl}/${key}`;
+}
+
+async function listPreviewObjects(prefix: string, currentKey?: string | null) {
+  const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+  const listed = await s3Client.send(new ListObjectsV2Command({
+    Bucket: S3_BUCKET,
+    Prefix: prefix,
+    MaxKeys: 60,
+  }));
+
+  const seen = new Set<string>();
+  const items = (listed.Contents ?? [])
+    .filter((object) => object.Key)
+    .sort((a, b) => (b.LastModified?.getTime() ?? 0) - (a.LastModified?.getTime() ?? 0))
+    .map((object) => {
+      const key = object.Key!;
+      seen.add(key);
+      return {
+        key,
+        previewUrl: assetUrl(assetBaseUrl, key),
+        label: key.split('/').pop() ?? key,
+        current: key === currentKey,
+        createdAt: object.LastModified?.toISOString() ?? null,
+      };
+    });
+
+  if (currentKey && !seen.has(currentKey)) {
+    items.unshift({
+      key: currentKey,
+      previewUrl: assetUrl(assetBaseUrl, currentKey),
+      label: currentKey.split('/').pop() ?? currentKey,
+      current: true,
+      createdAt: null,
+    });
+  }
+
+  return items;
 }
 
 function serializeOrganization(org: any, currentUserRole?: string, assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets') {
@@ -302,6 +339,25 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
         height: dimensions.height,
       },
     };
+  });
+
+  app.get('/organizations/:id/previews', async (request, reply) => {
+    const auth = request as AuthRequest;
+    const { id } = request.params as { id: string };
+    if (!await canAccessOrganization(prisma, auth, id, 'view')) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Organization access denied' } });
+    }
+
+    const organization = await prisma.organization.findUnique({
+      where: { id },
+      select: { previewKey: true },
+    });
+    if (!organization) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Organization not found' } });
+    }
+
+    const items = await listPreviewObjects(`organizations/${id}/preview/`, organization.previewKey);
+    return { items };
   });
 
   app.get('/organizations/:id/members', async (request, reply) => {

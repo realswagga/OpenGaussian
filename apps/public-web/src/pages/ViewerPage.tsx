@@ -83,6 +83,24 @@ async function probeVrSupport(): Promise<boolean> {
   }
 }
 
+function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/jpeg', quality = 0.92) {
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob((blob) => {
+      if (blob) resolve(blob);
+      else reject(new Error('Canvas capture failed'));
+    }, type, quality);
+  });
+}
+
+function blobToDataUrl(blob: Blob) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Canvas capture could not be encoded'));
+    reader.readAsDataURL(blob);
+  });
+}
+
 export default function ViewerPage() {
   const { slug } = useParams<{ slug: string }>();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -124,6 +142,8 @@ export default function ViewerPage() {
   const [vrSupported, setVrSupported] = useState<boolean | null>(null);
   const [vrChecked, setVrChecked] = useState(false);
   const [showDebug, setShowDebug] = useState(() => localStorage.getItem(VIEWER_READY_KEY + '_debug') === 'true');
+  const [adminCanCapturePreview, setAdminCanCapturePreview] = useState(false);
+  const [capturePreviewBusy, setCapturePreviewBusy] = useState(false);
   const [showQuestPerf, setShowQuestPerf] = useState(() => {
     if (typeof window === 'undefined') return false;
     const params = new URLSearchParams(window.location.search);
@@ -184,6 +204,19 @@ export default function ViewerPage() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/auth/me`, { credentials: 'include' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled) setAdminCanCapturePreview(Boolean(data?.user?.capabilities?.canAccessAdmin));
+      })
+      .catch(() => {
+        if (!cancelled) setAdminCanCapturePreview(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
   // Fetch manifest and markers
   useEffect(() => {
     if (!slug) return;
@@ -233,6 +266,30 @@ export default function ViewerPage() {
     setShowQuestPerf(visible);
     localStorage.setItem(VIEWER_READY_KEY + '_quest_perf', String(visible));
   }, []);
+
+  const handleTakePreview = useCallback(async () => {
+    if (!manifest || !canvasRef.current || !viewerReady || capturePreviewBusy) return;
+
+    setCapturePreviewBusy(true);
+    setVrError(null);
+    try {
+      const canvas = canvasRef.current;
+      const blob = await canvasToBlob(canvas);
+      const dataUrl = await blobToDataUrl(blob);
+      const createdAt = new Date().toISOString();
+      sessionStorage.setItem(`gsplat_taken_preview_${manifest.id}`, JSON.stringify({
+        dataUrl,
+        name: `${manifest.slug}-viewer-${Date.now()}.jpg`,
+        width: canvas.width,
+        height: canvas.height,
+        createdAt,
+      }));
+      window.location.assign(`/admin/splats/${manifest.id}?tab=preview`);
+    } catch (err) {
+      setVrError(err instanceof Error ? err.message : 'Preview capture failed');
+      setCapturePreviewBusy(false);
+    }
+  }, [capturePreviewBusy, manifest, viewerReady]);
 
   const startQuestPerfCapture = useCallback((experiments?: QuestPerfExperiment[]) => {
     if (!manifest) return;
@@ -744,6 +801,20 @@ export default function ViewerPage() {
           >
             Quest Perf
           </button>
+          {adminCanCapturePreview && (
+            <button
+              onClick={handleTakePreview}
+              disabled={!viewerReady || capturePreviewBusy}
+              style={{
+                ...styles.takePreviewButton,
+                ...(!viewerReady || capturePreviewBusy ? styles.takePreviewButtonDisabled : {}),
+              }}
+              title={viewerReady ? 'Capture the viewer canvas for the admin preview editor' : 'Wait for the scene to finish loading'}
+              aria-label="Take preview"
+            >
+              {capturePreviewBusy ? 'Taking...' : 'Take preview'}
+            </button>
+          )}
           {manifest.viewer?.enableVr && vrSupported && (
             <button
               onClick={vrActive ? handleExitVr : handleEnterVr}
@@ -1127,6 +1198,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
+    gap: '0.75rem',
+    flexWrap: 'wrap',
     padding: '0.75rem 1rem',
     background: '#0d0d0d',
     borderBottom: '1px solid #2a2a2a',
@@ -1134,6 +1207,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   topBarLeft: {
+    minWidth: 0,
     display: 'flex',
     alignItems: 'center',
     gap: '1rem',
@@ -1144,14 +1218,20 @@ const styles: Record<string, React.CSSProperties> = {
     fontSize: '0.875rem',
   },
   sceneTitle: {
+    minWidth: 0,
     color: '#f5f5f5',
     fontWeight: 600,
     fontSize: '0.9375rem',
+    overflow: 'hidden',
+    textOverflow: 'ellipsis',
+    whiteSpace: 'nowrap',
   },
   controlsGroup: {
     display: 'flex',
     gap: '0.5rem',
     alignItems: 'center',
+    justifyContent: 'flex-end',
+    flexWrap: 'wrap',
   },
   selectInput: {
     padding: '0.375rem 0.75rem',
@@ -1179,6 +1259,20 @@ const styles: Record<string, React.CSSProperties> = {
     color: '#a7f3d0',
     cursor: 'pointer',
     fontSize: '0.75rem',
+  },
+  takePreviewButton: {
+    padding: '0.375rem 0.75rem',
+    background: '#f5f5f5',
+    border: '1px solid #f5f5f5',
+    borderRadius: 6,
+    color: '#050505',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    fontWeight: 700,
+  },
+  takePreviewButtonDisabled: {
+    opacity: 0.48,
+    cursor: 'not-allowed',
   },
   mainContent: {
     flex: 1,

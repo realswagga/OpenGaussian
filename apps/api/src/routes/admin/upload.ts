@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
-import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { S3Client, ListObjectsV2Command, PutObjectCommand } from '@aws-sdk/client-s3';
 import { randomUUID } from 'node:crypto';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
 import { canAccessSplat } from './permissions.js';
@@ -37,6 +37,49 @@ const s3Client = new S3Client({
 });
 
 const S3_BUCKET = process.env.S3_BUCKET || 'gsplat-assets';
+
+function assetUrl(assetBaseUrl: string, key?: string | null): string | null {
+  if (!key) return null;
+  if (/^https?:\/\//i.test(key) || key.startsWith('/')) return key;
+  return `${assetBaseUrl}/${key}`;
+}
+
+async function listPreviewObjects(prefix: string, currentKey?: string | null) {
+  const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+  const listed = await s3Client.send(new ListObjectsV2Command({
+    Bucket: S3_BUCKET,
+    Prefix: prefix,
+    MaxKeys: 60,
+  }));
+
+  const seen = new Set<string>();
+  const items = (listed.Contents ?? [])
+    .filter((object) => object.Key)
+    .sort((a, b) => (b.LastModified?.getTime() ?? 0) - (a.LastModified?.getTime() ?? 0))
+    .map((object) => {
+      const key = object.Key!;
+      seen.add(key);
+      return {
+        key,
+        previewUrl: assetUrl(assetBaseUrl, key),
+        label: key.split('/').pop() ?? key,
+        current: key === currentKey,
+        createdAt: object.LastModified?.toISOString() ?? null,
+      };
+    });
+
+  if (currentKey && !seen.has(currentKey)) {
+    items.unshift({
+      key: currentKey,
+      previewUrl: assetUrl(assetBaseUrl, currentKey),
+      label: currentKey.split('/').pop() ?? currentKey,
+      current: true,
+      createdAt: null,
+    });
+  }
+
+  return items;
+}
 
 export async function adminUploadRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -288,5 +331,25 @@ export async function adminUploadRoutes(app: FastifyInstance) {
         height: dimensions.height,
       },
     };
+  });
+
+  // GET /api/admin/splats/:id/previews
+  app.get('/splats/:id/previews', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
+    const splat = access.splat;
+    if (!splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
+      });
+    }
+
+    const items = await listPreviewObjects(`splats/${id}/preview/`, splat.posterKey);
+    return { items };
   });
 }

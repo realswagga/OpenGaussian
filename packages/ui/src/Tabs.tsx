@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 
 interface Tab {
   id: string;
@@ -9,6 +9,8 @@ interface Tab {
 interface TabsProps {
   tabs: Tab[];
   defaultTabId?: string;
+  activeTabId?: string;
+  onTabChange?: (tabId: string) => void;
   className?: string;
 }
 
@@ -38,8 +40,20 @@ const tabButtonActiveStyle: React.CSSProperties = {
   borderBottomColor: '#f5f5f5',
 };
 
-export const Tabs: React.FC<TabsProps> = ({ tabs, defaultTabId, className = '' }) => {
-  const [activeTabId, setActiveTabId] = useState(defaultTabId || (tabs[0]?.id ?? ''));
+export const Tabs: React.FC<TabsProps> = ({ tabs, defaultTabId, activeTabId: controlledActiveTabId, onTabChange, className = '' }) => {
+  const firstTabId = tabs[0]?.id ?? '';
+  const [internalActiveTabId, setInternalActiveTabId] = useState(defaultTabId || firstTabId);
+  const activeTabId = controlledActiveTabId ?? internalActiveTabId;
+
+  useEffect(() => {
+    if (controlledActiveTabId) return;
+    setInternalActiveTabId(defaultTabId || firstTabId);
+  }, [controlledActiveTabId, defaultTabId, firstTabId]);
+
+  const handleTabChange = (tabId: string) => {
+    if (!controlledActiveTabId) setInternalActiveTabId(tabId);
+    onTabChange?.(tabId);
+  };
 
   const activeTab = tabs.find((t) => t.id === activeTabId) || tabs[0];
 
@@ -50,7 +64,7 @@ export const Tabs: React.FC<TabsProps> = ({ tabs, defaultTabId, className = '' }
           <button
             key={tab.id}
             style={tab.id === activeTabId ? tabButtonActiveStyle : tabButtonStyle}
-            onClick={() => setActiveTabId(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
           >
             {tab.label}
           </button>

@@ -1,4 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ChangeEvent, type ClipboardEvent, type PointerEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ChangeEvent,
+  type ClipboardEvent as ReactClipboardEvent,
+  type PointerEvent,
+} from 'react';
 import { Card, Button } from '@gsplat/ui';
 
 const ASSET_BASE = import.meta.env.VITE_ASSET_BASE_URL || '/assets';
@@ -21,18 +31,40 @@ interface CropRect {
   height: number;
 }
 
+interface PreviewHistoryItem {
+  id: string;
+  key?: string;
+  url: string;
+  label: string;
+  createdAt?: string | null;
+  current?: boolean;
+  source: 'stored' | 'capture';
+}
+
+interface TakenPreviewPayload {
+  dataUrl: string;
+  name?: string;
+  width?: number;
+  height?: number;
+  createdAt?: string;
+}
+
 interface PreviewImageEditorProps {
   currentKey: string | null;
   currentLabel?: string;
   emptyLabel?: string;
   outputFilename: string;
   uploadUrl: string;
+  historyUrl?: string;
+  incomingSourceKey?: string;
+  className?: string;
   onUploaded: (previewKey: string) => void;
 }
 
 function assetUrl(key?: string | null, cacheKey?: number) {
   if (!key) return null;
   const suffix = cacheKey ? `?v=${cacheKey}` : '';
+  if (/^https?:\/\//i.test(key) || key.startsWith('/')) return `${key}${suffix}`;
   return `${ASSET_BASE}/${key}${suffix}`;
 }
 
@@ -92,6 +124,34 @@ function isEditableElement(element: Element | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable;
 }
 
+function validatePreviewSource(file: File): string | null {
+  const allowedType = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type);
+  const allowedName = /\.(jpe?g|png|webp)$/i.test(file.name);
+  if (!allowedType && !allowedName) return 'Preview source must be a JPEG, PNG, or WebP image.';
+  if (file.size > MAX_PREVIEW_SOURCE_MB * 1024 * 1024) return `Preview source exceeds ${MAX_PREVIEW_SOURCE_MB} MB.`;
+  return null;
+}
+
+function readImageFile(file: File) {
+  return new Promise<PreviewSource>((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => resolve({ file, url, width: image.naturalWidth, height: image.naturalHeight });
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('Preview source could not be loaded.'));
+    };
+    image.src = url;
+  });
+}
+
+async function fileFromUrl(url: string, filename: string) {
+  const res = await fetch(url, url.startsWith('data:') ? undefined : { credentials: 'include' });
+  if (!res.ok) throw new Error(`Preview source could not be loaded (${res.status}).`);
+  const blob = await res.blob();
+  return new File([blob], filename, { type: blob.type || 'image/jpeg' });
+}
+
 async function renderPreviewBlob(source: PreviewSource, crop: CropRect) {
   const image = await loadImage(source.url);
   const canvas = document.createElement('canvas');
@@ -125,15 +185,26 @@ async function renderPreviewBlob(source: PreviewSource, crop: CropRect) {
   });
 }
 
+function displayDate(value?: string | null) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
 export default function PreviewImageEditor({
   currentKey,
   currentLabel = 'Current preview',
   emptyLabel = 'No preview image',
   outputFilename,
   uploadUrl,
+  historyUrl,
+  incomingSourceKey,
+  className = '',
   onUploaded,
 }: PreviewImageEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
+  const managerRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
   const [source, setSource] = useState<PreviewSource | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -144,16 +215,13 @@ export default function PreviewImageEditor({
   const [loadingSource, setLoadingSource] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
+  const [storedHistory, setStoredHistory] = useState<PreviewHistoryItem[]>([]);
+  const [capturedHistory, setCapturedHistory] = useState<PreviewHistoryItem[]>([]);
 
-  const selectSource = (file: File) => {
-    const allowedType = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type);
-    const allowedName = /\.(jpe?g|png|webp)$/i.test(file.name);
-    if (!allowedType && !allowedName) {
-      setError('Preview source must be a JPEG, PNG, or WebP image.');
-      return;
-    }
-    if (file.size > MAX_PREVIEW_SOURCE_MB * 1024 * 1024) {
-      setError(`Preview source exceeds ${MAX_PREVIEW_SOURCE_MB} MB.`);
+  const selectSource = useCallback(async (file: File) => {
+    const validationError = validatePreviewSource(file);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -161,22 +229,68 @@ export default function PreviewImageEditor({
     setError('');
     setMessage('');
 
-    const url = URL.createObjectURL(file);
-    const image = new Image();
-    image.onload = () => {
-      setSource({ file, url, width: image.naturalWidth, height: image.naturalHeight });
+    try {
+      const nextSource = await readImageFile(file);
+      setSource(nextSource);
       setZoom(1);
       setOffsetX(0);
       setOffsetY(0);
+      panelRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Preview source could not be loaded.');
+    } finally {
       setLoadingSource(false);
-    };
-    image.onerror = () => {
-      URL.revokeObjectURL(url);
+    }
+  }, []);
+
+  const loadSourceFromUrl = useCallback(async (url: string, label: string) => {
+    setLoadingSource(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const file = await fileFromUrl(url, label);
+      const validationError = validatePreviewSource(file);
+      if (validationError) throw new Error(validationError);
+      const nextSource = await readImageFile(file);
+      setSource(nextSource);
+      setZoom(1);
+      setOffsetX(0);
+      setOffsetY(0);
+      panelRef.current?.focus();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Preview source could not be loaded.');
+    } finally {
       setLoadingSource(false);
-      setError('Preview source could not be loaded.');
-    };
-    image.src = url;
-  };
+    }
+  }, []);
+
+  const loadHistory = useCallback(async () => {
+    if (!historyUrl) return;
+    try {
+      const res = await fetch(historyUrl, { credentials: 'include' });
+      if (!res.ok) throw new Error(`Preview history failed (${res.status})`);
+      const data = await res.json();
+      const items = (data.items || [])
+        .filter((item: { previewUrl?: string | null }) => item.previewUrl)
+        .map((item: { key?: string; previewUrl: string; label?: string; createdAt?: string | null; current?: boolean }) => ({
+          id: item.key || item.previewUrl,
+          key: item.key,
+          url: item.previewUrl,
+          label: item.label || item.key?.split('/').pop() || 'Preview',
+          createdAt: item.createdAt ?? null,
+          current: Boolean(item.current),
+          source: 'stored' as const,
+        }));
+      setStoredHistory(items);
+    } catch {
+      setStoredHistory([]);
+    }
+  }, [historyUrl]);
+
+  useEffect(() => {
+    void loadHistory();
+  }, [loadHistory, currentKey]);
 
   useEffect(() => {
     return () => {
@@ -184,29 +298,74 @@ export default function PreviewImageEditor({
     };
   }, [source?.url]);
 
+  useEffect(() => {
+    if (!incomingSourceKey) return;
+    const raw = sessionStorage.getItem(incomingSourceKey);
+    if (!raw) return;
+    sessionStorage.removeItem(incomingSourceKey);
+
+    try {
+      const payload = JSON.parse(raw) as TakenPreviewPayload;
+      if (!payload.dataUrl) return;
+      const createdAt = payload.createdAt || new Date().toISOString();
+      const label = payload.name || `taken-preview-${Date.now()}.jpg`;
+      const item: PreviewHistoryItem = {
+        id: `capture:${createdAt}`,
+        url: payload.dataUrl,
+        label,
+        createdAt,
+        current: false,
+        source: 'capture',
+      };
+      setCapturedHistory((current) => [item, ...current].slice(0, 8));
+      void loadSourceFromUrl(payload.dataUrl, label);
+      setMessage('Taken preview loaded for reframing.');
+    } catch {
+      setError('Taken preview could not be loaded.');
+    }
+  }, [incomingSourceKey, loadSourceFromUrl]);
+
+  useEffect(() => {
+    const handleWindowPaste = (event: ClipboardEvent) => {
+      if (event.defaultPrevented || saving || loadingSource || !managerRef.current) return;
+      if (isEditableElement(document.activeElement)) return;
+
+      const file = imageFileFromClipboard(event.clipboardData);
+      if (!file) return;
+
+      event.preventDefault();
+      void selectSource(file);
+    };
+
+    window.addEventListener('paste', handleWindowPaste);
+    return () => window.removeEventListener('paste', handleWindowPaste);
+  }, [loadingSource, saving, selectSource]);
+
   const crop = useMemo(() => {
     if (!source) return null;
     return getCropRect(source, zoom, offsetX, offsetY);
   }, [source, zoom, offsetX, offsetY]);
 
   const currentPreviewUrl = assetUrl(currentKey, cacheKey);
+  const historyItems = useMemo(() => [...capturedHistory, ...storedHistory], [capturedHistory, storedHistory]);
   const canPanX = Boolean(source && crop && source.width - crop.width > 1);
   const canPanY = Boolean(source && crop && source.height - crop.height > 1);
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
-    if (file) selectSource(file);
+    if (file) void selectSource(file);
     event.target.value = '';
   };
 
-  const handlePanelPaste = (event: ClipboardEvent<HTMLElement>) => {
+  const handlePanelPaste = (event: ReactClipboardEvent<HTMLElement>) => {
     if (saving || loadingSource || isEditableElement(event.target as Element)) return;
 
     const file = imageFileFromClipboard(event.clipboardData);
     if (!file) return;
 
     event.preventDefault();
-    selectSource(file);
+    event.stopPropagation();
+    void selectSource(file);
   };
 
   const focusPanelFromSurface = (event: PointerEvent<HTMLElement>) => {
@@ -220,6 +379,15 @@ export default function PreviewImageEditor({
     setZoom(1);
     setOffsetX(0);
     setOffsetY(0);
+  };
+
+  const reframeCurrent = () => {
+    if (!currentPreviewUrl) return;
+    void loadSourceFromUrl(currentPreviewUrl, currentKey?.split('/').pop() || outputFilename);
+  };
+
+  const chooseHistoryItem = (item: PreviewHistoryItem) => {
+    void loadSourceFromUrl(item.url, item.label);
   };
 
   const uploadPreview = async () => {
@@ -248,8 +416,22 @@ export default function PreviewImageEditor({
       const nextPreviewKey = data.preview?.previewKey || data.preview?.posterKey;
       if (!nextPreviewKey) throw new Error('Preview upload returned no image key');
 
+      const nextCacheKey = Date.now();
+      const nextPreviewUrl = data.preview?.previewUrl || data.preview?.posterUrl || assetUrl(nextPreviewKey, nextCacheKey) || '';
+      setStoredHistory((current) => [
+        {
+          id: nextPreviewKey,
+          key: nextPreviewKey,
+          url: nextPreviewUrl,
+          label: nextPreviewKey.split('/').pop() || 'Preview',
+          createdAt: new Date().toISOString(),
+          current: true,
+          source: 'stored' as const,
+        },
+        ...current.filter((item) => item.key !== nextPreviewKey).map((item) => ({ ...item, current: false })),
+      ].slice(0, 60));
       onUploaded(nextPreviewKey);
-      setCacheKey(Date.now());
+      setCacheKey(nextCacheKey);
       setMessage('Preview updated.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Preview upload failed.');
@@ -268,9 +450,9 @@ export default function PreviewImageEditor({
     : undefined;
 
   return (
-    <Card className="admin-preview-manager" style={{ padding: 0 }}>
-      <div className="admin-preview-layout">
-        <section className="admin-preview-current" aria-label={currentLabel}>
+    <Card className={`admin-preview-manager ${className}`.trim()} style={{ padding: 0 }}>
+      <section ref={managerRef} className="admin-preview-layout" aria-label="Preview editor">
+        <aside className="admin-preview-current" aria-label={currentLabel}>
           <div className="admin-preview-frame">
             {currentPreviewUrl ? <img src={currentPreviewUrl} alt="" /> : <span>No preview</span>}
           </div>
@@ -278,7 +460,44 @@ export default function PreviewImageEditor({
             <strong>{currentLabel}</strong>
             <span>{currentKey ? currentKey.split('/').pop() : emptyLabel}</span>
           </div>
-        </section>
+          <div className="admin-preview-current-actions">
+            <Button type="button" variant="secondary" onClick={reframeCurrent} disabled={!currentPreviewUrl || saving || loadingSource}>
+              Reframe current
+            </Button>
+          </div>
+
+          <div className="admin-preview-history" aria-label="Recent previews">
+            <div className="admin-preview-history-head">
+              <strong>Recent previews</strong>
+              {historyUrl && (
+                <button type="button" className="admin-preview-history-refresh" onClick={() => void loadHistory()}>
+                  Refresh
+                </button>
+              )}
+            </div>
+            {historyItems.length > 0 ? (
+              <div className="admin-preview-history-list">
+                {historyItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={`admin-preview-history-item${item.current ? ' is-current' : ''}`}
+                    onClick={() => chooseHistoryItem(item)}
+                  >
+                    <img src={item.url} alt="" />
+                    <span>
+                      <strong>{item.source === 'capture' ? 'Taken preview' : item.current ? 'Current' : 'Stored preview'}</strong>
+                      <em>{item.label}</em>
+                      {item.createdAt && <small>{displayDate(item.createdAt)}</small>}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="admin-preview-history-empty">No saved previews yet.</div>
+            )}
+          </div>
+        </aside>
 
         <section
           ref={panelRef}
@@ -358,7 +577,7 @@ export default function PreviewImageEditor({
             </button>
           )}
         </section>
-      </div>
+      </section>
     </Card>
   );
 }

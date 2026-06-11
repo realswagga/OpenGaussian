@@ -825,14 +825,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // Always include both backends so PlayCanvas can fall through if the
     // canvas retains a stale GPU context binding from a previous instance.
     const deviceTypes = rendererMode === 'webgpu' ? ['webgpu', 'webgl2'] : ['webgl2', 'webgpu'];
-    const device = await createGraphicsDevice(this.canvas, {
+    const deviceOptions = {
       deviceTypes,
       antialias: profile.antialias,
       depth: true,
       stencil: false,
       xrCompatible: rendererMode !== 'webgpu',
-      powerPreference: 'high-performance',
-    });
+      powerPreference: 'high-performance' as const,
+      preserveDrawingBuffer: true,
+    };
+    const device = await createGraphicsDevice(this.canvas, deviceOptions);
     this.rendererMode = device.deviceType === 'webgpu' ? 'webgpu' : 'webgl2';
     device.maxPixelRatio = Math.min(window.devicePixelRatio || 1, profile.maxDevicePixelRatio);
 

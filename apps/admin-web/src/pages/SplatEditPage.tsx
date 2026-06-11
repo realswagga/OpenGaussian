@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
 import type { AdminOrganization, AuthUser } from '@gsplat/shared';
 import PreviewImageEditor from '../components/PreviewImageEditor';
@@ -161,6 +161,8 @@ function PreviewTab({ splatId, posterKey, onPosterChanged }: {
       currentKey={posterKey}
       outputFilename={`preview-${splatId}.jpg`}
       uploadUrl={`${API_BASE}/admin/splats/${splatId}/preview`}
+      historyUrl={`${API_BASE}/admin/splats/${splatId}/previews`}
+      incomingSourceKey={`gsplat_taken_preview_${splatId}`}
       onUploaded={onPosterChanged}
     />
   );
@@ -172,6 +174,7 @@ const tdStyle: React.CSSProperties = { padding: '0.5rem 1rem' };
 export default function SplatEditPage(_props: { user?: AuthUser }) {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
   const isNew = !id || id === 'new';
 
   const [form, setForm] = useState<SplatFormData>({ title: '', slug: '', description: '', organizationId: '' });
@@ -181,6 +184,7 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [posterKey, setPosterKey] = useState<string | null>(null);
+  const [activeTabId, setActiveTabId] = useState('metadata');
 
   // Current splat status for context actions
   const [splatStatus, setSplatStatus] = useState('');
@@ -200,6 +204,13 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
       })
       .catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    const tab = new URLSearchParams(location.search).get('tab');
+    if (tab === 'metadata' || tab === 'versions' || tab === 'preview') {
+      setActiveTabId(tab);
+    }
+  }, [location.search]);
 
   useEffect(() => {
     if (isNew) return;
@@ -352,6 +363,11 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
 
         {/* Context action buttons */}
         <div style={{ display: 'flex', gap: '0.375rem', flexWrap: 'wrap' }}>
+          {splatStatus === 'PUBLISHED' && (
+            <Button size="sm" variant="secondary" onClick={() => window.location.assign(`/splats/${encodeURIComponent(form.slug)}`)}>
+              Take preview
+            </Button>
+          )}
           <Button size="sm" variant="secondary" onClick={() => navigate(`/splats/${splatId}/upload`)}>
             ↑ Upload
           </Button>
@@ -376,7 +392,7 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
 
       <p style={{ fontSize: '0.75rem', color: '#737373', margin: '0 0 1rem 0' }}>Edit splat details and manage versions.</p>
 
-      <Tabs tabs={tabs} defaultTabId="metadata" />
+      <Tabs tabs={tabs} activeTabId={activeTabId} onTabChange={setActiveTabId} />
     </div>
   );
 }

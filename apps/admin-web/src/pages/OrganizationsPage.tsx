@@ -259,7 +259,6 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                   className="admin-input"
                   value={form.websiteUrl}
                   onChange={(event) => setForm((f) => ({ ...f, websiteUrl: event.target.value }))}
-                  placeholder="torg.moscow"
                 />
               </label>
               <label className="admin-checkbox">
@@ -276,18 +275,23 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
             </form>
           </section>
 
-          {editingOrg && (
-            <PreviewImageEditor
-              currentKey={editingOrg.previewKey ?? null}
-              currentLabel="Organization preview"
-              emptyLabel="No organization preview"
-              outputFilename={`organization-${editingOrg.id}.jpg`}
-              uploadUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}
-              onUploaded={handlePreviewUploaded}
-            />
-          )}
         </div>
       </div>
+
+      {editingOrg && (
+        <section className="admin-org-preview-wrap">
+          <PreviewImageEditor
+            currentKey={editingOrg.previewKey ?? null}
+            currentLabel="Organization preview"
+            emptyLabel="No organization preview"
+            outputFilename={`organization-${editingOrg.id}.jpg`}
+            uploadUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}
+            historyUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/previews`}
+            className="admin-preview-manager--org"
+            onUploaded={handlePreviewUploaded}
+          />
+        </section>
+      )}
     </>
   );
 }
