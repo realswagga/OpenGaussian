@@ -63,6 +63,7 @@ model Organization {
   name            String
   description     String?
   websiteUrl      String?
+  previewKey      String?
   isPublic        Boolean                  @default(true)
   createdByUserId String?
   createdBy       User?                    @relation("OrganizationCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)

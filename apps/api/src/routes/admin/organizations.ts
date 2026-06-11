@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
+import { randomUUID } from 'node:crypto';
 import {
   createMembershipSchema,
   createOrganizationSchema,
@@ -13,6 +15,13 @@ import {
   canAccessOrganization,
   permissionsFromMembership,
 } from './permissions.js';
+import {
+  getPreviewExtension,
+  isPreviewMimeType,
+  isSixteenByNine,
+  PREVIEW_MAX_BYTES,
+  readImageDimensions,
+} from '../../lib/previewImages.js';
 
 const editorDefaults = {
   canCreateSplats: false,
@@ -23,7 +32,25 @@ const editorDefaults = {
   canEditMarkers: true,
 };
 
-function serializeOrganization(org: any, currentUserRole?: string) {
+const s3Client = new S3Client({
+  endpoint: process.env.S3_ENDPOINT || 'http://minio:9000',
+  region: 'us-east-1',
+  credentials: {
+    accessKeyId: process.env.S3_ACCESS_KEY || 'minioadmin',
+    secretAccessKey: process.env.S3_SECRET_KEY || 'minioadmin',
+  },
+  forcePathStyle: process.env.S3_FORCE_PATH_STYLE !== 'false',
+});
+
+const S3_BUCKET = process.env.S3_BUCKET || 'gsplat-assets';
+
+function assetUrl(assetBaseUrl: string, key?: string | null): string | null {
+  if (!key) return null;
+  if (/^https?:\/\//i.test(key) || key.startsWith('/')) return key;
+  return `${assetBaseUrl}/${key}`;
+}
+
+function serializeOrganization(org: any, currentUserRole?: string, assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets') {
   const splats = org.splats ?? [];
   return {
     id: org.id,
@@ -31,6 +58,8 @@ function serializeOrganization(org: any, currentUserRole?: string) {
     name: org.name,
     description: org.description,
     websiteUrl: org.websiteUrl,
+    previewKey: org.previewKey ?? null,
+    previewUrl: assetUrl(assetBaseUrl, org.previewKey),
     isPublic: org.isPublic,
     memberCount: org._count?.memberships ?? org.memberships?.length ?? 0,
     splatCount: org._count?.splats ?? splats.length ?? 0,
@@ -65,6 +94,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
 
   app.get('/organizations', async (request) => {
     const auth = request as AuthRequest;
+    const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
     if (isMasterRole(auth.user?.role)) {
       const orgs = await prisma.organization.findMany({
         orderBy: { updatedAt: 'desc' },
@@ -73,7 +103,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
           splats: { select: { status: true } },
         },
       });
-      return { items: orgs.map((org) => serializeOrganization(org, 'MASTER_ADMIN')) };
+      return { items: orgs.map((org) => serializeOrganization(org, 'MASTER_ADMIN', assetBaseUrl)) };
     }
 
     const memberships = await activeMemberships(prisma, auth.user!.id);
@@ -82,7 +112,7 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
         ...m.organization,
         memberships: [m],
         splats: [],
-      }, m.role)),
+      }, m.role, assetBaseUrl)),
     };
   });
 
@@ -186,6 +216,92 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
 
     const organization = await prisma.organization.update({ where: { id }, data });
     return { organization: serializeOrganization({ ...organization, splats: [], memberships: [] }) };
+  });
+
+  app.post('/organizations/:id/preview', async (request, reply) => {
+    const auth = request as AuthRequest;
+    const { id } = request.params as { id: string };
+    if (!await canAccessOrganization(prisma, auth, id, 'edit')) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Manager access required' } });
+    }
+
+    const data = await request.file();
+    if (!data) {
+      return reply.status(400).send({
+        error: { code: 'NO_FILE', message: 'No preview image provided' },
+      });
+    }
+
+    const extension = getPreviewExtension(data.filename, data.mimetype);
+    if (!extension || !isPreviewMimeType(data.mimetype)) {
+      return reply.status(400).send({
+        error: { code: 'INVALID_FORMAT', message: 'Preview must be a JPEG, PNG, or WebP image' },
+      });
+    }
+
+    let buffer: Buffer;
+    try {
+      buffer = await data.toBuffer();
+    } catch {
+      return reply.status(413).send({
+        error: { code: 'FILE_TOO_LARGE', message: 'Preview image is too large' },
+      });
+    }
+
+    if (buffer.length > PREVIEW_MAX_BYTES) {
+      return reply.status(413).send({
+        error: { code: 'FILE_TOO_LARGE', message: `Preview exceeds ${process.env.MAX_PREVIEW_UPLOAD_MB || 8} MB limit` },
+      });
+    }
+
+    const dimensions = readImageDimensions(buffer, data.mimetype);
+    if (!dimensions) {
+      return reply.status(400).send({
+        error: { code: 'INVALID_IMAGE', message: 'Preview image dimensions could not be read' },
+      });
+    }
+
+    if (!isSixteenByNine(dimensions)) {
+      return reply.status(400).send({
+        error: {
+          code: 'INVALID_ASPECT_RATIO',
+          message: `Preview must be 16:9. Received ${dimensions.width}x${dimensions.height}.`,
+        },
+      });
+    }
+
+    const previewKey = `organizations/${id}/preview/preview-${Date.now()}-${randomUUID()}${extension}`;
+
+    try {
+      await s3Client.send(new PutObjectCommand({
+        Bucket: S3_BUCKET,
+        Key: previewKey,
+        Body: buffer,
+        ContentType: data.mimetype,
+      }));
+      app.log.info(`Uploaded organization preview ${previewKey} to MinIO (${(buffer.length / 1024).toFixed(1)} KB)`);
+    } catch (err) {
+      app.log.error(`Failed to upload organization preview to MinIO: ${err}`);
+      return reply.status(500).send({
+        error: { code: 'UPLOAD_FAILED', message: 'Failed to store preview image' },
+      });
+    }
+
+    const organization = await prisma.organization.update({
+      where: { id },
+      data: { previewKey },
+      select: { previewKey: true },
+    });
+
+    return {
+      preview: {
+        previewKey: organization.previewKey,
+        posterKey: organization.previewKey,
+        previewUrl: assetUrl(process.env.ASSET_PUBLIC_URL || '/assets', organization.previewKey),
+        width: dimensions.width,
+        height: dimensions.height,
+      },
+    };
   });
 
   app.get('/organizations/:id/members', async (request, reply) => {

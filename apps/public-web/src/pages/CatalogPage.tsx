@@ -26,7 +26,7 @@ type CatalogItem =
       title: string;
       description: string | null;
       href: string;
-      posterUrl: null;
+      posterUrl: string | null;
       organizationName: null;
       count: number;
       date: string | null;
@@ -75,7 +75,7 @@ function organizationToItem(org: OrganizationSummary): CatalogItem {
     title: org.name,
     description: org.description,
     href: `/orgs/${org.slug}`,
-    posterUrl: null,
+    posterUrl: org.previewUrl ?? null,
     organizationName: null,
     count: org.publishedSplatCount ?? org.splatCount ?? 0,
     date: org.createdAt ?? null,
@@ -107,7 +107,7 @@ function CatalogCard({ item, index }: { item: CatalogItem; index: number }) {
   return (
     <Link className={`catalog-card catalog-card--${item.kind}`} to={item.href} style={{ '--i': index } as CSSProperties}>
       <div className="catalog-card-media" aria-hidden="true">
-        {isSplat && item.posterUrl ? (
+        {item.posterUrl ? (
           <img src={item.posterUrl} alt="" loading="lazy" />
         ) : (
           <div className="catalog-card-mark">
@@ -253,7 +253,7 @@ export default function CatalogPage() {
     });
   }, [data, includeOrganizations, includeSplats, sortDirection, sortField]);
 
-  const heroCandidate = useMemo(() => items.find((item) => item.kind === 'splat' && item.posterUrl) ?? items[0] ?? null, [items]);
+  const heroCandidate = useMemo(() => items.find((item) => item.posterUrl) ?? items[0] ?? null, [items]);
   const heroItem = heroCandidate ?? featuredHeroItem;
   const feedKey = `${query}|${includeSplats}|${includeOrganizations}|${sortField}|${sortDirection}|${items.map((item) => item.id).join(':')}`;
   const isInitialLoading = loading && !data;

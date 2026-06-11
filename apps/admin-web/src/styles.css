@@ -333,9 +333,32 @@ button {
   text-underline-offset: 3px;
 }
 
+.admin-table tr.is-selected td {
+  background: oklch(100% 0 0 / 0.035);
+}
+
+.admin-org-cell {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
 .admin-form {
   display: grid;
   gap: var(--space-md);
+}
+
+.admin-form-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.admin-form-head .admin-eyebrow {
+  margin: 0;
 }
 
 .admin-label {
@@ -526,6 +549,12 @@ button {
   align-items: start;
 }
 
+.admin-side-stack {
+  min-width: 0;
+  display: grid;
+  gap: var(--space-md);
+}
+
 .admin-checkbox-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 160px), 1fr));
@@ -578,6 +607,18 @@ button {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+
+.admin-thumb--org {
+  display: grid;
+  place-items: center;
+}
+
+.admin-thumb--org span {
+  color: var(--admin-ink);
+  font-family: var(--font-display);
+  font-size: 1.45rem;
+  font-weight: 700;
 }
 
 .admin-preview-card {

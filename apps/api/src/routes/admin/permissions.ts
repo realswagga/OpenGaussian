@@ -43,7 +43,7 @@ export async function activeMemberships(prisma: PrismaClient, userId: string) {
     where: { userId, status: 'ACTIVE' },
     include: {
       organization: {
-        select: { id: true, slug: true, name: true, description: true, isPublic: true },
+        select: { id: true, slug: true, name: true, description: true, websiteUrl: true, previewKey: true, isPublic: true, createdAt: true },
       },
     },
     orderBy: [{ role: 'asc' }, { updatedAt: 'desc' }],

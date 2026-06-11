@@ -54,11 +54,18 @@ export const editorPermissionsSchema = z.object({
   canEditMarkers: z.boolean().default(false),
 });
 
+const websiteUrlSchema = z.preprocess((value) => {
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+}, z.string().url('Website must be a valid URL').nullable()).optional();
+
 export const createOrganizationSchema = z.object({
   name: z.string().min(1).max(160),
   slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, 'Slug must be lowercase alphanumeric with hyphens'),
   description: z.string().max(2000).optional().nullable(),
-  websiteUrl: z.string().url().optional().nullable(),
+  websiteUrl: websiteUrlSchema,
   isPublic: z.boolean().default(true),
   managerUserId: z.string().uuid().optional(),
 });
@@ -67,7 +74,7 @@ export const updateOrganizationSchema = z.object({
   name: z.string().min(1).max(160).optional(),
   slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).optional(),
   description: z.string().max(2000).optional().nullable(),
-  websiteUrl: z.string().url().optional().nullable(),
+  websiteUrl: websiteUrlSchema,
   isPublic: z.boolean().optional(),
 });
 

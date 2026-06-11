@@ -99,6 +99,8 @@ export interface OrganizationSummary {
   name: string;
   description: string | null;
   websiteUrl?: string | null;
+  previewUrl?: string | null;
+  previewKey?: string | null;
   splatCount?: number;
   publishedSplatCount?: number;
   createdAt?: string;

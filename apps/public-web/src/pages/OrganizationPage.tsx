@@ -41,16 +41,23 @@ export default function OrganizationPage() {
         {error && <div className="og-search-layout"><div className="og-error">{error}</div></div>}
         {!loading && organization && (
           <>
-            <section className="og-detail-hero">
-              <p className="og-eyebrow">Organization</p>
-              <h1>{organization.name}</h1>
-              {organization.description && <p>{organization.description}</p>}
-              <div className="og-meta">
-                <span className="og-pill">{organization.publishedSplatCount ?? splats.length} published splats</span>
-                {organization.websiteUrl && (
-                  <a className="og-pill" href={organization.websiteUrl} target="_blank" rel="noreferrer">Website</a>
-                )}
+            <section className={`og-detail-hero${organization.previewUrl ? ' og-detail-hero--with-preview' : ''}`}>
+              <div>
+                <p className="og-eyebrow">Organization</p>
+                <h1>{organization.name}</h1>
+                {organization.description && <p>{organization.description}</p>}
+                <div className="og-meta">
+                  <span className="og-pill">{organization.publishedSplatCount ?? splats.length} published splats</span>
+                  {organization.websiteUrl && (
+                    <a className="og-pill" href={organization.websiteUrl} target="_blank" rel="noreferrer">Website</a>
+                  )}
+                </div>
               </div>
+              {organization.previewUrl && (
+                <div className="og-organization-preview" aria-hidden="true">
+                  <img src={organization.previewUrl} alt="" />
+                </div>
+              )}
             </section>
 
             <section className="og-band">

@@ -24,7 +24,7 @@ function assetUrl(assetBaseUrl: string, keyOrUrl?: string | null): string | unde
   return `${assetBaseUrl}/${keyOrUrl}`;
 }
 
-function serializeOrganization(org: any, publishedSplatCount?: number) {
+function serializeOrganization(org: any, publishedSplatCount?: number, assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets') {
   if (!org) return null;
   return {
     id: org.id,
@@ -32,6 +32,7 @@ function serializeOrganization(org: any, publishedSplatCount?: number) {
     name: org.name,
     description: org.description,
     websiteUrl: org.websiteUrl,
+    previewUrl: assetUrl(assetBaseUrl, org.previewKey) ?? null,
     publishedSplatCount: publishedSplatCount ?? org._count?.splats ?? undefined,
     createdAt: org.createdAt?.toISOString?.() ?? org.createdAt,
   };
@@ -44,7 +45,7 @@ function serializePublicSplat(s: any, assetBaseUrl: string) {
     title: s.title,
     description: s.description,
     posterUrl: s.posterKey ? `${assetBaseUrl}/${s.posterKey}` : null,
-    organization: serializeOrganization(s.organization),
+    organization: serializeOrganization(s.organization, undefined, assetBaseUrl),
     splatCount: s.splatCount,
     publishedAt: s.publishedAt?.toISOString() ?? null,
   };
@@ -154,7 +155,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     return {
       query: term,
       splats: splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
-      organizations: organizations.map((org) => serializeOrganization(org, org._count.splats)),
+      organizations: organizations.map((org) => serializeOrganization(org, org._count.splats, assetBaseUrl)),
     };
   });
 
@@ -167,7 +168,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       },
     });
     return {
-      items: organizations.map((org) => serializeOrganization(org, org._count.splats)),
+      items: organizations.map((org) => serializeOrganization(org, org._count.splats, process.env.ASSET_PUBLIC_URL || '/assets')),
       total: organizations.length,
     };
   });
@@ -193,7 +194,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
 
     const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
     return {
-      organization: serializeOrganization(organization, organization._count.splats),
+      organization: serializeOrganization(organization, organization._count.splats, assetBaseUrl),
       splats: organization.splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
     };
   });
@@ -224,7 +225,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       boundingBoxJson: splat.boundingBoxJson,
       defaultCameraJson: splat.defaultCameraJson,
       globalSettingsJson: splat.globalSettingsJson,
-      organization: serializeOrganization(splat.organization),
+      organization: serializeOrganization(splat.organization, undefined, process.env.ASSET_PUBLIC_URL || '/assets'),
       createdAt: splat.createdAt.toISOString(),
       updatedAt: splat.updatedAt.toISOString(),
       publishedAt: splat.publishedAt?.toISOString() ?? null,
