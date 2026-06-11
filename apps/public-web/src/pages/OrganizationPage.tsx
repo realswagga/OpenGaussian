@@ -1,16 +1,32 @@
 import { useEffect, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { OrganizationSummary, SplatListItem } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const CATALOG_STATE_KEY = 'opengaussian_catalog_state_v1';
 
 export default function OrganizationPage() {
   const { slug } = useParams<{ slug: string }>();
+  const navigate = useNavigate();
   const [organization, setOrganization] = useState<OrganizationSummary | null>(null);
   const [splats, setSplats] = useState<SplatListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const returnToCatalog = () => {
+    const rawState = window.sessionStorage.getItem(CATALOG_STATE_KEY);
+    if (rawState) {
+      try {
+        const parsed = JSON.parse(rawState) as { pathname?: unknown };
+        navigate(typeof parsed.pathname === 'string' && parsed.pathname.startsWith('/') ? parsed.pathname : '/');
+      } catch {
+        navigate('/');
+      }
+      return;
+    }
+    navigate('/');
+  };
 
   useEffect(() => {
     if (!slug) return;
@@ -41,6 +57,12 @@ export default function OrganizationPage() {
         {error && <div className="og-search-layout"><div className="og-error">{error}</div></div>}
         {!loading && organization && (
           <>
+            <button className="og-detail-back" type="button" onClick={returnToCatalog} aria-label="Back to catalog">
+              <svg aria-hidden="true" viewBox="0 0 24 24">
+                <path d="m15 6-6 6 6 6" />
+              </svg>
+            </button>
+
             <section className={`og-detail-hero${organization.previewUrl ? ' og-detail-hero--with-preview' : ''}`}>
               <div>
                 <p className="og-eyebrow">Organization</p>

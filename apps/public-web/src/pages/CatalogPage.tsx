@@ -1,25 +1,54 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { OrganizationSummary, SearchResponse, SplatListItem } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
+const CATALOG_STATE_KEY = 'opengaussian_catalog_state_v1';
 
 type SortField = 'date' | 'count';
 type SortDirection = 'asc' | 'desc';
 
-type CatalogItem =
-  | {
-      kind: 'splat';
-      id: string;
-      title: string;
-      description: string | null;
-      href: string;
-      posterUrl: string | null;
-      organizationName: string | null;
-      count: number;
-      date: string | null;
-    }
+interface CatalogRestoreState {
+  pathname: string;
+  query: string;
+  includeSplats: boolean;
+  includeOrganizations: boolean;
+  sortField: SortField;
+  sortDirection: SortDirection;
+  scrollY: number;
+}
+
+interface CatalogSplatItem {
+  kind: 'splat';
+  id: string;
+  title: string;
+  description: string | null;
+  href: string;
+  posterUrl: string | null;
+  organizationId: string | null;
+  organizationSlug: string | null;
+  organizationName: string | null;
+  organizationDescription: string | null;
+  organizationPreviewUrl: string | null;
+  count: number;
+  date: string | null;
+}
+
+interface CatalogOrganizationGroup {
+  id: string;
+  title: string;
+  description: string | null;
+  href: string | null;
+  posterUrl: string | null;
+  count: number;
+  date: string | null;
+  splats: CatalogSplatItem[];
+  synthetic?: boolean;
+}
+
+type CatalogHeroItem =
+  | CatalogSplatItem
   | {
       kind: 'organization';
       id: string;
@@ -27,7 +56,6 @@ type CatalogItem =
       description: string | null;
       href: string;
       posterUrl: string | null;
-      organizationName: null;
       count: number;
       date: string | null;
     };
@@ -40,6 +68,35 @@ function sortFieldLabel(value: SortField) {
   return value === 'date' ? 'Date' : 'Splat count';
 }
 
+function isSortField(value: unknown): value is SortField {
+  return value === 'date' || value === 'count';
+}
+
+function isSortDirection(value: unknown): value is SortDirection {
+  return value === 'asc' || value === 'desc';
+}
+
+function readCatalogRestoreState(): CatalogRestoreState | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = window.sessionStorage.getItem(CATALOG_STATE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<CatalogRestoreState>;
+    return {
+      pathname: typeof parsed.pathname === 'string' && parsed.pathname.startsWith('/') ? parsed.pathname : '/',
+      query: typeof parsed.query === 'string' ? parsed.query : '',
+      includeSplats: typeof parsed.includeSplats === 'boolean' ? parsed.includeSplats : true,
+      includeOrganizations: typeof parsed.includeOrganizations === 'boolean' ? parsed.includeOrganizations : true,
+      sortField: isSortField(parsed.sortField) ? parsed.sortField : 'date',
+      sortDirection: isSortDirection(parsed.sortDirection) ? parsed.sortDirection : 'desc',
+      scrollY: typeof parsed.scrollY === 'number' ? parsed.scrollY : 0,
+    };
+  } catch {
+    window.sessionStorage.removeItem(CATALOG_STATE_KEY);
+    return null;
+  }
+}
+
 const heroPoints = Array.from({ length: 42 }, (_, index) => {
   const angle = index * 2.399963229728653;
   const radius = Math.sqrt((index + 1) / 42);
@@ -50,11 +107,11 @@ const heroPoints = Array.from({ length: 42 }, (_, index) => {
   };
 });
 
-function itemDate(item: CatalogItem) {
-  return item.date ? new Date(item.date).getTime() : 0;
+function dateValue(value: string | null | undefined) {
+  return value ? new Date(value).getTime() : 0;
 }
 
-function splatToItem(scene: SplatListItem): CatalogItem {
+function splatToItem(scene: SplatListItem): CatalogSplatItem {
   return {
     kind: 'splat',
     id: scene.id,
@@ -62,13 +119,57 @@ function splatToItem(scene: SplatListItem): CatalogItem {
     description: scene.description,
     href: `/splats/${scene.slug}`,
     posterUrl: scene.posterUrl,
+    organizationId: scene.organization?.id ?? null,
+    organizationSlug: scene.organization?.slug ?? null,
     organizationName: scene.organization?.name ?? null,
+    organizationDescription: scene.organization?.description ?? null,
+    organizationPreviewUrl: scene.organization?.previewUrl ?? null,
     count: scene.splatCount ?? 0,
     date: scene.publishedAt,
   };
 }
 
-function organizationToItem(org: OrganizationSummary): CatalogItem {
+function organizationToGroup(org: OrganizationSummary): CatalogOrganizationGroup {
+  return {
+    id: org.id,
+    title: org.name,
+    description: org.description,
+    href: `/orgs/${org.slug}`,
+    posterUrl: org.previewUrl ?? null,
+    count: org.publishedSplatCount ?? org.splatCount ?? 0,
+    date: org.createdAt ?? null,
+    splats: [],
+  };
+}
+
+function groupFromSplatOrg(item: CatalogSplatItem): CatalogOrganizationGroup {
+  if (!item.organizationId || !item.organizationSlug || !item.organizationName) {
+    return {
+      id: 'independent-splats',
+      title: 'Independent splats',
+      description: 'Published scenes without an organization.',
+      href: null,
+      posterUrl: item.posterUrl,
+      count: 0,
+      date: item.date,
+      splats: [],
+      synthetic: true,
+    };
+  }
+
+  return {
+    id: item.organizationId,
+    title: item.organizationName,
+    description: item.organizationDescription,
+    href: `/orgs/${item.organizationSlug}`,
+    posterUrl: item.organizationPreviewUrl ?? null,
+    count: 0,
+    date: item.date,
+    splats: [],
+  };
+}
+
+function organizationToHeroItem(org: OrganizationSummary): CatalogHeroItem {
   return {
     kind: 'organization',
     id: org.id,
@@ -76,10 +177,38 @@ function organizationToItem(org: OrganizationSummary): CatalogItem {
     description: org.description,
     href: `/orgs/${org.slug}`,
     posterUrl: org.previewUrl ?? null,
-    organizationName: null,
     count: org.publishedSplatCount ?? org.splatCount ?? 0,
     date: org.createdAt ?? null,
   };
+}
+
+function selectFeaturedHeroItem(source: SearchResponse | null | undefined): CatalogHeroItem | null {
+  const splatCandidates = (source?.splats ?? []).map(splatToItem);
+  const featuredSplat = splatCandidates.find((item) => item.posterUrl) ?? splatCandidates[0] ?? null;
+  if (featuredSplat) return featuredSplat;
+
+  const featuredOrg = (source?.organizations ?? []).find((org) => org.previewUrl) ?? (source?.organizations ?? [])[0];
+  return featuredOrg ? organizationToHeroItem(featuredOrg) : null;
+}
+
+function sortSplats(items: CatalogSplatItem[], sortField: SortField, sortDirection: SortDirection) {
+  return [...items].sort((a, b) => {
+    const av = sortField === 'date' ? dateValue(a.date) : a.count;
+    const bv = sortField === 'date' ? dateValue(b.date) : b.count;
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    if (av !== bv) return (av - bv) * direction;
+    return a.title.localeCompare(b.title);
+  });
+}
+
+function sortGroups(groups: CatalogOrganizationGroup[], sortField: SortField, sortDirection: SortDirection) {
+  return [...groups].sort((a, b) => {
+    const av = sortField === 'date' ? dateValue(a.date) : a.count;
+    const bv = sortField === 'date' ? dateValue(b.date) : b.count;
+    const direction = sortDirection === 'asc' ? 1 : -1;
+    if (av !== bv) return (av - bv) * direction;
+    return a.title.localeCompare(b.title);
+  });
 }
 
 function SplatPointField() {
@@ -100,12 +229,11 @@ function SplatPointField() {
   );
 }
 
-function CatalogCard({ item, index }: { item: CatalogItem; index: number }) {
-  const isSplat = item.kind === 'splat';
-  const initial = item.title.trim().charAt(0).toUpperCase() || 'O';
+function CatalogCard({ item, index }: { item: CatalogSplatItem; index: number }) {
+  const initial = item.title.trim().charAt(0).toUpperCase() || 'S';
 
   return (
-    <Link className={`catalog-card catalog-card--${item.kind}`} to={item.href} style={{ '--i': index } as CSSProperties}>
+    <Link className="catalog-card catalog-card--splat" to={item.href} style={{ '--i': index } as CSSProperties}>
       <div className="catalog-card-media" aria-hidden="true">
         {item.posterUrl ? (
           <img src={item.posterUrl} alt="" loading="lazy" />
@@ -114,7 +242,7 @@ function CatalogCard({ item, index }: { item: CatalogItem; index: number }) {
             <span>{initial}</span>
           </div>
         )}
-        <span className="catalog-kind">{isSplat ? 'Splat' : 'Organization'}</span>
+        <span className="catalog-kind">Splat</span>
       </div>
       <div className="catalog-card-body">
         <div>
@@ -122,26 +250,122 @@ function CatalogCard({ item, index }: { item: CatalogItem; index: number }) {
           {item.description && <p>{item.description}</p>}
         </div>
         <div className="catalog-card-meta">
-          {isSplat && item.organizationName && <span>{item.organizationName}</span>}
-          <span>{formatCount(item.count)} {isSplat ? 'points' : 'published'}</span>
+          {item.organizationName && <span>{item.organizationName}</span>}
+          <span>{formatCount(item.count)} points</span>
         </div>
       </div>
     </Link>
   );
 }
 
-function CatalogSkeleton() {
-  return (
-    <div className="catalog-grid" aria-hidden="true">
-      {Array.from({ length: 8 }).map((_, index) => (
-        <div className="catalog-card catalog-card--skeleton" key={index} style={{ '--i': index } as CSSProperties}>
-          <div className="catalog-skeleton-media" />
-          <div className="catalog-card-body">
-            <div className="catalog-skeleton-line wide" />
-            <div className="catalog-skeleton-line" />
-            <div className="catalog-skeleton-line short" />
-          </div>
+function OrganizationGroup({
+  group,
+  index,
+  showSplats,
+  onOpen,
+}: {
+  group: CatalogOrganizationGroup;
+  index: number;
+  showSplats: boolean;
+  onOpen: () => void;
+}) {
+  const initial = group.title.trim().charAt(0).toUpperCase() || 'O';
+  const shownCount = group.splats.length;
+  const headerStyle = { '--i': index } as CSSProperties;
+  const preview = (
+    <div className="catalog-org-preview" aria-hidden="true">
+      {group.posterUrl ? (
+        <img src={group.posterUrl} alt="" loading="lazy" />
+      ) : (
+        <div className="catalog-card-mark">
+          <span>{initial}</span>
         </div>
+      )}
+    </div>
+  );
+  const headerContent = (
+    <>
+      {preview}
+      <div className="catalog-org-copy">
+        <p className="og-kicker">{group.synthetic ? 'Scene group' : 'Organization'}</p>
+        <h2>{group.title}</h2>
+        {group.description && <p>{group.description}</p>}
+        <div className="catalog-org-meta">
+          <span>{formatCount(group.count)} published splats</span>
+          {showSplats && <span>{formatCount(shownCount)} shown</span>}
+        </div>
+      </div>
+      {group.href && <span className="catalog-org-open" aria-hidden="true">Open</span>}
+    </>
+  );
+
+  return (
+    <section className="catalog-org-group" style={headerStyle}>
+      {group.href ? (
+        <Link className="catalog-org-banner" to={group.href} onClick={onOpen}>
+          {headerContent}
+        </Link>
+      ) : (
+        <div className="catalog-org-banner catalog-org-banner--static">{headerContent}</div>
+      )}
+
+      {showSplats && group.splats.length > 0 && (
+        <div className="catalog-org-splats" aria-label={`${group.title} splats`}>
+          {group.splats.map((item, itemIndex) => (
+            <CatalogCard key={item.id} item={item} index={index * 4 + itemIndex} />
+          ))}
+        </div>
+      )}
+      {showSplats && group.splats.length === 0 && (
+        <div className="catalog-org-empty">No matching splats inside this organization for the current filters.</div>
+      )}
+    </section>
+  );
+}
+
+function CatalogSkeleton({ grouped }: { grouped: boolean }) {
+  if (!grouped) {
+    return (
+      <div className="catalog-grid" aria-hidden="true">
+        {Array.from({ length: 8 }).map((_, index) => (
+          <div className="catalog-card catalog-card--skeleton" key={index} style={{ '--i': index } as CSSProperties}>
+            <div className="catalog-skeleton-media" />
+            <div className="catalog-card-body">
+              <div className="catalog-skeleton-line wide" />
+              <div className="catalog-skeleton-line" />
+              <div className="catalog-skeleton-line short" />
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="catalog-group-feed" aria-hidden="true">
+      {Array.from({ length: 3 }).map((_, groupIndex) => (
+        <section className="catalog-org-group catalog-org-group--skeleton" key={groupIndex}>
+          <div className="catalog-org-banner">
+            <div className="catalog-skeleton-media" />
+            <div className="catalog-card-body">
+              <div className="catalog-skeleton-line short" />
+              <div className="catalog-skeleton-line wide" />
+              <div className="catalog-skeleton-line" />
+            </div>
+          </div>
+          <div className="catalog-org-splats">
+            {Array.from({ length: 3 }).map((_, index) => (
+              <div className="catalog-card catalog-card--skeleton" key={index} style={{ '--i': index } as CSSProperties}>
+                <div className="catalog-skeleton-media" />
+                <div className="catalog-card-body">
+                  <div className="catalog-skeleton-line wide" />
+                  <div className="catalog-skeleton-line" />
+                  <div className="catalog-skeleton-line short" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       ))}
     </div>
   );
@@ -149,23 +373,30 @@ function CatalogSkeleton() {
 
 export default function CatalogPage() {
   const [params, setParams] = useSearchParams();
-  const [query, setQuery] = useState(params.get('q') ?? '');
+  const initialRestore = useMemo(() => readCatalogRestoreState(), []);
+  const [query, setQuery] = useState(initialRestore?.query ?? params.get('q') ?? '');
   const [data, setData] = useState<SearchResponse | null>(null);
+  const [featuredData, setFeaturedData] = useState<SearchResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [includeSplats, setIncludeSplats] = useState(true);
-  const [includeOrganizations, setIncludeOrganizations] = useState(true);
-  const [sortField, setSortField] = useState<SortField>('date');
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [includeSplats, setIncludeSplats] = useState(initialRestore?.includeSplats ?? true);
+  const [includeOrganizations, setIncludeOrganizations] = useState(initialRestore?.includeOrganizations ?? true);
+  const [sortField, setSortField] = useState<SortField>(initialRestore?.sortField ?? 'date');
+  const [sortDirection, setSortDirection] = useState<SortDirection>(initialRestore?.sortDirection ?? 'desc');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
   const consoleRef = useRef<HTMLElement>(null);
   const resultsRef = useRef<HTMLElement>(null);
-  const [featuredHeroItem, setFeaturedHeroItem] = useState<CatalogItem | null>(null);
   const [resultsMinHeight, setResultsMinHeight] = useState(560);
   const [catalogDocked, setCatalogDocked] = useState(false);
+  const pendingRestoreScrollRef = useRef<number | null>(initialRestore?.scrollY ?? null);
+  const skipNextParamSyncRef = useRef(Boolean(initialRestore));
 
   useEffect(() => {
+    if (skipNextParamSyncRef.current) {
+      skipNextParamSyncRef.current = false;
+      return;
+    }
     const nextQuery = params.get('q') ?? '';
     setQuery((current) => (current === nextQuery ? current : nextQuery));
   }, [params]);
@@ -206,6 +437,21 @@ export default function CatalogPage() {
   }, [query]);
 
   useEffect(() => {
+    const controller = new AbortController();
+    fetch(`${API_BASE}/search`, { signal: controller.signal })
+      .then((res) => {
+        if (!res.ok) throw new Error(`Server error (${res.status})`);
+        return res.json();
+      })
+      .then((next) => setFeaturedData(next))
+      .catch((err) => {
+        if (err.name !== 'AbortError') setFeaturedData(null);
+      });
+
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
     if (!settingsOpen) return;
 
     const closeOnPointer = (event: PointerEvent) => {
@@ -238,40 +484,114 @@ export default function CatalogPage() {
     };
   }, []);
 
-  const items = useMemo(() => {
-    const combined: CatalogItem[] = [
-      ...(includeSplats ? (data?.splats ?? []).map(splatToItem) : []),
-      ...(includeOrganizations ? (data?.organizations ?? []).map(organizationToItem) : []),
-    ];
+  const splatItems = useMemo(() => sortSplats((data?.splats ?? []).map(splatToItem), sortField, sortDirection), [data, sortDirection, sortField]);
 
-    return combined.sort((a, b) => {
-      const av = sortField === 'date' ? itemDate(a) : a.count;
-      const bv = sortField === 'date' ? itemDate(b) : b.count;
-      const direction = sortDirection === 'asc' ? 1 : -1;
-      if (av !== bv) return (av - bv) * direction;
-      return a.title.localeCompare(b.title);
+  const organizationPreviewUrls = useMemo(() => {
+    const previews = new Map<string, string | null>();
+
+    (data?.organizations ?? []).forEach((org) => {
+      previews.set(org.id, org.previewUrl ?? null);
     });
-  }, [data, includeOrganizations, includeSplats, sortDirection, sortField]);
 
-  const heroCandidate = useMemo(() => items.find((item) => item.posterUrl) ?? items[0] ?? null, [items]);
-  const heroItem = heroCandidate ?? featuredHeroItem;
-  const feedKey = `${query}|${includeSplats}|${includeOrganizations}|${sortField}|${sortDirection}|${items.map((item) => item.id).join(':')}`;
+    (data?.splats ?? []).forEach((scene) => {
+      const org = scene.organization;
+      if (!org) return;
+      const current = previews.get(org.id);
+      if (!current && org.previewUrl) {
+        previews.set(org.id, org.previewUrl);
+      } else if (!previews.has(org.id)) {
+        previews.set(org.id, org.previewUrl ?? null);
+      }
+    });
+
+    return previews;
+  }, [data]);
+
+  const organizationGroups = useMemo(() => {
+    const groups = new Map<string, CatalogOrganizationGroup>();
+
+    if (includeOrganizations) {
+      (data?.organizations ?? []).forEach((org) => {
+        groups.set(org.id, organizationToGroup(org));
+      });
+    }
+
+    if (includeSplats) {
+      splatItems.forEach((item) => {
+        const key = item.organizationId ?? 'independent-splats';
+        const existing = groups.get(key) ?? groupFromSplatOrg(item);
+        const latestSplatDate = dateValue(item.date);
+        const groupDate = dateValue(existing.date);
+        const organizationPreviewUrl = item.organizationId ? organizationPreviewUrls.get(item.organizationId) ?? item.organizationPreviewUrl : null;
+        existing.splats.push(item);
+        existing.count = Math.max(existing.count, existing.splats.length);
+        if (!existing.synthetic && organizationPreviewUrl) existing.posterUrl = organizationPreviewUrl;
+        if (existing.synthetic && !existing.posterUrl && item.posterUrl) existing.posterUrl = item.posterUrl;
+        if (latestSplatDate > groupDate) existing.date = item.date;
+        groups.set(key, existing);
+      });
+    }
+
+    const withSortedSplats = [...groups.values()].map((group) => ({
+      ...group,
+      posterUrl: group.synthetic ? group.posterUrl : organizationPreviewUrls.get(group.id) ?? group.posterUrl,
+      splats: sortSplats(group.splats, sortField, sortDirection),
+    }));
+
+    return sortGroups(withSortedSplats, sortField, sortDirection);
+  }, [data, includeOrganizations, includeSplats, organizationPreviewUrls, sortDirection, sortField, splatItems]);
+
+  const flatSplatItems = includeSplats ? splatItems : [];
+  const useGroupedResults = includeOrganizations;
+  const resultCount = useGroupedResults
+    ? organizationGroups.length + (includeSplats ? organizationGroups.reduce((total, group) => total + group.splats.length, 0) : 0)
+    : flatSplatItems.length;
+
+  const featuredHeroItem = useMemo(() => selectFeaturedHeroItem(featuredData), [featuredData]);
+  const activeHeroFallback = useMemo(() => selectFeaturedHeroItem(data), [data]);
+  const heroItem = featuredHeroItem ?? activeHeroFallback;
+  const feedIds = useGroupedResults
+    ? organizationGroups.map((group) => `${group.id}:${group.splats.map((item) => item.id).join(',')}`).join('|')
+    : flatSplatItems.map((item) => item.id).join(':');
+  const feedKey = `${query}|${includeSplats}|${includeOrganizations}|${sortField}|${sortDirection}|${feedIds}`;
   const isInitialLoading = loading && !data;
   const isRefreshing = loading && Boolean(data);
   const typeSummary = includeSplats && includeOrganizations ? 'Splats + Orgs' : includeSplats ? 'Splats' : includeOrganizations ? 'Orgs' : 'None';
   const filterSummary = `${sortFieldLabel(sortField)} / ${sortDirection === 'asc' ? 'Asc' : 'Desc'} / ${typeSummary}`;
 
+  const saveCatalogState = useCallback(() => {
+    window.sessionStorage.setItem(
+      CATALOG_STATE_KEY,
+      JSON.stringify({
+        pathname: window.location.pathname === '/search' ? '/search' : '/',
+        query,
+        includeSplats,
+        includeOrganizations,
+        sortField,
+        sortDirection,
+        scrollY: window.scrollY,
+      } satisfies CatalogRestoreState),
+    );
+  }, [includeOrganizations, includeSplats, query, sortDirection, sortField]);
+
   useLayoutEffect(() => {
-    if (!resultsRef.current || isInitialLoading || items.length === 0) return;
+    if (!resultsRef.current || isInitialLoading || resultCount === 0) return;
     const height = Math.ceil(resultsRef.current.getBoundingClientRect().height);
     const maxStableHeight = Math.round(window.innerHeight * 1.35);
     const nextHeight = Math.min(Math.max(height, 560), maxStableHeight);
     setResultsMinHeight((current) => (nextHeight > current ? nextHeight : current));
-  }, [feedKey, isInitialLoading, items.length]);
+  }, [feedKey, isInitialLoading, resultCount]);
 
-  useEffect(() => {
-    if (heroCandidate) setFeaturedHeroItem(heroCandidate);
-  }, [heroCandidate]);
+  useLayoutEffect(() => {
+    if (pendingRestoreScrollRef.current == null || isInitialLoading) return;
+    const scrollY = pendingRestoreScrollRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      window.scrollTo({ top: scrollY, behavior: 'auto' });
+      pendingRestoreScrollRef.current = null;
+      window.sessionStorage.removeItem(CATALOG_STATE_KEY);
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [feedKey, isInitialLoading]);
 
   const heroPreview = (
     <>
@@ -309,7 +629,7 @@ export default function CatalogPage() {
           </div>
 
           {heroItem ? (
-            <Link className="og-hero-preview" to={heroItem.href} aria-label={`Open ${heroItem.title}`}>
+            <Link className="og-hero-preview" to={heroItem.href} onClick={heroItem.kind === 'organization' ? saveCatalogState : undefined} aria-label={`Open ${heroItem.title}`}>
               {heroPreview}
             </Link>
           ) : (
@@ -321,12 +641,9 @@ export default function CatalogPage() {
 
         <section ref={consoleRef} className={`catalog-console${catalogDocked ? ' is-docked' : ''}`} id="catalog" aria-label="Search catalog">
           <div className="catalog-console-head">
-            <div>
-              <p className="og-kicker">Search area</p>
-              <h2>One feed for splats and organizations.</h2>
-            </div>
+            <p className="og-kicker">Search area</p>
             <p className="catalog-count" aria-live="polite">
-              {isRefreshing ? 'Refreshing…' : `${items.length} result${items.length === 1 ? '' : 's'}`}
+              {isRefreshing ? 'Refreshing...' : `${resultCount} result${resultCount === 1 ? '' : 's'}`}
             </p>
           </div>
 
@@ -404,11 +721,19 @@ export default function CatalogPage() {
 
         <section className="catalog-results" ref={resultsRef} style={{ minHeight: resultsMinHeight }} aria-busy={loading}>
           {isInitialLoading ? (
-            <CatalogSkeleton />
-          ) : items.length > 0 ? (
-            <div className="catalog-grid">
-              {items.map((item, index) => <CatalogCard key={`${item.kind}:${item.id}`} item={item} index={index} />)}
-            </div>
+            <CatalogSkeleton grouped={useGroupedResults} />
+          ) : resultCount > 0 ? (
+            useGroupedResults ? (
+              <div className="catalog-group-feed">
+                {organizationGroups.map((group, index) => (
+                  <OrganizationGroup key={group.id} group={group} index={index} showSplats={includeSplats} onOpen={saveCatalogState} />
+                ))}
+              </div>
+            ) : (
+              <div className="catalog-grid">
+                {flatSplatItems.map((item, index) => <CatalogCard key={item.id} item={item} index={index} />)}
+              </div>
+            )
           ) : (
             <div className="og-empty">
               <strong>No matching public results.</strong>
