@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { OrganizationSummary, SearchResponse, SplatListItem } from '@gsplat/shared';
+import type { LandingFeaturedResponse, OrganizationSummary, SearchResponse, SplatListItem } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -376,7 +376,7 @@ export default function CatalogPage() {
   const initialRestore = useMemo(() => readCatalogRestoreState(), []);
   const [query, setQuery] = useState(initialRestore?.query ?? params.get('q') ?? '');
   const [data, setData] = useState<SearchResponse | null>(null);
-  const [featuredData, setFeaturedData] = useState<SearchResponse | null>(null);
+  const [featuredData, setFeaturedData] = useState<LandingFeaturedResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [includeSplats, setIncludeSplats] = useState(initialRestore?.includeSplats ?? true);
@@ -438,7 +438,7 @@ export default function CatalogPage() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${API_BASE}/search`, { signal: controller.signal })
+    fetch(`${API_BASE}/landing-featured`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Server error (${res.status})`);
         return res.json();
@@ -547,7 +547,7 @@ export default function CatalogPage() {
     ? organizationGroups.length + (includeSplats ? organizationGroups.reduce((total, group) => total + group.splats.length, 0) : 0)
     : flatSplatItems.length;
 
-  const featuredHeroItem = useMemo(() => selectFeaturedHeroItem(featuredData), [featuredData]);
+  const featuredHeroItem = useMemo(() => featuredData?.splat ? splatToItem(featuredData.splat) : null, [featuredData]);
   const activeHeroFallback = useMemo(() => selectFeaturedHeroItem(data), [data]);
   const heroItem = featuredHeroItem ?? activeHeroFallback;
   const feedIds = useGroupedResults

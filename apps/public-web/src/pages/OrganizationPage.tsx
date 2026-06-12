@@ -57,22 +57,24 @@ export default function OrganizationPage() {
         {error && <div className="og-search-layout"><div className="og-error">{error}</div></div>}
         {!loading && organization && (
           <>
-            <button className="og-detail-back" type="button" onClick={returnToCatalog} aria-label="Back to catalog">
-              <svg aria-hidden="true" viewBox="0 0 24 24">
-                <path d="m15 6-6 6 6 6" />
-              </svg>
-            </button>
-
             <section className={`og-detail-hero${organization.previewUrl ? ' og-detail-hero--with-preview' : ''}`}>
-              <div>
-                <p className="og-eyebrow">Organization</p>
-                <h1>{organization.name}</h1>
-                {organization.description && <p>{organization.description}</p>}
-                <div className="og-meta">
-                  <span className="og-pill">{organization.publishedSplatCount ?? splats.length} published splats</span>
-                  {organization.websiteUrl && (
-                    <a className="og-pill" href={organization.websiteUrl} target="_blank" rel="noreferrer">Website</a>
-                  )}
+              <div className="og-detail-copy-row">
+                <button className="og-detail-back" type="button" onClick={returnToCatalog} aria-label="Back to catalog">
+                  <svg aria-hidden="true" viewBox="0 0 24 24">
+                    <path d="m15 6-6 6 6 6" />
+                  </svg>
+                </button>
+
+                <div>
+                  <p className="og-eyebrow">Organization</p>
+                  <h1>{organization.name}</h1>
+                  {organization.description && <p>{organization.description}</p>}
+                  <div className="og-meta">
+                    <span className="og-pill">{organization.publishedSplatCount ?? splats.length} published splats</span>
+                    {organization.websiteUrl && (
+                      <a className="og-pill" href={organization.websiteUrl} target="_blank" rel="noreferrer">Website</a>
+                    )}
+                  </div>
                 </div>
               </div>
               {organization.previewUrl && (

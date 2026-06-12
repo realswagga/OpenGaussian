@@ -1,6 +1,11 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import type { AssetVariantName, SplatAssetFormat, ViewerAssetVariant } from '@gsplat/shared';
+import {
+  getLandingFeaturedSettings,
+  resolveLandingFeaturedSplat,
+  serializeFeaturedSplat,
+} from '../../lib/landingFeatured.js';
 
 type StoredAssetVariant = {
   format?: SplatAssetFormat;
@@ -156,6 +161,17 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       query: term,
       splats: splats.map((s) => serializePublicSplat(s, assetBaseUrl)),
       organizations: organizations.map((org) => serializeOrganization(org, org._count.splats, assetBaseUrl)),
+    };
+  });
+
+  app.get('/landing-featured', async () => {
+    const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+    const settings = await getLandingFeaturedSettings(prisma);
+    const splat = await resolveLandingFeaturedSplat(prisma, settings);
+
+    return {
+      settings,
+      splat: serializeFeaturedSplat(splat, assetBaseUrl),
     };
   });
 

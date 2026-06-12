@@ -108,6 +108,15 @@ async function main() {
     console.log(`Attached ${attached.count} unassigned splat(s) to ${defaultOrg.name}.`);
   }
 
+  await prisma.appSetting.upsert({
+    where: { key: 'landing-featured' },
+    update: {},
+    create: {
+      key: 'landing-featured',
+      value: { mode: 'latest', selectedSplatId: null },
+    },
+  });
+
   console.log('[seed] Done.');
 }
 

@@ -1172,15 +1172,23 @@ button {
   padding: var(--space-2xl) 0 var(--space-xl);
 }
 
+.og-detail-copy-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  gap: var(--space-xs);
+}
+
 .og-detail-back {
   width: 2.35rem;
   height: 2.35rem;
   display: inline-grid;
   place-items: center;
-  margin: var(--space-lg) 0 calc(var(--space-lg) * -1);
+  margin-top: 1.72rem;
   border-radius: var(--radius-md);
   background: transparent;
-  color: var(--color-error);
+  color: var(--color-ink);
   cursor: pointer;
   transition:
     transform var(--dur-micro) var(--ease-out),
@@ -1198,7 +1206,7 @@ button {
   stroke: currentColor;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-width: 2.4;
+  stroke-width: 2;
 }
 
 @media (hover: hover) {
@@ -1436,8 +1444,8 @@ button {
     padding-left: 0;
   }
 
-  .og-detail-back {
-    margin-top: var(--space-md);
+  .og-detail-copy-row {
+    gap: var(--space-2xs);
   }
 }
 

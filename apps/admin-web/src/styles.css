@@ -506,7 +506,8 @@ button {
 }
 
 .admin-empty,
-.admin-error {
+.admin-error,
+.admin-success {
   display: grid;
   gap: var(--space-xs);
   padding: var(--space-lg);
@@ -519,6 +520,11 @@ button {
 .admin-error {
   border-color: var(--admin-danger);
   color: var(--admin-danger);
+}
+
+.admin-success {
+  border-color: var(--admin-success);
+  color: var(--admin-success);
 }
 
 .admin-auth-wrap {

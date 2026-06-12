@@ -380,6 +380,22 @@ export interface SearchResponse {
   organizations: OrganizationSummary[];
 }
 
+export type LandingFeaturedMode = 'manual' | 'latest' | 'random';
+
+export interface LandingFeaturedSettings {
+  mode: LandingFeaturedMode;
+  selectedSplatId: string | null;
+}
+
+export interface LandingFeaturedResponse {
+  settings: LandingFeaturedSettings;
+  splat: SplatListItem | null;
+}
+
+export interface AdminLandingFeaturedResponse extends LandingFeaturedResponse {
+  splats: SplatListItem[];
+}
+
 // ============================================================
 // Quality profiles
 // ============================================================
