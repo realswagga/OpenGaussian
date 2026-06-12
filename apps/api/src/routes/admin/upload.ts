@@ -333,6 +333,32 @@ export async function adminUploadRoutes(app: FastifyInstance) {
     };
   });
 
+  // DELETE /api/admin/splats/:id/preview
+  app.delete('/splats/:id/preview', async (request, reply) => {
+    const { id } = request.params as { id: string };
+
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'upload');
+    const splat = access.splat;
+    if (!splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot reset previews for this splat' },
+      });
+    }
+
+    await prisma.splat.update({
+      where: { id },
+      data: { posterKey: null },
+      select: { id: true },
+    });
+
+    return { preview: { posterKey: null, posterUrl: null } };
+  });
+
   // GET /api/admin/splats/:id/previews
   app.get('/splats/:id/previews', async (request, reply) => {
     const { id } = request.params as { id: string };

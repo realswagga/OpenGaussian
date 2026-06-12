@@ -55,10 +55,12 @@ interface PreviewImageEditorProps {
   emptyLabel?: string;
   outputFilename: string;
   uploadUrl: string;
+  resetUrl?: string;
   historyUrl?: string;
   incomingSourceKey?: string;
   className?: string;
   onUploaded: (previewKey: string) => void;
+  onReset?: () => void;
 }
 
 function assetUrl(key?: string | null, cacheKey?: number) {
@@ -198,10 +200,12 @@ export default function PreviewImageEditor({
   emptyLabel = 'No preview image',
   outputFilename,
   uploadUrl,
+  resetUrl,
   historyUrl,
   incomingSourceKey,
   className = '',
   onUploaded,
+  onReset,
 }: PreviewImageEditorProps) {
   const inputRef = useRef<HTMLInputElement>(null);
   const managerRef = useRef<HTMLElement>(null);
@@ -212,6 +216,7 @@ export default function PreviewImageEditor({
   const [offsetY, setOffsetY] = useState(0);
   const [cacheKey, setCacheKey] = useState(0);
   const [saving, setSaving] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const [loadingSource, setLoadingSource] = useState(false);
   const [error, setError] = useState('');
   const [message, setMessage] = useState('');
@@ -327,7 +332,7 @@ export default function PreviewImageEditor({
 
   useEffect(() => {
     const handleWindowPaste = (event: ClipboardEvent) => {
-      if (event.defaultPrevented || saving || loadingSource || !managerRef.current) return;
+    if (event.defaultPrevented || saving || resetting || loadingSource || !managerRef.current) return;
       if (isEditableElement(document.activeElement)) return;
 
       const file = imageFileFromClipboard(event.clipboardData);
@@ -339,7 +344,7 @@ export default function PreviewImageEditor({
 
     window.addEventListener('paste', handleWindowPaste);
     return () => window.removeEventListener('paste', handleWindowPaste);
-  }, [loadingSource, saving, selectSource]);
+  }, [loadingSource, resetting, saving, selectSource]);
 
   const crop = useMemo(() => {
     if (!source) return null;
@@ -358,7 +363,7 @@ export default function PreviewImageEditor({
   };
 
   const handlePanelPaste = (event: ReactClipboardEvent<HTMLElement>) => {
-    if (saving || loadingSource || isEditableElement(event.target as Element)) return;
+    if (saving || resetting || loadingSource || isEditableElement(event.target as Element)) return;
 
     const file = imageFileFromClipboard(event.clipboardData);
     if (!file) return;
@@ -440,6 +445,35 @@ export default function PreviewImageEditor({
     }
   };
 
+  const resetPreview = async () => {
+    if (!resetUrl || !currentPreviewUrl) return;
+
+    setResetting(true);
+    setError('');
+    setMessage('');
+
+    try {
+      const res = await fetch(resetUrl, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: { message?: string } }).error?.message || `Preview reset failed (${res.status})`);
+      }
+
+      setSource(null);
+      setCacheKey(Date.now());
+      setStoredHistory((current) => current.map((item) => ({ ...item, current: false })));
+      onReset?.();
+      setMessage('Preview reset to default.');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Preview reset failed.');
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const previewImageStyle: CSSProperties | undefined = source && crop
     ? {
         left: `${(-crop.x / crop.width) * 100}%`,
@@ -461,9 +495,14 @@ export default function PreviewImageEditor({
             <span>{currentKey ? currentKey.split('/').pop() : emptyLabel}</span>
           </div>
           <div className="admin-preview-current-actions">
-            <Button type="button" variant="secondary" onClick={reframeCurrent} disabled={!currentPreviewUrl || saving || loadingSource}>
+            <Button type="button" variant="secondary" onClick={reframeCurrent} disabled={!currentPreviewUrl || saving || resetting || loadingSource}>
               Reframe current
             </Button>
+            {resetUrl && (
+              <Button type="button" variant="danger" onClick={() => void resetPreview()} disabled={!currentPreviewUrl || saving || resetting || loadingSource}>
+                {resetting ? 'Resetting...' : 'Reset to default'}
+              </Button>
+            )}
           </div>
 
           <div className="admin-preview-history" aria-label="Recent previews">
@@ -512,7 +551,7 @@ export default function PreviewImageEditor({
               <h2>Preview</h2>
               <p>16:9 poster, exported at {PREVIEW_OUTPUT_WIDTH}x{PREVIEW_OUTPUT_HEIGHT}.</p>
             </div>
-            <Button type="button" variant="secondary" onClick={() => inputRef.current?.click()} disabled={saving || loadingSource}>
+            <Button type="button" variant="secondary" onClick={() => inputRef.current?.click()} disabled={saving || resetting || loadingSource}>
               {source ? 'Change image' : 'Select image'}
             </Button>
           </div>
@@ -559,8 +598,8 @@ export default function PreviewImageEditor({
               <div className="admin-preview-actions">
                 <span className="admin-muted">{source.file.name} / {source.width}x{source.height}</span>
                 <div className="admin-actions">
-                  <Button type="button" variant="secondary" onClick={resetFrame} disabled={saving}>Reset</Button>
-                  <Button type="button" variant="primary" onClick={uploadPreview} disabled={saving}>
+                  <Button type="button" variant="secondary" onClick={resetFrame} disabled={saving || resetting}>Reset</Button>
+                  <Button type="button" variant="primary" onClick={uploadPreview} disabled={saving || resetting}>
                     {saving ? 'Uploading...' : 'Save preview'}
                   </Button>
                 </div>
@@ -571,7 +610,7 @@ export default function PreviewImageEditor({
               className="admin-preview-drop"
               type="button"
               onClick={() => inputRef.current?.click()}
-              disabled={saving || loadingSource}
+              disabled={saving || resetting || loadingSource}
             >
               {loadingSource ? 'Loading image...' : 'Select or paste an image to reframe'}
             </button>

@@ -154,16 +154,18 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
 function PreviewTab({ splatId, posterKey, onPosterChanged }: {
   splatId: string;
   posterKey: string | null;
-  onPosterChanged: (posterKey: string) => void;
+  onPosterChanged: (posterKey: string | null) => void;
 }) {
   return (
     <PreviewImageEditor
       currentKey={posterKey}
       outputFilename={`preview-${splatId}.jpg`}
       uploadUrl={`${API_BASE}/admin/splats/${splatId}/preview`}
+      resetUrl={`${API_BASE}/admin/splats/${splatId}/preview`}
       historyUrl={`${API_BASE}/admin/splats/${splatId}/previews`}
       incomingSourceKey={`gsplat_taken_preview_${splatId}`}
       onUploaded={onPosterChanged}
+      onReset={() => onPosterChanged(null)}
     />
   );
 }

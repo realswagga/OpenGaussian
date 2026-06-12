@@ -341,6 +341,24 @@ export async function adminOrganizationRoutes(app: FastifyInstance) {
     };
   });
 
+  app.delete('/organizations/:id/preview', async (request, reply) => {
+    const auth = request as AuthRequest;
+    const { id } = request.params as { id: string };
+    if (!await canAccessOrganization(prisma, auth, id, 'edit')) {
+      return reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Manager access required' } });
+    }
+
+    const organization = await prisma.organization.updateMany({
+      where: { id },
+      data: { previewKey: null },
+    });
+    if (organization.count === 0) {
+      return reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Organization not found' } });
+    }
+
+    return { preview: { previewKey: null, posterKey: null, previewUrl: null } };
+  });
+
   app.get('/organizations/:id/previews', async (request, reply) => {
     const auth = request as AuthRequest;
     const { id } = request.params as { id: string };

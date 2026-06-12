@@ -156,6 +156,15 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
     )));
   };
 
+  const handlePreviewReset = () => {
+    if (!editingOrg) return;
+    setOrganizations((current) => current.map((org) => (
+      org.id === editingOrg.id
+        ? { ...org, previewKey: null, previewUrl: null }
+        : org
+    )));
+  };
+
   return (
     <>
       <div className="admin-page-head">
@@ -286,9 +295,11 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
             emptyLabel="No organization preview"
             outputFilename={`organization-${editingOrg.id}.jpg`}
             uploadUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}
+            resetUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}
             historyUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/previews`}
             className="admin-preview-manager--org"
             onUploaded={handlePreviewUploaded}
+            onReset={handlePreviewReset}
           />
         </section>
       )}
