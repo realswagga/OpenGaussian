@@ -1,5 +1,6 @@
 import type { PrismaClient } from '@prisma/client';
 import type { LandingFeaturedMode, LandingFeaturedSettings } from '@gsplat/shared';
+import { pickServedVersion, servedVersionInclude, versionPosterKey, versionSplatCount } from './versionState.js';
 
 export const LANDING_FEATURED_SETTING_KEY = 'landing-featured';
 
@@ -57,12 +58,13 @@ export async function saveLandingFeaturedSettings(
 
 export function serializeFeaturedSplat(s: any, assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets') {
   if (!s) return null;
+  const served = pickServedVersion(s);
   return {
     id: s.id,
     slug: s.slug,
     title: s.title,
     description: s.description,
-    posterUrl: assetUrl(assetBaseUrl, s.posterKey),
+    posterUrl: assetUrl(assetBaseUrl, versionPosterKey(s, served)),
     organization: s.organization ? {
       id: s.organization.id,
       slug: s.organization.slug,
@@ -72,13 +74,13 @@ export function serializeFeaturedSplat(s: any, assetBaseUrl = process.env.ASSET_
       previewUrl: assetUrl(assetBaseUrl, s.organization.previewKey),
       createdAt: s.organization.createdAt?.toISOString?.() ?? s.organization.createdAt,
     } : null,
-    splatCount: s.splatCount,
+    splatCount: versionSplatCount(s, served),
     publishedAt: s.publishedAt?.toISOString?.() ?? s.publishedAt ?? null,
   };
 }
 
 export async function resolveLandingFeaturedSplat(prisma: PrismaClient, settings: LandingFeaturedSettings) {
-  const include = { organization: true };
+  const include = { organization: true, ...servedVersionInclude };
   const where = { status: 'PUBLISHED' as const };
 
   if (settings.mode === 'manual' && settings.selectedSplatId) {
@@ -113,7 +115,7 @@ export async function resolveLandingFeaturedSplat(prisma: PrismaClient, settings
 export async function listFeaturedSplatOptions(prisma: PrismaClient) {
   return prisma.splat.findMany({
     where: { status: 'PUBLISHED' },
-    include: { organization: true },
+    include: { organization: true, ...servedVersionInclude },
     orderBy: [{ publishedAt: 'desc' }, { updatedAt: 'desc' }],
     take: 100,
   });

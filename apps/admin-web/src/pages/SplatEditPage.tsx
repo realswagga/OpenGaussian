@@ -15,14 +15,21 @@ interface SplatFormData {
 
 interface VersionItem {
   id: string;
+  splatId?: string;
   version: number;
   sourceKey: string;
-  convertedKey?: string;
-  lodKey?: string;
-  posterKey?: string;
+  convertedKey?: string | null;
+  lodKey?: string | null;
+  posterKey?: string | null;
+  productionFormat?: string | null;
+  splatCount?: number | null;
+  sizeBytes?: number | null;
+  settingsKey?: string | null;
   processingStatus: string;
-  processingLog?: string;
+  processingLog?: string | null;
   metrics?: unknown;
+  markerCount?: number;
+  isServed?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -100,7 +107,19 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, 
   );
 }
 
-function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: boolean }) {
+function VersionsTab({ splatId, versions, loading, servingVersionId, actionLoading, onServe }: {
+  splatId: string;
+  versions: VersionItem[];
+  loading: boolean;
+  servingVersionId: string | null;
+  actionLoading: string | null;
+  onServe: (version: VersionItem) => void;
+}) {
+  const outputLabel = (version: VersionItem) => {
+    const key = version.lodKey || version.convertedKey || version.sourceKey;
+    return key?.split('/').pop() || '-';
+  };
+
   if (loading) return <div style={{ padding: '2rem', textAlign: 'center' }}><Spinner size="sm" /></div>;
 
   if (versions.length === 0) {
@@ -118,8 +137,10 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
           <tr style={{ borderBottom: '1px solid #2a2a2a' }}>
             <th style={thStyle}>Version</th>
             <th style={thStyle}>Status</th>
-            <th style={thStyle}>Source</th>
+            <th style={thStyle}>Output</th>
+            <th style={thStyle}>Markers</th>
             <th style={thStyle}>Log</th>
+            <th style={thStyle}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -127,6 +148,9 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
             <tr key={v.id} style={{ borderBottom: '1px solid #1a1a1a' }}>
               <td style={tdStyle}>
                 <span style={{ fontWeight: 600 }}>v{v.version}</span>
+                {(v.isServed || servingVersionId === v.id) && (
+                  <Badge variant="success" style={{ marginLeft: 8 }}>Served</Badge>
+                )}
               </td>
               <td style={tdStyle}>
                 <Badge variant={
@@ -137,11 +161,29 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
                   {v.processingStatus}
                 </Badge>
               </td>
-              <td style={{ ...tdStyle, fontFamily: 'monospace', fontSize: '0.6875rem', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {v.sourceKey?.split('/').pop() || '—'}
+              <td style={{ ...tdStyle, maxWidth: 240 }}>
+                <div style={{ display: 'grid', gap: 4 }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: '0.6875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {outputLabel(v)}
+                  </span>
+                  <span style={{ color: '#737373', fontSize: '0.6875rem' }}>
+                    {v.productionFormat || 'source'}{v.posterKey ? ' / preview' : ''}{v.settingsKey ? ' / settings' : ''}
+                  </span>
+                </div>
               </td>
+              <td style={tdStyle}>{v.markerCount ?? 0}</td>
               <td style={{ ...tdStyle, color: '#737373', fontSize: '0.6875rem', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {v.processingLog?.split('\n').pop() || '—'}
+              </td>
+              <td style={tdStyle}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                  <Link className="admin-button-secondary" to={`/splats/${splatId}/markers-3d?versionId=${encodeURIComponent(v.id)}`}>3D editor</Link>
+                  {v.processingStatus === 'READY' && !(v.isServed || servingVersionId === v.id) && (
+                    <button className="admin-button-secondary" type="button" disabled={actionLoading === v.id} onClick={() => onServe(v)}>
+                      {actionLoading === v.id ? 'Serving...' : 'Serve'}
+                    </button>
+                  )}
+                </div>
               </td>
             </tr>
           ))}
@@ -151,22 +193,42 @@ function VersionsTab({ versions, loading }: { versions: VersionItem[]; loading: 
   );
 }
 
-function PreviewTab({ splatId, posterKey, onPosterChanged }: {
+function PreviewTab({ splatId, versions, selectedVersionId, onSelectedVersionIdChange, posterKey, onPosterChanged }: {
   splatId: string;
+  versions: VersionItem[];
+  selectedVersionId: string | null;
+  onSelectedVersionIdChange: (versionId: string) => void;
   posterKey: string | null;
-  onPosterChanged: (posterKey: string | null) => void;
+  onPosterChanged: (posterKey: string | null, versionId?: string | null) => void;
 }) {
+  const selectedVersion = versions.find((v) => v.id === selectedVersionId) || null;
+  const baseUrl = selectedVersion
+    ? `${API_BASE}/admin/splats/${splatId}/versions/${selectedVersion.id}`
+    : `${API_BASE}/admin/splats/${splatId}`;
+
   return (
-    <PreviewImageEditor
-      currentKey={posterKey}
-      outputFilename={`preview-${splatId}.jpg`}
-      uploadUrl={`${API_BASE}/admin/splats/${splatId}/preview`}
-      resetUrl={`${API_BASE}/admin/splats/${splatId}/preview`}
-      historyUrl={`${API_BASE}/admin/splats/${splatId}/previews`}
-      incomingSourceKey={`gsplat_taken_preview_${splatId}`}
-      onUploaded={onPosterChanged}
-      onReset={() => onPosterChanged(null)}
-    />
+    <div style={{ display: 'grid', gap: 12 }}>
+      {versions.length > 0 && (
+        <label className="admin-label" style={{ maxWidth: 320 }}>
+          Preview version
+          <select className="admin-select" value={selectedVersionId || ''} onChange={(event) => onSelectedVersionIdChange(event.target.value)}>
+            {versions.map((v) => (
+              <option key={v.id} value={v.id}>v{v.version}{v.isServed ? ' (served)' : ''}</option>
+            ))}
+          </select>
+        </label>
+      )}
+      <PreviewImageEditor
+        currentKey={selectedVersion?.posterKey ?? posterKey}
+        outputFilename={`preview-${splatId}${selectedVersion ? `-v${selectedVersion.version}` : ''}.jpg`}
+        uploadUrl={`${baseUrl}/preview`}
+        resetUrl={`${baseUrl}/preview`}
+        historyUrl={`${baseUrl}/previews`}
+        incomingSourceKey={`gsplat_taken_preview_${splatId}`}
+        onUploaded={(key) => onPosterChanged(key, selectedVersion?.id ?? null)}
+        onReset={() => onPosterChanged(null, selectedVersion?.id ?? null)}
+      />
+    </div>
   );
 }
 
@@ -187,10 +249,13 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
   const [error, setError] = useState('');
   const [posterKey, setPosterKey] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState('metadata');
+  const [servingVersionId, setServingVersionId] = useState<string | null>(null);
+  const [previewVersionId, setPreviewVersionId] = useState<string | null>(null);
 
   // Current splat status for context actions
   const [splatStatus, setSplatStatus] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  const [versionActionLoading, setVersionActionLoading] = useState<string | null>(null);
 
   // Version history
   const [versions, setVersions] = useState<VersionItem[]>([]);
@@ -231,6 +296,8 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
         setSplatId(s.id || id);
         setSplatStatus(s.status || '');
         setPosterKey(s.posterKey || null);
+        setServingVersionId(s.servingVersionId || null);
+        setPreviewVersionId((current) => current || s.servingVersionId || null);
         setLoading(false);
       })
       .catch((err) => {
@@ -246,7 +313,9 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
     fetch(`${API_BASE}/admin/splats/${splatId}/versions`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => {
-        setVersions(data.items || []);
+        const items = data.items || [];
+        setVersions(items);
+        setPreviewVersionId((current) => current || items.find((v: VersionItem) => v.isServed)?.id || items[0]?.id || null);
         setVersionsLoading(false);
       })
       .catch(() => setVersionsLoading(false));
@@ -298,6 +367,44 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
     }
   };
 
+  const serveVersion = async (version: VersionItem) => {
+    if (!splatId) return;
+    setVersionActionLoading(version.id);
+    setError('');
+    try {
+      const res = await fetch(`${API_BASE}/admin/splats/${splatId}/versions/${version.id}/serve`, {
+        method: 'POST',
+        credentials: 'include',
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: { message?: string } }).error?.message || 'Serve version failed');
+      }
+      const data = await res.json();
+      const nextSplat = data.splat || {};
+      setServingVersionId(version.id);
+      setPreviewVersionId(version.id);
+      setPosterKey(nextSplat.posterKey || version.posterKey || null);
+      setSplatStatus(nextSplat.status || splatStatus);
+      setVersions((current) => current.map((item) => ({ ...item, isServed: item.id === version.id })));
+    } catch (err) {
+      alert(`Serve version: ${err instanceof Error ? err.message : 'Serve version failed'}`);
+    } finally {
+      setVersionActionLoading(null);
+    }
+  };
+
+  const handlePosterChanged = (nextPosterKey: string | null, versionId?: string | null) => {
+    if (versionId) {
+      setVersions((current) => current.map((item) => (
+        item.id === versionId ? { ...item, posterKey: nextPosterKey } : item
+      )));
+      if (servingVersionId === versionId) setPosterKey(nextPosterKey);
+      return;
+    }
+    setPosterKey(nextPosterKey);
+  };
+
   if (loading) {
     return <div style={{ display: 'flex', justifyContent: 'center', padding: '4rem 0' }}><Spinner size="md" /></div>;
   }
@@ -335,12 +442,30 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
     {
       id: 'versions',
       label: `Versions (${versions.length})`,
-      content: <VersionsTab versions={versions} loading={versionsLoading} />,
+      content: splatId ? (
+        <VersionsTab
+          splatId={splatId}
+          versions={versions}
+          loading={versionsLoading}
+          servingVersionId={servingVersionId}
+          actionLoading={versionActionLoading}
+          onServe={serveVersion}
+        />
+      ) : null,
     },
     {
       id: 'preview',
       label: 'Preview',
-      content: splatId ? <PreviewTab splatId={splatId} posterKey={posterKey} onPosterChanged={setPosterKey} /> : null,
+      content: splatId ? (
+        <PreviewTab
+          splatId={splatId}
+          versions={versions}
+          selectedVersionId={previewVersionId}
+          onSelectedVersionIdChange={setPreviewVersionId}
+          posterKey={posterKey}
+          onPosterChanged={handlePosterChanged}
+        />
+      ) : null,
     },
   ];
 
@@ -373,7 +498,7 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
           <Button size="sm" variant="secondary" onClick={() => navigate(`/splats/${splatId}/upload`)}>
             ↑ Upload
           </Button>
-          <Button size="sm" variant="secondary" onClick={() => navigate(`/splats/${splatId}/markers-3d`)}>
+          <Button size="sm" variant="secondary" onClick={() => navigate(`/splats/${splatId}/markers-3d${previewVersionId || servingVersionId ? `?versionId=${encodeURIComponent(previewVersionId || servingVersionId || '')}` : ''}`)}>
             ◧ 3D Editor
           </Button>
           {splatStatus === 'READY' && (

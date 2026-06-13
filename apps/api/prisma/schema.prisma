@@ -124,7 +124,9 @@ model Splat {
   defaultCameraJson   Json?
   globalSettingsJson  Json?
 
-  versions            SplatVersion[]
+  servingVersionId    String?
+  servingVersion      SplatVersion? @relation("ServingVersion", fields: [servingVersionId], references: [id], onDelete: SetNull)
+  versions            SplatVersion[] @relation("SplatVersions")
   annotations         Annotation[]
 
   createdAt           DateTime @default(now())
@@ -134,31 +136,49 @@ model Splat {
   publishedAt         DateTime?
 
   @@index([organizationId])
+  @@index([servingVersionId])
 }
 
 model SplatVersion {
   id               String           @id @default(uuid())
   splatId          String
-  splat            Splat            @relation(fields: [splatId], references: [id], onDelete: Cascade)
+  splat            Splat            @relation("SplatVersions", fields: [splatId], references: [id], onDelete: Cascade)
+  servedBySplats   Splat[]          @relation("ServingVersion")
   version          Int
 
   sourceKey        String
   convertedKey     String?
   lodKey           String?
   posterKey        String?
+  productionFormat String?
+  splatCount       Int?
+  sizeBytes        BigInt?
+  boundingBoxJson  Json?
+
+  defaultCameraJson  Json?
+  globalSettingsJson Json?
+  pretransformJson   Json?
+  settingsKey        String?
 
   processingStatus ProcessingStatus @default(PENDING)
   processingLog    String?
   metricsJson      Json?
 
+  annotations      Annotation[]
+
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+
+  @@unique([splatId, version])
+  @@index([splatId])
 }
 
 model Annotation {
   id                  String   @id @default(uuid())
   splatId             String
   splat               Splat    @relation(fields: [splatId], references: [id], onDelete: Cascade)
+  versionId           String?
+  version             SplatVersion? @relation(fields: [versionId], references: [id], onDelete: Cascade)
 
   title               String
   body                String?
@@ -179,6 +199,8 @@ model Annotation {
 
   createdAt           DateTime @default(now())
   updatedAt           DateTime @updatedAt
+
+  @@index([splatId, versionId])
 }
 
 model ViewerPreset {

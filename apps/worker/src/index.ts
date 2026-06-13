@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import Redis from 'ioredis';
 import { Queue, Worker, Job } from 'bullmq';
-import { PrismaClient } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import type { AssetVariantName } from '@gsplat/shared';
 import * as fs from 'fs';
@@ -38,6 +38,10 @@ type AssetVariantMap = Partial<Record<AssetVariantName, WorkerAssetVariantMetada
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function asJson(value: unknown): Prisma.InputJsonValue | typeof Prisma.JsonNull {
+  return value === undefined || value === null ? Prisma.JsonNull : value as Prisma.InputJsonValue;
 }
 
 const prisma = new PrismaClient();
@@ -118,6 +122,99 @@ async function updateVersionLog(versionId: string, message: string): Promise<voi
   } catch (err) {
     console.error(`[worker] Failed to update version log:`, err);
   }
+}
+
+function markerSnapshot(a: {
+  id: string;
+  title: string;
+  body: string | null;
+  kind: string;
+  positionX: number;
+  positionY: number;
+  positionZ: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scale: number;
+  icon: string | null;
+  color: string | null;
+}) {
+  return {
+    id: a.id,
+    title: a.title,
+    body: a.body,
+    kind: a.kind,
+    position: [a.positionX, a.positionY, a.positionZ],
+    rotation: [a.rotationX, a.rotationY, a.rotationZ],
+    scale: a.scale,
+    icon: a.icon,
+    color: a.color,
+  };
+}
+
+async function syncVersionSettingsSnapshot(splatId: string, versionId: string): Promise<void> {
+  const version = await prisma.splatVersion.findFirst({
+    where: { id: versionId, splatId },
+    include: { annotations: { orderBy: { createdAt: 'asc' } } },
+  });
+  if (!version) return;
+
+  const settingsKey = `splats/${splatId}/versions/${versionId}/settings.json`;
+  const snapshot = {
+    schemaVersion: 1,
+    splatId,
+    versionId,
+    version: version.version,
+    productionFormat: version.productionFormat,
+    convertedKey: version.convertedKey,
+    lodKey: version.lodKey,
+    posterKey: version.posterKey,
+    splatCount: version.splatCount,
+    sizeBytes: version.sizeBytes ? Number(version.sizeBytes) : null,
+    boundingBox: version.boundingBoxJson,
+    defaultCamera: version.defaultCameraJson,
+    globalSettings: version.globalSettingsJson,
+    pretransform: version.pretransformJson,
+    markers: version.annotations.map(markerSnapshot),
+    updatedAt: new Date().toISOString(),
+  };
+
+  await s3Client.send(new PutObjectCommand({
+    Bucket: S3_BUCKET,
+    Key: settingsKey,
+    Body: JSON.stringify(snapshot, null, 2),
+    ContentType: 'application/json',
+  }));
+
+  if (version.settingsKey !== settingsKey) {
+    await prisma.splatVersion.update({
+      where: { id: versionId },
+      data: { settingsKey },
+    });
+  }
+}
+
+async function syncSplatMirrorIfServed(splatId: string, versionId: string): Promise<void> {
+  const splat = await prisma.splat.findUnique({ where: { id: splatId } });
+  if (!splat || splat.servingVersionId !== versionId) return;
+  const version = await prisma.splatVersion.findFirst({ where: { id: versionId, splatId } });
+  if (!version) return;
+
+  await prisma.splat.update({
+    where: { id: splatId },
+    data: {
+      productionFormat: version.productionFormat,
+      productionObjectKey: version.convertedKey,
+      lodManifestKey: version.lodKey,
+      posterKey: version.posterKey,
+      splatCount: version.splatCount,
+      sizeBytes: version.sizeBytes,
+      boundingBoxJson: asJson(version.boundingBoxJson),
+      defaultCameraJson: asJson(version.defaultCameraJson),
+      globalSettingsJson: asJson(version.globalSettingsJson),
+      pretransformJson: asJson(version.pretransformJson),
+    },
+  });
 }
 
 async function downloadOriginal(splatId: string, versionId: string, sourceKey: string): Promise<string> {
@@ -208,50 +305,67 @@ async function markVersionReady(splatId: string, versionId: string, updates: {
   sizeBytes?: number;
   assetVariants?: AssetVariantMap;
 }): Promise<void> {
-  const metricsJson: any = {
-    format: updates.productionFormat,
-    splatCount: updates.splatCount,
-    fileSize: updates.sizeBytes,
-  };
+  const existingVersion = await prisma.splatVersion.findUnique({
+    where: { id: versionId },
+    select: {
+      convertedKey: true,
+      lodKey: true,
+      posterKey: true,
+      productionFormat: true,
+      splatCount: true,
+      sizeBytes: true,
+      globalSettingsJson: true,
+      metricsJson: true,
+    },
+  });
+  const hasUpdate = <K extends keyof typeof updates>(key: K) => Object.prototype.hasOwnProperty.call(updates, key);
+  const metricsJson: Record<string, unknown> = isRecord(existingVersion?.metricsJson)
+    ? { ...existingVersion.metricsJson }
+    : {};
+  if (hasUpdate('productionFormat')) metricsJson.format = updates.productionFormat ?? null;
+  if (hasUpdate('splatCount')) metricsJson.splatCount = updates.splatCount ?? null;
+  if (hasUpdate('sizeBytes')) metricsJson.fileSize = updates.sizeBytes ?? null;
   if (updates.assetVariants && Object.keys(updates.assetVariants).length > 0) {
     metricsJson.assetVariants = updates.assetVariants;
   }
+  const currentVersionSettings = isRecord(existingVersion?.globalSettingsJson) ? existingVersion.globalSettingsJson : {};
+  const nextVersionSettings = updates.assetVariants && Object.keys(updates.assetVariants).length > 0
+    ? { ...currentVersionSettings, assetVariants: updates.assetVariants }
+    : currentVersionSettings;
 
   await prisma.splatVersion.update({
     where: { id: versionId },
     data: {
       processingStatus: 'READY',
-      convertedKey: updates.convertedKey || null,
-      metricsJson,
+      convertedKey: hasUpdate('convertedKey') ? updates.convertedKey || null : existingVersion?.convertedKey ?? null,
+      lodKey: hasUpdate('lodKey') ? updates.lodKey || null : existingVersion?.lodKey ?? null,
+      posterKey: hasUpdate('posterKey') ? updates.posterKey || null : existingVersion?.posterKey ?? null,
+      productionFormat: hasUpdate('productionFormat') ? updates.productionFormat || null : existingVersion?.productionFormat ?? null,
+      splatCount: hasUpdate('splatCount') ? updates.splatCount ?? null : existingVersion?.splatCount ?? null,
+      sizeBytes: hasUpdate('sizeBytes') ? (updates.sizeBytes != null ? BigInt(updates.sizeBytes) : null) : existingVersion?.sizeBytes ?? null,
+      globalSettingsJson: Object.keys(nextVersionSettings).length > 0 ? asJson(nextVersionSettings) : Prisma.JsonNull,
+      metricsJson: asJson(metricsJson),
     },
   });
 
-  const splatUpdateData: any = {
-    status: 'READY',
-    productionFormat: updates.productionFormat || null,
-    productionObjectKey: updates.convertedKey || null,
-    lodManifestKey: updates.lodKey || null,
-    posterKey: updates.posterKey || null,
-    splatCount: updates.splatCount || null,
-    sizeBytes: updates.sizeBytes ? BigInt(updates.sizeBytes) : null,
-  };
-
-  if (updates.assetVariants && Object.keys(updates.assetVariants).length > 0) {
-    const existing = await prisma.splat.findUnique({
+  const splat = await prisma.splat.findUnique({
+    where: { id: splatId },
+    select: { servingVersionId: true, status: true },
+  });
+  if (splat) {
+    const shouldAutoServe = !splat.servingVersionId;
+    await prisma.splat.update({
       where: { id: splatId },
-      select: { globalSettingsJson: true },
+      data: {
+        status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'READY',
+        ...(shouldAutoServe ? { servingVersionId: versionId } : {}),
+      },
     });
-    const currentSettings = isRecord(existing?.globalSettingsJson) ? existing.globalSettingsJson : {};
-    splatUpdateData.globalSettingsJson = {
-      ...currentSettings,
-      assetVariants: updates.assetVariants,
-    };
+    await syncSplatMirrorIfServed(splatId, versionId);
   }
 
-  // Update splat record
-  await prisma.splat.update({
-    where: { id: splatId },
-    data: splatUpdateData,
+  await syncVersionSettingsSnapshot(splatId, versionId).catch((err) => {
+    console.warn(`[worker] Failed to sync settings snapshot for ${splatId}/${versionId}: ${err}`);
   });
 }
 
@@ -969,10 +1083,16 @@ async function markVersionFailed(versionId: string, splatId: string, errorMessag
     },
   });
 
-  await prisma.splat.update({
+  const splat = await prisma.splat.findUnique({
     where: { id: splatId },
-    data: { status: 'FAILED' },
+    select: { status: true, servingVersionId: true },
   });
+  if (splat && splat.status !== 'PUBLISHED' && !splat.servingVersionId) {
+    await prisma.splat.update({
+      where: { id: splatId },
+      data: { status: 'FAILED' },
+    });
+  }
 }
 
 // Process a single job
@@ -1106,13 +1226,13 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         await job.updateProgress(10);
         await updateVersionLog(versionId, 'Generating poster image...');
 
-        // Try production key first (converted format is often PLY), then source key
-        const splatRecord = await prisma.splat.findUnique({
-          where: { id: splatId },
-          select: { productionObjectKey: true, sourceObjectKey: true },
+        // Try this version's converted key first, then source key.
+        const versionRecord = await prisma.splatVersion.findUnique({
+          where: { id: versionId },
+          select: { convertedKey: true, sourceKey: true },
         });
 
-        let previewKey = splatRecord?.productionObjectKey || sourceObjectKey;
+        let previewKey = versionRecord?.convertedKey || sourceObjectKey || versionRecord?.sourceKey;
         if (!previewKey) throw new Error('No source or production key available for preview');
 
         let tmpFile: string;
@@ -1122,7 +1242,7 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
           posterBuffer = await generatePoster(tmpFile);
         } catch (posterErr) {
           // If production key fails, try source key
-          const fallbackKey = splatRecord?.sourceObjectKey || sourceObjectKey;
+          const fallbackKey = versionRecord?.sourceKey || sourceObjectKey;
           if (fallbackKey && fallbackKey !== previewKey) {
             await updateVersionLog(versionId, `Production key failed for poster, trying source key...`);
             previewKey = fallbackKey;
@@ -1157,10 +1277,8 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
           data: { posterKey },
         });
 
-        await prisma.splat.update({
-          where: { id: splatId },
-          data: { posterKey },
-        });
+        await syncVersionSettingsSnapshot(splatId, versionId).catch(() => undefined);
+        await syncSplatMirrorIfServed(splatId, versionId);
 
         await fs.promises.unlink(tmpFile).catch(() => {});
         await job.updateProgress(100);
@@ -1172,18 +1290,18 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         await job.updateProgress(5);
         await updateVersionLog(versionId, 'Checking pretransform settings...');
 
-        const splatRecord = await prisma.splat.findUnique({
-          where: { id: splatId },
-          select: { pretransformJson: true, productionObjectKey: true, productionFormat: true },
+        const versionRecord = await prisma.splatVersion.findUnique({
+          where: { id: versionId },
+          select: { pretransformJson: true, convertedKey: true, productionFormat: true },
         });
 
-        if (!splatRecord?.pretransformJson) {
+        if (!versionRecord?.pretransformJson) {
           await updateVersionLog(versionId, 'No pretransform set; nothing to apply.');
           await job.updateProgress(100);
           return { skipped: true, reason: 'No pretransform' };
         }
 
-        const pretransform = splatRecord.pretransformJson as {
+        const pretransform = versionRecord.pretransformJson as {
           position: [number, number, number];
           rotation: [number, number, number];
           scale: [number, number, number];
@@ -1193,14 +1311,14 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
           `Applying pretransform: pos=[${pretransform.position.join(',')}], rot=[${pretransform.rotation.join(',')}], scale=[${pretransform.scale.join(',')}]`
         );
 
-        const fmt = splatRecord.productionFormat || 'ply';
+        const fmt = versionRecord.productionFormat || 'ply';
         if (fmt !== 'ply' && fmt !== 'compressed-ply') {
           await updateVersionLog(versionId, `Pretransform skipped: cannot transform format "${fmt}"`);
           await job.updateProgress(100);
           return { skipped: true, reason: `Unsupported format: ${fmt}` };
         }
 
-        const prodKey = splatRecord.productionObjectKey || sourceObjectKey;
+        const prodKey = versionRecord.convertedKey || sourceObjectKey;
         if (!prodKey) throw new Error('No production asset found to transform');
 
         const tmpFile = await downloadOriginal(splatId, versionId, prodKey);
@@ -1283,14 +1401,12 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         const transformedKey = `splats/${splatId}/versions/${versionId}/scene-transformed.ply`;
         await writeBuffer(transformedKey, transformed);
 
-        await prisma.splat.update({
-          where: { id: splatId },
-          data: { productionObjectKey: transformedKey },
-        });
         await prisma.splatVersion.update({
           where: { id: versionId },
           data: { convertedKey: transformedKey },
         });
+        await syncVersionSettingsSnapshot(splatId, versionId).catch(() => undefined);
+        await syncSplatMirrorIfServed(splatId, versionId);
 
         await fs.promises.unlink(tmpFile).catch(() => {});
         await job.updateProgress(100);

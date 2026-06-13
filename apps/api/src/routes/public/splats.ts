@@ -6,6 +6,21 @@ import {
   resolveLandingFeaturedSplat,
   serializeFeaturedSplat,
 } from '../../lib/landingFeatured.js';
+import {
+  pickServedVersion,
+  servedVersionInclude,
+  versionBoundingBox,
+  versionConvertedKey,
+  versionDefaultCamera,
+  versionGlobalSettings,
+  versionLodKey,
+  versionMetaKey,
+  versionPosterKey,
+  versionPretransform,
+  versionProductionFormat,
+  versionSizeBytes,
+  versionSplatCount,
+} from '../../lib/versionState.js';
 
 type StoredAssetVariant = {
   format?: SplatAssetFormat;
@@ -44,14 +59,16 @@ function serializeOrganization(org: any, publishedSplatCount?: number, assetBase
 }
 
 function serializePublicSplat(s: any, assetBaseUrl: string) {
+  const served = pickServedVersion(s);
+  const posterKey = versionPosterKey(s, served);
   return {
     id: s.id,
     slug: s.slug,
     title: s.title,
     description: s.description,
-    posterUrl: s.posterKey ? `${assetBaseUrl}/${s.posterKey}` : null,
+    posterUrl: assetUrl(assetBaseUrl, posterKey) ?? null,
     organization: serializeOrganization(s.organization, undefined, assetBaseUrl),
-    splatCount: s.splatCount,
+    splatCount: versionSplatCount(s, served),
     publishedAt: s.publishedAt?.toISOString() ?? null,
   };
 }
@@ -104,7 +121,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         ...(organization ? { organization: { slug: organization } } : {}),
       },
       orderBy: { publishedAt: 'desc' },
-      include: { organization: true },
+      include: { organization: true, ...servedVersionInclude },
     });
 
     const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
@@ -135,7 +152,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         },
         orderBy: { publishedAt: 'desc' },
         take: 60,
-        include: { organization: true },
+        include: { organization: true, ...servedVersionInclude },
       }),
       prisma.organization.findMany({
         where: {
@@ -197,7 +214,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
         splats: {
           where: { status: 'PUBLISHED' },
           orderBy: { publishedAt: 'desc' },
-          include: { organization: true },
+          include: { organization: true, ...servedVersionInclude },
         },
         _count: { select: { splats: { where: { status: 'PUBLISHED' } } } },
       },
@@ -220,7 +237,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const splat = await prisma.splat.findFirst({
       where: { slug, status: 'PUBLISHED' },
-      include: { organization: true },
+      include: { organization: true, ...servedVersionInclude },
     });
 
     if (!splat) {
@@ -229,6 +246,8 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       });
     }
 
+    const served = pickServedVersion(splat);
+
     return {
       id: splat.id,
       slug: splat.slug,
@@ -236,11 +255,17 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       description: splat.description,
       status: splat.status,
       sourceFormat: splat.sourceFormat,
-      splatCount: splat.splatCount,
-      sizeBytes: splat.sizeBytes ? Number(splat.sizeBytes) : null,
-      boundingBoxJson: splat.boundingBoxJson,
-      defaultCameraJson: splat.defaultCameraJson,
-      globalSettingsJson: splat.globalSettingsJson,
+      servingVersionId: served?.id ?? splat.servingVersionId ?? null,
+      productionFormat: versionProductionFormat(splat, served),
+      productionObjectKey: versionConvertedKey(splat, served),
+      lodManifestKey: versionLodKey(splat, served),
+      posterKey: versionPosterKey(splat, served),
+      splatCount: versionSplatCount(splat, served),
+      sizeBytes: versionSizeBytes(splat, served) ? Number(versionSizeBytes(splat, served)) : null,
+      boundingBoxJson: versionBoundingBox(splat, served),
+      defaultCameraJson: versionDefaultCamera(splat, served),
+      globalSettingsJson: versionGlobalSettings(splat, served),
+      pretransformJson: versionPretransform(splat, served),
       organization: serializeOrganization(splat.organization, undefined, process.env.ASSET_PUBLIC_URL || '/assets'),
       createdAt: splat.createdAt.toISOString(),
       updatedAt: splat.updatedAt.toISOString(),
@@ -253,6 +278,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const splat = await prisma.splat.findFirst({
       where: { slug, status: 'PUBLISHED' },
+      include: servedVersionInclude,
     });
 
     if (!splat) {
@@ -262,35 +288,31 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     }
 
     const assetBaseUrl = process.env.ASSET_PUBLIC_URL || '/assets';
+    const served = pickServedVersion(splat);
 
-    const productionUrl = splat.productionObjectKey
-      ? `${assetBaseUrl}/${splat.productionObjectKey}`
-      : '';
-    const productionFormat = (splat.productionFormat || 'ply') as 'sog' | 'sog-meta' | 'lod-meta' | 'ply' | 'compressed-ply' | 'spz';
-    const lodManifestKey = splat.lodManifestKey || (productionFormat === 'lod-meta' ? splat.productionObjectKey : null);
-    const metaKey = productionFormat === 'sog-meta' ? splat.productionObjectKey : null;
-    const variants = buildManifestVariants(splat.globalSettingsJson, assetBaseUrl);
+    const productionKey = versionConvertedKey(splat, served);
+    const productionUrl = assetUrl(assetBaseUrl, productionKey) ?? '';
+    const productionFormat = (versionProductionFormat(splat, served) || 'ply') as 'sog' | 'sog-meta' | 'lod-meta' | 'ply' | 'compressed-ply' | 'spz';
+    const lodManifestKey = versionLodKey(splat, served);
+    const metaKey = versionMetaKey(splat, served);
+    const posterKey = versionPosterKey(splat, served);
+    const variants = buildManifestVariants(versionGlobalSettings(splat, served), assetBaseUrl);
 
     return {
       id: splat.id,
       slug: splat.slug,
       title: splat.title,
+      version: served ? { id: served.id, number: served.version } : undefined,
       assets: {
         format: productionFormat,
         sceneUrl: productionUrl,
-        lodManifestUrl: lodManifestKey
-          ? `${assetBaseUrl}/${lodManifestKey}`
-          : undefined,
-        metaUrl: metaKey
-          ? `${assetBaseUrl}/${metaKey}`
-          : undefined,
-        posterUrl: splat.posterKey
-          ? `${assetBaseUrl}/${splat.posterKey}`
-          : undefined,
+        lodManifestUrl: assetUrl(assetBaseUrl, lodManifestKey),
+        metaUrl: assetUrl(assetBaseUrl, metaKey),
+        posterUrl: assetUrl(assetBaseUrl, posterKey),
         variants,
       },
       viewer: {
-        defaultCamera: splat.defaultCameraJson,
+        defaultCamera: versionDefaultCamera(splat, served),
         enableVr: true,
         enableWebGpu: true,
         quality: 'auto',
@@ -299,7 +321,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
           mobile: Number(process.env.DEFAULT_MOBILE_LOD_BUDGET) || 250_000,
           vr: Number(process.env.DEFAULT_VR_LOD_BUDGET) || 60_000,
         },
-        pretransform: splat.pretransformJson || null,
+        pretransform: versionPretransform(splat, served) || null,
       },
     };
   });
@@ -308,6 +330,7 @@ export async function publicSplatRoutes(app: FastifyInstance) {
     const { slug } = request.params as { slug: string };
     const splat = await prisma.splat.findFirst({
       where: { slug, status: 'PUBLISHED' },
+      include: servedVersionInclude,
     });
 
     if (!splat) {
@@ -316,8 +339,9 @@ export async function publicSplatRoutes(app: FastifyInstance) {
       });
     }
 
+    const served = pickServedVersion(splat);
     const annotations = await prisma.annotation.findMany({
-      where: { splatId: splat.id },
+      where: served ? { splatId: splat.id, versionId: served.id } : { splatId: splat.id, versionId: null },
       orderBy: { createdAt: 'asc' },
     });
 

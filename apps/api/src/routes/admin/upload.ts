@@ -5,6 +5,13 @@ import { randomUUID } from 'node:crypto';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
 import { canAccessSplat } from './permissions.js';
 import {
+  assertVersionBelongsToSplat,
+  cloneServedEditorStateToVersion,
+  resolveServedVersion,
+  syncSplatMirrorIfServed,
+  syncVersionSettingsSnapshot,
+} from '../../lib/versionState.js';
+import {
   getPreviewExtension,
   isPreviewMimeType,
   isSixteenByNine,
@@ -173,13 +180,15 @@ export async function adminUploadRoutes(app: FastifyInstance) {
       },
     });
 
+    await cloneServedEditorStateToVersion(prisma, id, version.id);
+
     // Update splat source format
     await prisma.splat.update({
       where: { id },
       data: {
         sourceFormat: ext.replace('.', ''),
         sourceObjectKey: originalKey,
-        status: 'DRAFT',
+        status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'DRAFT',
       },
     });
 
@@ -195,7 +204,7 @@ export async function adminUploadRoutes(app: FastifyInstance) {
 
         await prisma.splat.update({
           where: { id },
-          data: { status: 'PROCESSING' },
+          data: { status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'PROCESSING' },
         });
 
         // Enqueue jobs
@@ -238,22 +247,37 @@ export async function adminUploadRoutes(app: FastifyInstance) {
     };
   });
 
-  // POST /api/admin/splats/:id/preview
-  app.post('/splats/:id/preview', async (request, reply) => {
+  async function resolvePreviewTarget(request: any, reply: any, action: 'upload' | 'view', explicitVersionId?: string) {
     const { id } = request.params as { id: string };
 
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'upload');
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, action);
     const splat = access.splat;
     if (!splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
-      });
+      reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Splat not found' } });
+      return null;
     }
     if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot upload previews for this splat' },
-      });
+      reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Splat access denied' } });
+      return null;
     }
+
+    if (explicitVersionId) {
+      const version = await assertVersionBelongsToSplat(prisma, id, explicitVersionId);
+      if (!version) {
+        reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Version not found' } });
+        return null;
+      }
+      return { splat, version };
+    }
+
+    const { version } = await resolveServedVersion(prisma, id);
+    return { splat, version };
+  }
+
+  async function uploadPreview(request: any, reply: any, explicitVersionId?: string) {
+    const { id } = request.params as { id: string };
+    const target = await resolvePreviewTarget(request, reply, 'upload', explicitVersionId);
+    if (!target) return;
 
     const data = await request.file();
     if (!data) {
@@ -300,7 +324,9 @@ export async function adminUploadRoutes(app: FastifyInstance) {
       });
     }
 
-    const previewKey = `splats/${id}/preview/poster-${Date.now()}-${randomUUID()}${extension}`;
+    const previewKey = target.version
+      ? `splats/${id}/versions/${target.version.id}/preview/poster-${Date.now()}-${randomUUID()}${extension}`
+      : `splats/${id}/preview/poster-${Date.now()}-${randomUUID()}${extension}`;
 
     try {
       await s3Client.send(new PutObjectCommand({
@@ -317,11 +343,22 @@ export async function adminUploadRoutes(app: FastifyInstance) {
       });
     }
 
-    const updated = await prisma.splat.update({
-      where: { id },
-      data: { posterKey: previewKey },
-      select: { posterKey: true },
-    });
+    const updated = target.version
+      ? await prisma.splatVersion.update({
+          where: { id: target.version.id },
+          data: { posterKey: previewKey },
+          select: { posterKey: true },
+        })
+      : await prisma.splat.update({
+          where: { id },
+          data: { posterKey: previewKey },
+          select: { posterKey: true },
+        });
+
+    if (target.version) {
+      await syncVersionSettingsSnapshot(prisma, id, target.version.id).catch(() => undefined);
+      await syncSplatMirrorIfServed(prisma, id, target.version.id);
+    }
 
     return {
       preview: {
@@ -331,51 +368,59 @@ export async function adminUploadRoutes(app: FastifyInstance) {
         height: dimensions.height,
       },
     };
+  }
+
+  app.post('/splats/:id/versions/:versionId/preview', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return uploadPreview(request, reply, versionId);
   });
+  app.post('/splats/:id/preview', (request, reply) => uploadPreview(request, reply));
 
-  // DELETE /api/admin/splats/:id/preview
-  app.delete('/splats/:id/preview', async (request, reply) => {
+  async function deletePreview(request: any, reply: any, explicitVersionId?: string) {
     const { id } = request.params as { id: string };
+    const target = await resolvePreviewTarget(request, reply, 'upload', explicitVersionId);
+    if (!target) return;
 
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'upload');
-    const splat = access.splat;
-    if (!splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+    if (target.version) {
+      await prisma.splatVersion.update({
+        where: { id: target.version.id },
+        data: { posterKey: null },
+        select: { id: true },
+      });
+      await syncVersionSettingsSnapshot(prisma, id, target.version.id).catch(() => undefined);
+      await syncSplatMirrorIfServed(prisma, id, target.version.id);
+    } else {
+      await prisma.splat.update({
+        where: { id },
+        data: { posterKey: null },
+        select: { id: true },
       });
     }
-    if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot reset previews for this splat' },
-      });
-    }
-
-    await prisma.splat.update({
-      where: { id },
-      data: { posterKey: null },
-      select: { id: true },
-    });
 
     return { preview: { posterKey: null, posterUrl: null } };
-  });
+  }
 
-  // GET /api/admin/splats/:id/previews
-  app.get('/splats/:id/previews', async (request, reply) => {
+  app.delete('/splats/:id/versions/:versionId/preview', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return deletePreview(request, reply, versionId);
+  });
+  app.delete('/splats/:id/preview', (request, reply) => deletePreview(request, reply));
+
+  async function listPreviews(request: any, reply: any, explicitVersionId?: string) {
     const { id } = request.params as { id: string };
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
-    const splat = access.splat;
-    if (!splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
-      });
-    }
-    if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
-      });
-    }
+    const target = await resolvePreviewTarget(request, reply, 'view', explicitVersionId);
+    if (!target) return;
 
-    const items = await listPreviewObjects(`splats/${id}/preview/`, splat.posterKey);
+    const prefix = target.version
+      ? `splats/${id}/versions/${target.version.id}/preview/`
+      : `splats/${id}/preview/`;
+    const items = await listPreviewObjects(prefix, target.version?.posterKey ?? target.splat.posterKey);
     return { items };
+  }
+
+  app.get('/splats/:id/versions/:versionId/previews', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return listPreviews(request, reply, versionId);
   });
+  app.get('/splats/:id/previews', (request, reply) => listPreviews(request, reply));
 }

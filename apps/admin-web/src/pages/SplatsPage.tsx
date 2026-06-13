@@ -176,7 +176,7 @@ export default function SplatsPage({ user }: { user: AuthUser }) {
                       <div className="admin-actions">
                         <Link className="admin-button-secondary" to={`/splats/${s.id}`}>Edit</Link>
                         <Link className="admin-button-secondary" to={`/splats/${s.id}/upload`}>Upload</Link>
-                        <Link className="admin-button-secondary" to={`/splats/${s.id}/markers-3d`}>3D editor</Link>
+                        <Link className="admin-button-secondary" to={`/splats/${s.id}/markers-3d${s.servingVersionId ? `?versionId=${encodeURIComponent(s.servingVersionId)}` : ''}`}>3D editor</Link>
                         {s.status === 'READY' && (
                           <button className="admin-button-secondary" type="button" disabled={actionLoading === `${s.id}:publish`} onClick={() => postAction(s.id, 'publish')}>
                             Publish

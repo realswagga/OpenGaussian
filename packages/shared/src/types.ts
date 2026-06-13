@@ -73,6 +73,8 @@ export interface SplatSummary {
   description: string | null;
   posterUrl: string | null;
   posterKey?: string | null;
+  servingVersionId?: string | null;
+  versionCount?: number;
   organization?: OrganizationSummary | null;
   organizationId?: string | null;
   sourceFormat?: string | null;
@@ -118,6 +120,12 @@ export interface SplatDetail {
   title: string;
   description: string | null;
   status: string;
+  servingVersionId?: string | null;
+  posterKey?: string | null;
+  productionFormat?: string | null;
+  productionObjectKey?: string | null;
+  lodManifestKey?: string | null;
+  pretransformJson?: PretransformData | null;
   sourceFormat: string | null;
   splatCount: number | null;
   sizeBytes: number | null;
@@ -145,6 +153,10 @@ export interface ViewerManifest {
   id: string;
   slug: string;
   title: string;
+  version?: {
+    id: string;
+    number: number;
+  };
   assets: {
     format: SplatAssetFormat;
     sceneUrl: string;
@@ -182,6 +194,53 @@ export interface MarkerPoint {
   scale?: number;
   icon?: string;
   color?: string;
+}
+
+export interface AdminSplatVersion {
+  id: string;
+  splatId?: string;
+  version: number;
+  sourceKey: string;
+  convertedKey?: string | null;
+  lodKey?: string | null;
+  posterKey?: string | null;
+  productionFormat?: string | null;
+  splatCount?: number | null;
+  sizeBytes?: number | null;
+  settingsKey?: string | null;
+  processingStatus: ProcessingStatus | string;
+  processingLog?: string | null;
+  metrics?: unknown;
+  markerCount?: number;
+  isServed?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VersionEditorMarker {
+  id: string;
+  title: string;
+  body?: string | null;
+  kind: string;
+  positionX: number;
+  positionY: number;
+  positionZ: number;
+  rotationX: number;
+  rotationY: number;
+  rotationZ: number;
+  scale: number;
+  icon?: string | null;
+  color?: string | null;
+  splatId: string;
+  versionId?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface VersionEditorState {
+  splat: SplatDetail;
+  version: AdminSplatVersion;
+  markers: VersionEditorMarker[];
 }
 
 /** @deprecated Use MarkerPoint. */
@@ -271,6 +330,12 @@ export interface ViewerRuntimeProgress {
 export interface WidgetConfig {
   scene: {
     slug: string;
+    title?: string;
+    description?: string | null;
+    version?: {
+      id: string;
+      number: number;
+    } | null;
     manifestUrl: string;
     markersUrl: string;
     /** @deprecated Use markersUrl. */

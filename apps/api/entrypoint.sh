@@ -1,11 +1,11 @@
 #!/bin/sh
 set -e
 
-echo "[entrypoint] Waiting for PostgreSQL..."
+echo "[entrypoint] Waiting for PostgreSQL and applying Prisma schema..."
 
-# Retry prisma db push until PostgreSQL is available
-until npx prisma db push --schema=apps/api/prisma/schema.prisma --skip-generate 2>/dev/null; do
-  echo "[entrypoint] PostgreSQL not ready yet, retrying in 2s..."
+# Retry prisma db push until PostgreSQL is available and the schema is applied.
+until npx prisma db push --schema=apps/api/prisma/schema.prisma --skip-generate --accept-data-loss; do
+  echo "[entrypoint] Prisma schema push failed or PostgreSQL is not ready yet, retrying in 2s..."
   sleep 2
 done
 

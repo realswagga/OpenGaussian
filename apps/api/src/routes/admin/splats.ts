@@ -4,12 +4,104 @@ import { Prisma } from '@prisma/client';
 import { createSplatSchema, updateSplatSchema, pretransformSchema, pretransformUpdateSchema, defaultCameraSchema } from '@gsplat/shared';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
 import { accessibleOrganizationIds, canAccessSplat, canCreateSplatInOrganization } from './permissions.js';
+import {
+  asJson,
+  assertVersionBelongsToSplat,
+  editorStateVersionInclude,
+  resolveServedVersion,
+  servedVersionInclude,
+  setServedVersion,
+  syncSplatMirrorIfServed,
+  syncVersionSettingsSnapshot,
+  versionBoundingBox,
+  versionConvertedKey,
+  versionDefaultCamera,
+  versionGlobalSettings,
+  versionLodKey,
+  versionPosterKey,
+  versionPretransform,
+  versionProductionFormat,
+  versionSizeBytes,
+  versionSplatCount,
+} from '../../lib/versionState.js';
 
 export async function adminSplatRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
 
   // All admin routes require admin/editor role
   app.addHook('onRequest', requireAdmin);
+
+  function serializeVersion(v: any, servedVersionId?: string | null) {
+    return {
+      id: v.id,
+      splatId: v.splatId,
+      version: v.version,
+      sourceKey: v.sourceKey,
+      convertedKey: v.convertedKey,
+      lodKey: v.lodKey,
+      posterKey: v.posterKey,
+      productionFormat: v.productionFormat,
+      splatCount: v.splatCount,
+      sizeBytes: v.sizeBytes ? Number(v.sizeBytes) : null,
+      settingsKey: v.settingsKey,
+      processingStatus: v.processingStatus,
+      processingLog: v.processingLog,
+      metrics: v.metricsJson,
+      markerCount: v._count?.annotations ?? v.annotations?.length ?? 0,
+      isServed: servedVersionId === v.id,
+      createdAt: v.createdAt.toISOString(),
+      updatedAt: v.updatedAt.toISOString(),
+    };
+  }
+
+  function pickAdminServedVersion(s: any) {
+    if (s.servingVersion) return s.servingVersion;
+    if (!Array.isArray(s.versions)) return null;
+    return (
+      s.versions.find((v: any) => v.id === s.servingVersionId) ||
+      s.versions.find((v: any) => v.processingStatus === 'READY') ||
+      null
+    );
+  }
+
+  function serializeSplat(s: any) {
+    const served = pickAdminServedVersion(s);
+    return {
+      id: s.id,
+      slug: s.slug,
+      title: s.title,
+      description: s.description,
+      status: s.status,
+      sourceFormat: s.sourceFormat,
+      sourceObjectKey: s.sourceObjectKey,
+      organizationId: s.organizationId,
+      organization: s.organization ? {
+        id: s.organization.id,
+        slug: s.organization.slug,
+        name: s.organization.name,
+        description: s.organization.description,
+      } : null,
+      servingVersionId: served?.id ?? s.servingVersionId ?? null,
+      productionFormat: versionProductionFormat(s, served),
+      productionObjectKey: versionConvertedKey(s, served),
+      lodManifestKey: versionLodKey(s, served),
+      posterKey: versionPosterKey(s, served),
+      splatCount: versionSplatCount(s, served),
+      sizeBytes: versionSizeBytes(s, served) ? Number(versionSizeBytes(s, served)) : null,
+      boundingBoxJson: versionBoundingBox(s, served),
+      defaultCameraJson: versionDefaultCamera(s, served),
+      globalSettingsJson: versionGlobalSettings(s, served),
+      pretransformJson: versionPretransform(s, served),
+      annotationCount: s._count?.annotations,
+      versionCount: s._count?.versions,
+      versions: Array.isArray(s.versions)
+        ? s.versions.map((v: any) => serializeVersion(v, served?.id ?? s.servingVersionId))
+        : undefined,
+      createdAt: s.createdAt.toISOString(),
+      updatedAt: s.updatedAt.toISOString(),
+      publishedAt: s.publishedAt?.toISOString() ?? null,
+    };
+  }
 
   // GET /api/admin/splats
   app.get('/splats', async (request) => {
@@ -18,35 +110,14 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       where: orgIds === null ? {} : { organizationId: { in: orgIds } },
       orderBy: { updatedAt: 'desc' },
       include: {
+        ...servedVersionInclude,
         _count: { select: { annotations: true, versions: true } },
         organization: { select: { id: true, slug: true, name: true, description: true } },
       },
     });
 
     return {
-      items: splats.map((s) => ({
-        id: s.id,
-        slug: s.slug,
-        title: s.title,
-        description: s.description,
-        status: s.status,
-        sourceFormat: s.sourceFormat,
-        organizationId: s.organizationId,
-        organization: s.organization ? {
-          id: s.organization.id,
-          slug: s.organization.slug,
-          name: s.organization.name,
-          description: s.organization.description,
-        } : null,
-        splatCount: s.splatCount,
-        sizeBytes: s.sizeBytes ? Number(s.sizeBytes) : null,
-        annotationCount: s._count.annotations,
-        versionCount: s._count.versions,
-        posterKey: s.posterKey,
-        createdAt: s.createdAt.toISOString(),
-        updatedAt: s.updatedAt.toISOString(),
-        publishedAt: s.publishedAt?.toISOString() ?? null,
-      })),
+      items: splats.map(serializeSplat),
     };
   });
 
@@ -98,8 +169,13 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     const splat = await prisma.splat.findUnique({
       where: { id },
       include: {
+        servingVersion: true,
         annotations: true,
-        versions: { orderBy: { version: 'desc' } },
+        versions: {
+          orderBy: { version: 'desc' },
+          include: { _count: { select: { annotations: true } } },
+        },
+        _count: { select: { annotations: true, versions: true } },
         organization: { select: { id: true, slug: true, name: true, description: true } },
       },
     });
@@ -111,10 +187,7 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     }
 
     return {
-      splat: {
-        ...splat,
-        sizeBytes: splat.sizeBytes ? Number(splat.sizeBytes) : null,
-      },
+      splat: serializeSplat(splat),
     };
   });
 
@@ -208,9 +281,11 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       });
     }
 
-    // Only allow publishing if there's a ready version
+    // Only allow publishing if there's a ready version. If no served version is
+    // selected yet, default to the newest ready version once.
     const readyVersion = await prisma.splatVersion.findFirst({
       where: { splatId: id, processingStatus: 'READY' },
+      orderBy: { version: 'desc' },
     });
 
     if (!readyVersion) {
@@ -219,65 +294,76 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       });
     }
 
+    if (!splat.servingVersionId) {
+      await setServedVersion(prisma, id, readyVersion.id);
+      await syncVersionSettingsSnapshot(prisma, id, readyVersion.id).catch(() => undefined);
+    }
+
     const published = await prisma.splat.update({
       where: { id },
       data: {
         status: 'PUBLISHED',
         publishedAt: new Date(),
       },
+      include: servedVersionInclude,
     });
 
-    return { splat: { ...published, sizeBytes: published.sizeBytes ? Number(published.sizeBytes) : null } };
+    return { splat: serializeSplat(published) };
   });
 
   // ── Pretransform endpoints ──
 
-  // GET /api/admin/splats/:id/transform
-  app.get('/splats/:id/transform', async (request, reply) => {
+  async function resolveEditorTarget(
+    request: any,
+    reply: any,
+    action: 'edit' | 'view',
+    explicitVersionId?: string,
+  ) {
     const { id } = request.params as { id: string };
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, action);
     if (!access.splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
-      });
+      reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Splat not found' } });
+      return null;
     }
     if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
-      });
+      reply.status(403).send({ error: { code: 'FORBIDDEN', message: 'Splat access denied' } });
+      return null;
     }
-    const splat = await prisma.splat.findUnique({
-      where: { id },
-      select: { pretransformJson: true },
-    });
-    if (!splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
-      });
+    if (explicitVersionId) {
+      const version = await assertVersionBelongsToSplat(prisma, id, explicitVersionId);
+      if (!version) {
+        reply.status(404).send({ error: { code: 'NOT_FOUND', message: 'Version not found' } });
+        return null;
+      }
+      return { splat: access.splat, version };
     }
-    return { pretransform: splat.pretransformJson || null };
-  });
+    const resolved = await resolveServedVersion(prisma, id);
+    return { splat: access.splat, version: resolved.version };
+  }
 
-  // PATCH /api/admin/splats/:id/transform
-  app.patch('/splats/:id/transform', async (request, reply) => {
+  async function getTransform(request: any, reply: any, explicitVersionId?: string) {
+    const { id } = request.params as { id: string };
+    const target = await resolveEditorTarget(request, reply, 'view', explicitVersionId);
+    if (!target) return;
+    if (target.version) return { pretransform: target.version.pretransformJson || null };
+    const splat = await prisma.splat.findUnique({ where: { id }, select: { pretransformJson: true } });
+    return { pretransform: splat?.pretransformJson || null };
+  }
+
+  app.get('/splats/:id/versions/:versionId/transform', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return getTransform(request, reply, versionId);
+  });
+  app.get('/splats/:id/transform', (request, reply) => getTransform(request, reply));
+
+  async function patchTransform(request: any, reply: any, explicitVersionId?: string) {
     const { id } = request.params as { id: string };
     const data = pretransformUpdateSchema.parse(request.body);
-
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
-    const splat = access.splat;
-    if (!splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
-      });
-    }
-    if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
-      });
-    }
+    const target = await resolveEditorTarget(request, reply, 'edit', explicitVersionId);
+    if (!target) return;
 
     // Merge with existing pretransform if partial update
-    const existing = (splat.pretransformJson || { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }) as Record<string, number[]>;
+    const existing = (target.version?.pretransformJson || target.splat.pretransformJson || { position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] }) as Record<string, number[]>;
     const merged = {
       position: data.position || existing.position || [0, 0, 0],
       rotation: data.rotation || existing.rotation || [0, 0, 0],
@@ -287,6 +373,17 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     // Validate full shape
     pretransformSchema.parse(merged);
 
+    if (target.version) {
+      const updated = await prisma.splatVersion.update({
+        where: { id: target.version.id },
+        data: { pretransformJson: asJson(merged) },
+        select: { pretransformJson: true },
+      });
+      await syncVersionSettingsSnapshot(prisma, id, target.version.id).catch(() => undefined);
+      await syncSplatMirrorIfServed(prisma, id, target.version.id);
+      return { pretransform: updated.pretransformJson };
+    }
+
     const updated = await prisma.splat.update({
       where: { id },
       data: { pretransformJson: merged },
@@ -294,25 +391,31 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     });
 
     return { pretransform: updated.pretransformJson };
+  }
+
+  app.patch('/splats/:id/versions/:versionId/transform', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return patchTransform(request, reply, versionId);
   });
+  app.patch('/splats/:id/transform', (request, reply) => patchTransform(request, reply));
 
   // ── Default Camera endpoints ──
 
-  // PATCH /api/admin/splats/:id/camera
-  app.patch('/splats/:id/camera', async (request, reply) => {
+  async function patchCamera(request: any, reply: any, explicitVersionId?: string) {
     const { id } = request.params as { id: string };
     const data = defaultCameraSchema.parse(request.body);
+    const target = await resolveEditorTarget(request, reply, 'edit', explicitVersionId);
+    if (!target) return;
 
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
-    if (!access.splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+    if (target.version) {
+      const updated = await prisma.splatVersion.update({
+        where: { id: target.version.id },
+        data: { defaultCameraJson: asJson(data) },
+        select: { defaultCameraJson: true },
       });
-    }
-    if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
-      });
+      await syncVersionSettingsSnapshot(prisma, id, target.version.id).catch(() => undefined);
+      await syncSplatMirrorIfServed(prisma, id, target.version.id);
+      return { defaultCamera: updated.defaultCameraJson };
     }
 
     const updated = await prisma.splat.update({
@@ -322,32 +425,44 @@ export async function adminSplatRoutes(app: FastifyInstance) {
     });
 
     return { defaultCamera: updated.defaultCameraJson };
+  }
+
+  app.patch('/splats/:id/versions/:versionId/camera', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return patchCamera(request, reply, versionId);
   });
+  app.patch('/splats/:id/camera', (request, reply) => patchCamera(request, reply));
 
-  // DELETE /api/admin/splats/:id/camera
-  app.delete('/splats/:id/camera', async (request, reply) => {
+  async function deleteCamera(request: any, reply: any, explicitVersionId?: string) {
     const { id } = request.params as { id: string };
+    const target = await resolveEditorTarget(request, reply, 'edit', explicitVersionId);
+    if (!target) return;
 
-    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'edit');
-    if (!access.splat) {
-      return reply.status(404).send({
-        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+    if (target.version) {
+      await prisma.splatVersion.update({
+        where: { id: target.version.id },
+        data: { defaultCameraJson: Prisma.JsonNull },
+        select: { defaultCameraJson: true },
       });
-    }
-    if (!access.ok) {
-      return reply.status(403).send({
-        error: { code: 'FORBIDDEN', message: 'You cannot edit this splat' },
-      });
+      await syncVersionSettingsSnapshot(prisma, id, target.version.id).catch(() => undefined);
+      await syncSplatMirrorIfServed(prisma, id, target.version.id);
+      return { defaultCamera: null };
     }
 
-    const updated = await prisma.splat.update({
+    await prisma.splat.update({
       where: { id },
       data: { defaultCameraJson: Prisma.JsonNull },
       select: { defaultCameraJson: true },
     });
 
     return { defaultCamera: null };
+  }
+
+  app.delete('/splats/:id/versions/:versionId/camera', async (request, reply) => {
+    const { versionId } = request.params as { versionId: string };
+    return deleteCamera(request, reply, versionId);
   });
+  app.delete('/splats/:id/camera', (request, reply) => deleteCamera(request, reply));
 
   // GET /api/admin/splats/:id/versions
   app.get('/splats/:id/versions', async (request, reply) => {
@@ -365,24 +480,123 @@ export async function adminSplatRoutes(app: FastifyInstance) {
       });
     }
 
+    const splat = await prisma.splat.findUnique({
+      where: { id },
+      select: { servingVersionId: true },
+    });
     const versions = await prisma.splatVersion.findMany({
       where: { splatId: id },
       orderBy: { version: 'desc' },
+      include: { _count: { select: { annotations: true } } },
     });
 
     return {
-      items: versions.map((v) => ({
-        id: v.id,
-        version: v.version,
-        sourceKey: v.sourceKey,
-        convertedKey: v.convertedKey,
-        lodKey: v.lodKey,
-        posterKey: v.posterKey,
-        processingStatus: v.processingStatus,
-        processingLog: v.processingLog,
-        metrics: v.metricsJson,
-        createdAt: v.createdAt.toISOString(),
-        updatedAt: v.updatedAt.toISOString(),
+      items: versions.map((v) => serializeVersion(v, splat?.servingVersionId)),
+    };
+  });
+
+  // POST /api/admin/splats/:id/versions/:versionId/serve
+  app.post('/splats/:id/versions/:versionId/serve', async (request, reply) => {
+    const { id, versionId } = request.params as { id: string; versionId: string };
+
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'publish');
+    if (!access.splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'You cannot change the served version for this splat' },
+      });
+    }
+
+    const result = await setServedVersion(prisma, id, versionId);
+    if (!result) {
+      return reply.status(400).send({
+        error: { code: 'VERSION_NOT_READY', message: 'Only ready versions can be served' },
+      });
+    }
+    await syncVersionSettingsSnapshot(prisma, id, versionId).catch(() => undefined);
+
+    const fresh = await prisma.splat.findUnique({
+      where: { id },
+      include: {
+        ...servedVersionInclude,
+        _count: { select: { annotations: true, versions: true } },
+        organization: { select: { id: true, slug: true, name: true, description: true } },
+      },
+    });
+
+    return {
+      splat: fresh ? serializeSplat(fresh) : null,
+      version: serializeVersion(result.version, versionId),
+    };
+  });
+
+  // GET /api/admin/splats/:id/versions/:versionId/editor-state
+  app.get('/splats/:id/versions/:versionId/editor-state', async (request, reply) => {
+    const { id, versionId } = request.params as { id: string; versionId: string };
+    const access = await canAccessSplat(prisma, request as AuthRequest, id, 'view');
+    if (!access.splat) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Splat not found' },
+      });
+    }
+    if (!access.ok) {
+      return reply.status(403).send({
+        error: { code: 'FORBIDDEN', message: 'Splat access denied' },
+      });
+    }
+
+    const version = await prisma.splatVersion.findFirst({
+      where: { id: versionId, splatId: id },
+      include: editorStateVersionInclude,
+    });
+    if (!version) {
+      return reply.status(404).send({
+        error: { code: 'NOT_FOUND', message: 'Version not found' },
+      });
+    }
+
+    const splat = await prisma.splat.findUnique({
+      where: { id },
+      include: {
+        servingVersion: true,
+        versions: { where: { id: versionId }, take: 1 },
+        _count: { select: { annotations: true, versions: true } },
+        organization: { select: { id: true, slug: true, name: true, description: true } },
+      },
+    });
+
+    return {
+      splat: splat ? {
+        ...serializeSplat({
+          ...splat,
+          servingVersion: version,
+          versions: [version],
+        }),
+        servingVersionId: splat.servingVersionId,
+      } : null,
+      version: serializeVersion(version, splat?.servingVersionId),
+      markers: version.annotations.map((a) => ({
+        id: a.id,
+        title: a.title,
+        body: a.body,
+        kind: a.kind,
+        positionX: a.positionX,
+        positionY: a.positionY,
+        positionZ: a.positionZ,
+        rotationX: a.rotationX,
+        rotationY: a.rotationY,
+        rotationZ: a.rotationZ,
+        scale: a.scale,
+        icon: a.icon,
+        color: a.color,
+        splatId: a.splatId,
+        versionId: a.versionId,
+        createdAt: a.createdAt.toISOString(),
+        updatedAt: a.updatedAt.toISOString(),
       })),
     };
   });

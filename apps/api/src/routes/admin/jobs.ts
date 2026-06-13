@@ -199,7 +199,7 @@ export async function adminJobRoutes(app: FastifyInstance) {
 
     await prisma.splat.update({
       where: { id },
-      data: { status: 'PROCESSING' },
+      data: { status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'PROCESSING' },
     });
 
     // Enqueue BullMQ processing jobs

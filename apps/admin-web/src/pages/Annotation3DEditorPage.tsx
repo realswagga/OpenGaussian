@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
@@ -47,6 +47,13 @@ interface SplatInfo {
   pretransformJson?: { position: [number, number, number]; rotation: [number, number, number]; scale: [number, number, number] } | null;
 }
 
+interface VersionItem {
+  id: string;
+  version: number;
+  processingStatus: string;
+  isServed?: boolean;
+}
+
 interface MarkerObj {
   annotationId: string;
   group: THREE.Group;
@@ -69,6 +76,46 @@ const ICON_OPTIONS = [
 ];
 
 const KIND_OPTIONS = ['info', 'warning', 'landmark', 'custom'];
+
+type EditorCameraPose = NonNullable<SplatInfo['defaultCameraJson']>;
+
+function adminMinOrbitDistanceForRadius(radius: number) {
+  const safeRadius = Number.isFinite(radius) && radius > 0 ? radius : 1;
+  return clamp(safeRadius * 0.00002, 0.005, 0.05);
+}
+
+function adminNearPlaneForRadius(radius: number) {
+  const safeRadius = Number.isFinite(radius) && radius > 0 ? radius : 1;
+  return clamp(safeRadius * 0.00001, 0.001, 0.05);
+}
+
+function finiteTuple3(value: unknown): value is [number, number, number] {
+  return Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((item) => typeof item === 'number' && Number.isFinite(item));
+}
+
+function applyEditorCameraPose(
+  camera: THREE.PerspectiveCamera,
+  orbit: OrbitControls,
+  pose: EditorCameraPose | null | undefined,
+) {
+  if (!pose || !finiteTuple3(pose.position) || !finiteTuple3(pose.target)) return false;
+  const position = new THREE.Vector3(...pose.position);
+  const target = new THREE.Vector3(...pose.target);
+  const distance = position.distanceTo(target);
+  if (!Number.isFinite(distance) || distance <= 0.001) return false;
+
+  if (typeof pose.fov === 'number' && Number.isFinite(pose.fov)) {
+    camera.fov = clamp(pose.fov, 1, 180);
+  }
+  orbit.target.copy(target);
+  camera.position.copy(position);
+  camera.lookAt(target);
+  camera.updateProjectionMatrix();
+  orbit.update();
+  return true;
+}
 
 // ── Safe number input helper ──
 // Allows intermediate states like "-", ".", "-." so user can type freely
@@ -183,9 +230,12 @@ function loadSogBinPositions(_buffer: ArrayBuffer): Float32Array {
 
 export default function Annotation3DEditorPage() {
   const { id } = useParams<{ id: string }>();
+  const [searchParams, setSearchParams] = useSearchParams();
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [splat, setSplat] = useState<SplatInfo | null>(null);
+  const [versions, setVersions] = useState<VersionItem[]>([]);
+  const [selectedVersionId, setSelectedVersionId] = useState<string | null>(() => searchParams.get('versionId'));
   const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -317,42 +367,50 @@ export default function Annotation3DEditorPage() {
   const fetchData = useCallback(() => {
     if (!id) return;
     setLoading(true);
-    Promise.all([
-      fetch(`${API_BASE}/admin/splats/${id}`, { credentials: 'include' }).then((r) => r.json()),
-      fetch(`${API_BASE}/admin/splats/${id}/markers`, { credentials: 'include' }).then((r) => r.json()),
-    ])
-      .then(([splatData, annData]) => {
-        const s = splatData.splat || splatData;
+    ptLoadedRef.current = false;
+    fetch(`${API_BASE}/admin/splats/${id}/versions`, { credentials: 'include' })
+      .then((r) => r.json())
+      .then(async (versionData) => {
+        const items: VersionItem[] = versionData.items || [];
+        setVersions(items);
+        const activeVersionId = selectedVersionId || items.find((v) => v.isServed)?.id || items[0]?.id || null;
+        if (activeVersionId && activeVersionId !== selectedVersionId) {
+          setSelectedVersionId(activeVersionId);
+          setSearchParams({ versionId: activeVersionId }, { replace: true });
+        }
+
+        if (activeVersionId) {
+          return fetch(`${API_BASE}/admin/splats/${id}/versions/${activeVersionId}/editor-state`, { credentials: 'include' })
+            .then((r) => {
+              if (!r.ok) throw new Error(`Editor state failed (${r.status})`);
+              return r.json();
+            });
+        }
+
+        const [splatData, annData] = await Promise.all([
+          fetch(`${API_BASE}/admin/splats/${id}`, { credentials: 'include' }).then((r) => r.json()),
+          fetch(`${API_BASE}/admin/splats/${id}/markers`, { credentials: 'include' }).then((r) => r.json()),
+        ]);
+        return { splat: splatData.splat || splatData, markers: annData.items || [] };
+      })
+      .then((state) => {
+        const s = state.splat || state;
         setSplat(s as SplatInfo);
-        setAnnotations(annData.items || []);
-        // Load pretransform if needed
-        if (s.pretransformJson && !ptLoadedRef.current) {
+        setAnnotations(state.markers || []);
+        if (s.pretransformJson) {
           setPretransform({
             posX: s.pretransformJson.position[0]!, posY: s.pretransformJson.position[1]!, posZ: s.pretransformJson.position[2]!,
             rotX: s.pretransformJson.rotation[0]!, rotY: s.pretransformJson.rotation[1]!, rotZ: s.pretransformJson.rotation[2]!,
             sclX: s.pretransformJson.scale[0]!, sclY: s.pretransformJson.scale[1]!, sclZ: s.pretransformJson.scale[2]!,
           });
-          ptLoadedRef.current = true;
-        } else if (s.pretransformJson === null || s.pretransformJson === undefined) {
-          // Fetch from transform endpoint
-          fetch(`${API_BASE}/admin/splats/${id}/transform`, { credentials: 'include' })
-            .then((r) => r.json())
-            .then((td) => {
-              if (td.pretransform) {
-                setPretransform({
-                  posX: td.pretransform.position[0]!, posY: td.pretransform.position[1]!, posZ: td.pretransform.position[2]!,
-                  rotX: td.pretransform.rotation[0]!, rotY: td.pretransform.rotation[1]!, rotZ: td.pretransform.rotation[2]!,
-                  sclX: td.pretransform.scale[0]!, sclY: td.pretransform.scale[1]!, sclZ: td.pretransform.scale[2]!,
-                });
-              }
-              ptLoadedRef.current = true;
-            })
-            .catch(() => { ptLoadedRef.current = true; });
+        } else {
+          setPretransform({ posX: 0, posY: 0, posZ: 0, rotX: 0, rotY: 0, rotZ: 0, sclX: 1, sclY: 1, sclZ: 1 });
         }
+        ptLoadedRef.current = true;
         setLoading(false);
       })
       .catch((err) => { setError(err.message); setLoading(false); });
-  }, [id]);
+  }, [id, selectedVersionId, setSearchParams]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
@@ -366,7 +424,7 @@ export default function Annotation3DEditorPage() {
   }, [pretransform]);
 
   // Helper to build the Three.js Points mesh from raw positions
-  const buildCloudFromPositions = useCallback((rawPositions: Float32Array, pt: ReturnType<typeof buildTransform>) => {
+  const buildCloudFromPositions = useCallback((rawPositions: Float32Array, pt: ReturnType<typeof buildTransform>, initialCamera?: EditorCameraPose | null) => {
     if (!sceneRef.current) return;
 
     if (splatCloudRef.current) {
@@ -425,14 +483,17 @@ export default function Annotation3DEditorPage() {
       const lookTarget = new THREE.Vector3(0, Math.max(safeRadius * 0.35, 0.75), 0);
       const cameraOffset = new THREE.Vector3(1, 0.6, 1).normalize().multiplyScalar(Math.max(safeRadius * 2.1, 6));
 
-      cameraRef.current!.near = Math.max(0.01, safeRadius / 500);
+      cameraRef.current!.near = adminNearPlaneForRadius(safeRadius);
       cameraRef.current!.far = Math.max(200, safeRadius * 20);
       cameraRef.current!.updateProjectionMatrix();
-      cameraRef.current!.position.copy(gridOrigin).add(cameraOffset);
-      cameraRef.current!.lookAt(lookTarget);
-      orbitRef.current!.target.copy(lookTarget);
-      orbitRef.current!.minDistance = Math.max(0.5, safeRadius * 0.1);
+      orbitRef.current!.minDistance = adminMinOrbitDistanceForRadius(safeRadius);
       orbitRef.current!.maxDistance = Math.max(50, safeRadius * 12);
+      const restoredInitialCamera = applyEditorCameraPose(cameraRef.current!, orbitRef.current!, initialCamera);
+      if (!restoredInitialCamera) {
+        cameraRef.current!.position.copy(gridOrigin).add(cameraOffset);
+        cameraRef.current!.lookAt(lookTarget);
+        orbitRef.current!.target.copy(lookTarget);
+      }
       orbitRef.current!.update();
 
       if (sceneRef.current.fog instanceof THREE.Fog) {
@@ -461,7 +522,7 @@ export default function Annotation3DEditorPage() {
         const positions = await extractGsplatPointCenters(manifest);
         setSplatVertexCount(positions.length / 3);
         originalPositionsRef.current = new Float32Array(positions);
-        buildCloudFromPositions(positions, pt);
+        buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
         setSplatLoading(false);
         return;
       } catch (err) {
@@ -500,7 +561,7 @@ export default function Annotation3DEditorPage() {
           const positions = loadSogBinPositions(buffer);
           setSplatVertexCount(positions.length / 3);
           originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt);
+          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
           setSplatLoading(false);
         })
         .catch((err) => {
@@ -518,7 +579,7 @@ export default function Annotation3DEditorPage() {
           const positions = loadSogJsonPositions(json);
           setSplatVertexCount(positions.length / 3);
           originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt);
+          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
           setSplatLoading(false);
         })
         .catch((err) => {
@@ -536,7 +597,7 @@ export default function Annotation3DEditorPage() {
           const positions = loadPlyPositions(buffer);
           setSplatVertexCount(positions.length / 3);
           originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt);
+          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
           setSplatLoading(false);
         })
         .catch((err) => {
@@ -563,7 +624,11 @@ export default function Annotation3DEditorPage() {
     if (forward.lengthSq() <= 1e-8) return;
 
     const maxDist = Math.max(sceneRadiusRef.current * 20, 200);
-    const orbitDist = clamp(pos.distanceTo(orbit.target) || sceneRadiusRef.current * 1.5 || 4, 0.5, maxDist);
+    const orbitDist = clamp(
+      pos.distanceTo(orbit.target) || sceneRadiusRef.current * 1.5 || 4,
+      adminMinOrbitDistanceForRadius(sceneRadiusRef.current),
+      maxDist,
+    );
     orbit.target.copy(pos.clone().add(forward.normalize().multiplyScalar(orbitDist)));
     orbit.enabled = true;
     orbit.update();
@@ -598,6 +663,18 @@ export default function Annotation3DEditorPage() {
     syncOrbitFromCameraPose();
   }
 
+  function setOrbitTargetToPoint(point: THREE.Vector3, reorientCamera = false) {
+    const orbit = orbitRef.current;
+    const camera = cameraRef.current;
+    if (!orbit || !camera) return;
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y) || !Number.isFinite(point.z)) return;
+    orbit.target.copy(point);
+    if (reorientCamera) {
+      camera.lookAt(orbit.target);
+      orbit.update();
+    }
+  }
+
   // ── 3D Scene Setup ──
   useEffect(() => {
     if (!containerRef.current || loading) return;
@@ -617,7 +694,7 @@ export default function Annotation3DEditorPage() {
     sceneRef.current = scene;
 
     const aspect = width / Math.max(height, 1);
-    const camera = new THREE.PerspectiveCamera(60, aspect, 0.1, 200);
+    const camera = new THREE.PerspectiveCamera(60, aspect, 0.01, 200);
     camera.position.set(4, 3, 6);
     camera.lookAt(0, 0, 0);
     cameraRef.current = camera;
@@ -626,7 +703,7 @@ export default function Annotation3DEditorPage() {
     orbit.enableDamping = true;
     orbit.dampingFactor = 0.08;
     orbit.target.set(0, 0, 0);
-    orbit.minDistance = 0.5;
+    orbit.minDistance = adminMinOrbitDistanceForRadius(1);
     orbit.maxDistance = 50;
     // Right-click for pan, left-click for orbit
     (orbit as unknown as { mouseButtons: Record<string, number> }).mouseButtons = {
@@ -683,11 +760,11 @@ export default function Annotation3DEditorPage() {
     }
 
     function getNearSurfaceStopDistance() {
-      return clamp(sceneRadiusRef.current * 0.004, 0.03, 1.5);
+      return adminMinOrbitDistanceForRadius(sceneRadiusRef.current);
     }
 
     function getMinimumOrbitDistance() {
-      return Math.max(0.1, getNearSurfaceStopDistance() * 0.5);
+      return Math.max(0.005, getNearSurfaceStopDistance());
     }
 
     function getOrbitDollyDepth() {
@@ -970,6 +1047,7 @@ export default function Annotation3DEditorPage() {
           rotationZ: Math.round(THREE.MathUtils.radToDeg(obj.rotation.z) * 100) / 100,
           scale: Math.max(0.01, Math.round(obj.scale.x * 100) / 100),
         };
+        setOrbitTargetToPoint(position);
         setEditForm((prev) => ({
           ...prev,
           ...next,
@@ -1224,6 +1302,13 @@ export default function Annotation3DEditorPage() {
     };
   }, [loading]);
 
+  useEffect(() => {
+    if (loading || !sceneRef.current || !splat?.productionObjectKey) return;
+    setSelectedId(null);
+    transformRef.current?.detach();
+    loadSplatCloud(splat, buildTransform());
+  }, [loading, splat?.productionObjectKey, selectedVersionId, loadSplatCloud, buildTransform]);
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
@@ -1443,6 +1528,7 @@ export default function Annotation3DEditorPage() {
           const cleaned = prev.filter((a) => !a.id.startsWith('preview-'));
           return [...cleaned, preview];
         });
+        setOrbitTargetToPoint(new THREE.Vector3(px, py, pz), true);
         setSelectedId(tempId);
         setPlaceMode(false);
       }
@@ -1472,6 +1558,7 @@ export default function Annotation3DEditorPage() {
     if (marker && transformRef.current) {
       transformRef.current.attach(marker.group);
       selectedMarkerObjRef.current = marker.group;
+      setOrbitTargetToPoint(marker.group.position, true);
     }
   }
 
@@ -1498,7 +1585,7 @@ export default function Annotation3DEditorPage() {
           return [...cleaned, newAnn];
         });
 
-        const res = await fetch(`${API_BASE}/admin/splats/${id}/markers`, {
+        const res = await fetch(versionedSplatEndpoint('/markers'), {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
           body: JSON.stringify(editForm),
         });
@@ -1563,7 +1650,7 @@ export default function Annotation3DEditorPage() {
     setPtSaving(true);
     setPtMessage('');
     try {
-      const r = await fetch(`${API_BASE}/admin/splats/${id}/transform`, {
+      const r = await fetch(versionedSplatEndpoint('/transform'), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
@@ -1604,15 +1691,16 @@ export default function Annotation3DEditorPage() {
         Math.round(orbit.target.y * 100) / 100,
         Math.round(orbit.target.z * 100) / 100,
       ];
-      const r = await fetch(`${API_BASE}/admin/splats/${id}/camera`, {
+      const fov = Math.round(cam.fov * 100) / 100;
+      const r = await fetch(versionedSplatEndpoint('/camera'), {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ position, target }),
+        body: JSON.stringify({ position, target, fov }),
       });
       if (!r.ok) throw new Error('Save failed');
       setCameraMessage('Camera saved ✓');
-      setSplat((prev) => prev ? { ...prev, defaultCameraJson: { position, target } } : prev);
+      setSplat((prev) => prev ? { ...prev, defaultCameraJson: { position, target, fov } } : prev);
     } catch (err) {
       setCameraMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
@@ -1624,7 +1712,7 @@ export default function Annotation3DEditorPage() {
     setCameraSaving(true);
     setCameraMessage('');
     try {
-      const r = await fetch(`${API_BASE}/admin/splats/${id}/camera`, {
+      const r = await fetch(versionedSplatEndpoint('/camera'), {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -1656,6 +1744,13 @@ export default function Annotation3DEditorPage() {
     element.style.setProperty('--jx', '0px');
     element.style.setProperty('--jy', '0px');
     element.style.opacity = '0.55';
+  }
+
+  function versionedSplatEndpoint(suffix: string) {
+    if (!id) return '';
+    return selectedVersionId
+      ? `${API_BASE}/admin/splats/${id}/versions/${selectedVersionId}${suffix}`
+      : `${API_BASE}/admin/splats/${id}${suffix}`;
   }
 
   const isNewMarker = !selectedId || selectedId.startsWith('preview-') || selectedId.startsWith('temp-');
@@ -1692,6 +1787,22 @@ export default function Annotation3DEditorPage() {
           <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{splat?.title || 'Scene'} — 3D Editor</span>
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.6875rem', color: '#737373' }}>
+          {versions.length > 0 && (
+            <select
+              value={selectedVersionId || ''}
+              onChange={(event) => {
+                const next = event.target.value || null;
+                setSelectedVersionId(next);
+                if (next) setSearchParams({ versionId: next }, { replace: true });
+              }}
+              title="Version"
+              style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, color: '#f5f5f5', fontSize: '0.6875rem', padding: '0.25rem 0.5rem' }}
+            >
+              {versions.map((v) => (
+                <option key={v.id} value={v.id}>v{v.version}{v.isServed ? ' served' : ''}</option>
+              ))}
+            </select>
+          )}
           <button
             onClick={() => setPlaceMode(!placeMode)}
             title="Place Marker mode (P) — click ground to place, XYZ gizmo appears immediately"
@@ -2029,6 +2140,11 @@ export default function Annotation3DEditorPage() {
                 <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
                   target: [{splat.defaultCameraJson.target.map((v: number) => v.toFixed(2)).join(', ')}]
                 </div>
+                {typeof splat.defaultCameraJson.fov === 'number' && (
+                  <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+                    fov: {splat.defaultCameraJson.fov.toFixed(2)}
+                  </div>
+                )}
               </div>
             )}
 

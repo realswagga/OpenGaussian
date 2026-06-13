@@ -12,7 +12,8 @@
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:push": "prisma db push",
-    "db:seed": "tsx src/seed.ts"
+    "db:seed": "tsx src/seed.ts",
+    "db:backfill-version-state": "tsx prisma/backfill-version-state.ts"
   },
   "dependencies": {
     "@gsplat/shared": "workspace:*",
