@@ -63,6 +63,19 @@ interface MarkerObj {
 }
 
 type GizmoMode = 'translate' | 'rotate' | 'scale';
+type EditorTransform = NonNullable<SplatInfo['pretransformJson']>;
+
+interface PretransformFormState {
+  posX: number;
+  posY: number;
+  posZ: number;
+  rotX: number;
+  rotY: number;
+  rotZ: number;
+  sclX: number;
+  sclY: number;
+  sclZ: number;
+}
 
 const COLOR_PRESETS = ['#ffffff', '#ef4444', '#22c55e', '#3b82f6', '#eab308', '#a855f7', '#06b6d4', '#f97316', '#ec4899', '#8b5cf6'];
 
@@ -78,6 +91,14 @@ const ICON_OPTIONS = [
 const KIND_OPTIONS = ['info', 'warning', 'landmark', 'custom'];
 
 type EditorCameraPose = NonNullable<SplatInfo['defaultCameraJson']>;
+
+function formToEditorTransform(pretransform: PretransformFormState): EditorTransform {
+  return {
+    position: [pretransform.posX, pretransform.posY, pretransform.posZ],
+    rotation: [pretransform.rotX, pretransform.rotY, pretransform.rotZ],
+    scale: [pretransform.sclX, pretransform.sclY, pretransform.sclZ],
+  };
+}
 
 function adminMinOrbitDistanceForRadius(radius: number) {
   const safeRadius = Number.isFinite(radius) && radius > 0 ? radius : 1;
@@ -286,11 +307,12 @@ export default function Annotation3DEditorPage() {
   }, []);
 
   // Pretransform state (live-editable, applied to the rendered point cloud)
-  const [pretransform, setPretransform] = useState({
+  const [pretransform, setPretransform] = useState<PretransformFormState>({
     posX: 0, posY: 0, posZ: 0,
     rotX: 0, rotY: 0, rotZ: 0,
     sclX: 1, sclY: 1, sclZ: 1,
   });
+  const pretransformRef = useRef(pretransform);
   const [ptSaving, setPtSaving] = useState(false);
   const [ptMessage, setPtMessage] = useState('');
 
@@ -317,13 +339,20 @@ export default function Annotation3DEditorPage() {
   // Cache the untransformed vertex positions so we can re-apply pretransform in-place
   const originalPositionsRef = useRef<Float32Array | null>(null);
   const sceneRadiusRef = useRef(1);
+  const splatLoadSeqRef = useRef(0);
+  const activeSplatLoadRef = useRef<{ key: string; seq: number } | null>(null);
+  const loadedSplatKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
+  useEffect(() => {
+    pretransformRef.current = pretransform;
+  }, [pretransform]);
+
   // Apply pretransform to the cached original positions without re-fetching
-  const applyPretransformInPlace = useCallback((pt: ReturnType<typeof buildTransform>) => {
+  const applyPretransformInPlace = useCallback((pt: EditorTransform) => {
     const cloud = splatCloudRef.current;
     const orig = originalPositionsRef.current;
     if (!cloud || !orig || !sceneRef.current) return;
@@ -416,15 +445,11 @@ export default function Annotation3DEditorPage() {
 
   // Build pretransform object for the point-cloud preview
   const buildTransform = useCallback(() => {
-    return {
-      position: [pretransform.posX, pretransform.posY, pretransform.posZ] as [number, number, number],
-      rotation: [pretransform.rotX, pretransform.rotY, pretransform.rotZ] as [number, number, number],
-      scale: [pretransform.sclX, pretransform.sclY, pretransform.sclZ] as [number, number, number],
-    };
+    return formToEditorTransform(pretransform);
   }, [pretransform]);
 
   // Helper to build the Three.js Points mesh from raw positions
-  const buildCloudFromPositions = useCallback((rawPositions: Float32Array, pt: ReturnType<typeof buildTransform>, initialCamera?: EditorCameraPose | null) => {
+  const buildCloudFromPositions = useCallback((rawPositions: Float32Array, pt: EditorTransform, initialCamera?: EditorCameraPose | null) => {
     if (!sceneRef.current) return;
 
     if (splatCloudRef.current) {
@@ -510,102 +535,87 @@ export default function Annotation3DEditorPage() {
     }
   }, []);
 
-  // Load point cloud (PLY, binary SOG, or JSON SOG-meta format)
-  const loadSplatCloud = useCallback(async (sceneSplat: SplatInfo, pt: ReturnType<typeof buildTransform>) => {
-    if (!sceneRef.current) return;
-    const manifest = buildEditorManifest(sceneSplat);
-    if (manifest) {
-      setSplatLoading(true);
-      setSplatError('');
+  // Load point cloud once per selected asset; stale async results are ignored.
+  const loadSplatCloud = useCallback(async (sceneSplat: SplatInfo, pt: EditorTransform, loadKey: string, loadSeq: number) => {
+    const isCurrentLoad = () =>
+      activeSplatLoadRef.current?.key === loadKey &&
+      activeSplatLoadRef.current.seq === loadSeq &&
+      sceneRef.current !== null;
 
-      try {
-        const positions = await extractGsplatPointCenters(manifest);
-        setSplatVertexCount(positions.length / 3);
-        originalPositionsRef.current = new Float32Array(positions);
-        buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
-        setSplatLoading(false);
-        return;
-      } catch (err) {
-        const assetUrl = manifest.assets.lodManifestUrl || manifest.assets.metaUrl || manifest.assets.sceneUrl;
-        const format = manifest.assets.format;
-        const message = err instanceof Error ? err.message : String(err);
-        setSplatError(`${format} @ ${assetUrl}: ${message}`);
-        setSplatLoading(false);
-        return;
-      }
-    }
-
-    const objectKey = sceneSplat.productionObjectKey || '';
+    if (!isCurrentLoad()) return;
     setSplatLoading(true);
     setSplatError('');
 
-    // Binary SOG: .sog extension = packed PlayCanvas Float32 binary.
-    // Always treat .sog as binary since the upload pipeline stores them as octet-stream.
-    // JSON SOG: .meta.json / .lod-meta.json = SuperSplat-style JSON manifests.
-    const isSogBinary = objectKey.endsWith('.sog') &&
-      splat?.productionFormat !== 'sog-meta' &&
-      splat?.productionFormat !== 'lod-meta';
-    const isSogJson = objectKey.endsWith('.meta.json') ||
-      objectKey.endsWith('.lod-meta.json') ||
-      splat?.productionFormat === 'sog-meta' ||
-      splat?.productionFormat === 'lod-meta';
+    const manifest = buildEditorManifest(sceneSplat);
+    let errorContext = '';
 
-    if (isSogBinary) {
-      // Binary SOG — fetch as ArrayBuffer, extract positions from interleaved data
-      fetch(`${ASSET_BASE}/${objectKey}`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.arrayBuffer();
-        })
-        .then((buffer) => {
-          const positions = loadSogBinPositions(buffer);
-          setSplatVertexCount(positions.length / 3);
-          originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
-          setSplatLoading(false);
-        })
-        .catch((err) => {
-          setSplatError(err.message);
-          setSplatLoading(false);
-        });
-    } else if (isSogJson) {
-      // JSON SOG-meta — fetch as JSON
-      fetch(`${ASSET_BASE}/${objectKey}`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.json();
-        })
-        .then((json) => {
-          const positions = loadSogJsonPositions(json);
-          setSplatVertexCount(positions.length / 3);
-          originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
-          setSplatLoading(false);
-        })
-        .catch((err) => {
-          setSplatError(err.message);
-          setSplatLoading(false);
-        });
-    } else {
-      // PLY format — fetch as binary
-      fetch(`${ASSET_BASE}/${objectKey}`)
-        .then((r) => {
-          if (!r.ok) throw new Error(`HTTP ${r.status}`);
-          return r.arrayBuffer();
-        })
-        .then((buffer) => {
-          const positions = loadPlyPositions(buffer);
-          setSplatVertexCount(positions.length / 3);
-          originalPositionsRef.current = new Float32Array(positions);
-          buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
-          setSplatLoading(false);
-        })
-        .catch((err) => {
-          setSplatError(err.message);
-          setSplatLoading(false);
-        });
+    try {
+      if (manifest) {
+        const assetUrl = manifest.assets.lodManifestUrl || manifest.assets.metaUrl || manifest.assets.sceneUrl;
+        errorContext = `${manifest.assets.format} @ ${assetUrl}`;
+        const positions = await extractGsplatPointCenters(manifest);
+        if (!isCurrentLoad()) return;
+        setSplatVertexCount(positions.length / 3);
+        originalPositionsRef.current = new Float32Array(positions);
+        buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
+        loadedSplatKeyRef.current = loadKey;
+        return;
+      }
+
+      const objectKey = sceneSplat.productionObjectKey || '';
+      if (!objectKey) throw new Error('No production asset is available for this version.');
+
+      const fetchAssetBuffer = async () => {
+        const response = await fetch(`${ASSET_BASE}/${objectKey}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.arrayBuffer();
+      };
+
+      const fetchAssetJson = async () => {
+        const response = await fetch(`${ASSET_BASE}/${objectKey}`);
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      };
+
+      // Binary SOG: .sog extension = packed PlayCanvas Float32 binary.
+      // JSON SOG: .meta.json / .lod-meta.json = SuperSplat-style JSON manifests.
+      const isSogBinary = objectKey.endsWith('.sog') &&
+        sceneSplat.productionFormat !== 'sog-meta' &&
+        sceneSplat.productionFormat !== 'lod-meta';
+      const isSogJson = objectKey.endsWith('.meta.json') ||
+        objectKey.endsWith('.lod-meta.json') ||
+        sceneSplat.productionFormat === 'sog-meta' ||
+        sceneSplat.productionFormat === 'lod-meta';
+
+      let positions: Float32Array;
+      if (isSogBinary) {
+        errorContext = `sog @ ${objectKey}`;
+        positions = loadSogBinPositions(await fetchAssetBuffer());
+      } else if (isSogJson) {
+        errorContext = `sog-meta @ ${objectKey}`;
+        positions = loadSogJsonPositions(await fetchAssetJson());
+      } else {
+        errorContext = `ply @ ${objectKey}`;
+        positions = loadPlyPositions(await fetchAssetBuffer());
+      }
+
+      if (!isCurrentLoad()) return;
+      setSplatVertexCount(positions.length / 3);
+      originalPositionsRef.current = new Float32Array(positions);
+      buildCloudFromPositions(positions, pt, sceneSplat.defaultCameraJson);
+      loadedSplatKeyRef.current = loadKey;
+    } catch (err) {
+      if (!isCurrentLoad()) return;
+      const message = err instanceof Error ? err.message : String(err);
+      loadedSplatKeyRef.current = null;
+      setSplatError(errorContext ? `${errorContext}: ${message}` : message);
+    } finally {
+      if (isCurrentLoad()) {
+        activeSplatLoadRef.current = null;
+        setSplatLoading(false);
+      }
     }
-  }, [splat?.productionFormat, buildCloudFromPositions]);
+  }, [buildCloudFromPositions]);
 
   function resetFlyInputState() {
     keysRef.current.clear();
@@ -1115,10 +1125,6 @@ export default function Annotation3DEditorPage() {
       scene.add(boxLine);
     }
 
-    if (splat?.productionObjectKey) {
-      loadSplatCloud(splat, buildTransform());
-    }
-
     // ── Fly camera helpers ──
     function updateFlyCamera(dt: number) {
       const k = keysRef.current;
@@ -1279,6 +1285,9 @@ export default function Annotation3DEditorPage() {
     window.addEventListener('resize', onResize);
 
     return () => {
+      splatLoadSeqRef.current += 1;
+      activeSplatLoadRef.current = null;
+      loadedSplatKeyRef.current = null;
       cancelAnimationFrame(animFrameRef.current);
       window.removeEventListener('resize', onResize);
       document.removeEventListener('pointerlockchange', onPointerLockChange);
@@ -1297,17 +1306,46 @@ export default function Annotation3DEditorPage() {
       if (splatCloudRef.current) {
         splatCloudRef.current.geometry.dispose();
         (splatCloudRef.current.material as THREE.Material).dispose();
+        splatCloudRef.current = null;
       }
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement);
+      sceneRef.current = null;
+      cameraRef.current = null;
+      rendererRef.current = null;
+      orbitRef.current = null;
+      transformRef.current = null;
+      groundRef.current = null;
+      gridRef.current = null;
     };
   }, [loading]);
 
+  const splatLoadKey = splat?.productionObjectKey
+    ? [
+        selectedVersionId || 'legacy',
+        splat.id,
+        splat.productionFormat || 'ply',
+        splat.productionObjectKey,
+      ].join('|')
+    : null;
+
   useEffect(() => {
-    if (loading || !sceneRef.current || !splat?.productionObjectKey) return;
+    if (loading || !sceneRef.current) return;
+    if (!splat?.productionObjectKey || !splatLoadKey) {
+      activeSplatLoadRef.current = null;
+      loadedSplatKeyRef.current = null;
+      setSplatLoading(false);
+      setSplatVertexCount(0);
+      return;
+    }
+    if (loadedSplatKeyRef.current === splatLoadKey || activeSplatLoadRef.current?.key === splatLoadKey) return;
+
+    const loadSeq = splatLoadSeqRef.current + 1;
+    splatLoadSeqRef.current = loadSeq;
+    activeSplatLoadRef.current = { key: splatLoadKey, seq: loadSeq };
     setSelectedId(null);
     transformRef.current?.detach();
-    loadSplatCloud(splat, buildTransform());
-  }, [loading, splat?.productionObjectKey, selectedVersionId, loadSplatCloud, buildTransform]);
+    void loadSplatCloud(splat, formToEditorTransform(pretransformRef.current), splatLoadKey, loadSeq);
+  }, [loading, splat, splatLoadKey, loadSplatCloud]);
 
   // Keyboard shortcuts
   useEffect(() => {
