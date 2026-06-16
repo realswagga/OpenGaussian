@@ -16,14 +16,14 @@ interface TabsProps {
 
 const tabListStyle: React.CSSProperties = {
   display: 'flex',
-  borderBottom: '1px solid #2a2a2a',
+  borderBottom: 'var(--admin-rule, 1px solid var(--color-rule))',
   marginBottom: '16px',
 };
 
 const tabButtonStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
-  color: '#a3a3a3',
+  color: 'var(--admin-soft, var(--color-ink-soft))',
   padding: '8px 16px',
   cursor: 'pointer',
   fontSize: '14px',
@@ -36,8 +36,8 @@ const tabButtonStyle: React.CSSProperties = {
 
 const tabButtonActiveStyle: React.CSSProperties = {
   ...tabButtonStyle,
-  color: '#f5f5f5',
-  borderBottomColor: '#f5f5f5',
+  color: 'var(--admin-ink, var(--color-ink))',
+  borderBottomColor: 'var(--admin-accent, var(--color-accent))',
 };
 
 export const Tabs: React.FC<TabsProps> = ({ tabs, defaultTabId, activeTabId: controlledActiveTabId, onTabChange, className = '' }) => {

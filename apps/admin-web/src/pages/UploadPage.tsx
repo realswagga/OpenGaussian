@@ -195,7 +195,7 @@ export default function UploadPage() {
   };
 
   if (!id) {
-    return <div style={{ padding: '2rem', color: '#ef4444' }}>No splat ID specified.</div>;
+    return <div style={{ padding: '2rem', color: 'var(--admin-danger, var(--color-error))' }}>No splat ID specified.</div>;
   }
 
   const stepIcon = (status: string) => {
@@ -210,8 +210,8 @@ export default function UploadPage() {
     switch (status) {
       case 'done': return '#22c55e';
       case 'running': return '#eab308';
-      case 'failed': return '#ef4444';
-      default: return '#2a2a2a';
+      case 'failed': return 'var(--admin-danger, var(--color-error))';
+      default: return 'var(--color-rule)';
     }
   };
 
@@ -222,8 +222,8 @@ export default function UploadPage() {
       </h1>
 
       {error && (
-        <Card style={{ borderColor: '#ef4444', background: '#1a0a0a', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-          <p style={{ color: '#ef4444', fontSize: '0.8125rem', margin: 0 }}>{error}</p>
+        <Card style={{ borderColor: 'var(--admin-danger, var(--color-error))', background: 'oklch(70% 0.14 25 / 0.14)', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
+          <p style={{ color: 'var(--admin-danger, var(--color-error))', fontSize: '0.8125rem', margin: 0 }}>{error}</p>
         </Card>
       )}
 
@@ -237,24 +237,24 @@ export default function UploadPage() {
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
             style={{
-              border: `2px dashed ${dragOver ? '#f5f5f5' : '#2a2a2a'}`,
+              border: `2px dashed ${dragOver ? 'var(--admin-ink, var(--color-ink))' : 'var(--color-rule)'}`,
               borderRadius: 12,
               padding: '3rem 2rem',
               textAlign: 'center',
               cursor: 'pointer',
-              background: dragOver ? '#111111' : 'transparent',
+              background: dragOver ? 'var(--color-input)' : 'transparent',
               transition: 'border-color 150ms, background 150ms',
               margin: '1.5rem',
             }}
           >
-            <div style={{ fontSize: '2rem', marginBottom: '0.75rem', color: '#2a2a2a' }}>📤</div>
-            <p style={{ color: '#a3a3a3', fontSize: '0.875rem', margin: '0 0 0.5rem' }}>
-              Drop a splat file here or <span style={{ color: '#f5f5f5', textDecoration: 'underline' }}>click to browse</span>
+            <div style={{ fontSize: '2rem', marginBottom: '0.75rem', color: 'var(--color-rule)' }}>📤</div>
+            <p style={{ color: 'var(--admin-soft, var(--color-ink-soft))', fontSize: '0.875rem', margin: '0 0 0.5rem' }}>
+              Drop a splat file here or <span style={{ color: 'var(--admin-ink, var(--color-ink))', textDecoration: 'underline' }}>click to browse</span>
             </p>
-            <p style={{ color: '#737373', fontSize: '0.6875rem', margin: 0 }}>
+            <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: 0 }}>
               Accepted: .ply, .spz, .sog, .compressed.ply, .meta.json, .lod-meta.json
             </p>
-            <p style={{ color: '#737373', fontSize: '0.6875rem', margin: '0.25rem 0 0' }}>
+            <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: '0.25rem 0 0' }}>
               Max size: {MAX_MB} MB
             </p>
           </div>
@@ -262,17 +262,17 @@ export default function UploadPage() {
           {/* Selected file */}
           {file && (
             <div style={{ padding: '0 1.5rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-              <div style={{ flex: 1, padding: '0.625rem 0.875rem', background: '#111111', borderRadius: 6, border: '1px solid #2a2a2a', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+              <div style={{ flex: 1, padding: '0.625rem 0.875rem', background: 'var(--color-input)', borderRadius: 6, border: 'var(--rule)', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
                 <span style={{ fontSize: '1rem' }}>📄</span>
                 <div>
-                  <p style={{ color: '#f5f5f5', fontSize: '0.8125rem', margin: 0 }}>{file.name}</p>
-                  <p style={{ color: '#737373', fontSize: '0.6875rem', margin: '0.125rem 0 0' }}>
+                  <p style={{ color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.8125rem', margin: 0 }}>{file.name}</p>
+                  <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: '0.125rem 0 0' }}>
                     {(file.size / (1024 * 1024)).toFixed(1)} MB
                   </p>
                 </div>
                 <button
                   onClick={(e) => { e.stopPropagation(); setFile(null); }}
-                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: '#737373', cursor: 'pointer', fontSize: '1rem' }}
+                  style={{ marginLeft: 'auto', background: 'none', border: 'none', color: 'var(--admin-muted, var(--color-muted))', cursor: 'pointer', fontSize: '1rem' }}
                 >
                   ×
                 </button>
@@ -308,10 +308,10 @@ export default function UploadPage() {
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>
             {state === 'processing' ? <Spinner size="sm" /> : <span style={{ fontSize: '1.25rem' }}>✓</span>}
             <div>
-              <p style={{ color: '#f5f5f5', fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
+              <p style={{ color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
                 {state === 'done' ? 'Processing complete!' : 'Processing...'}
               </p>
-              <p style={{ color: '#737373', fontSize: '0.75rem', margin: '0.125rem 0 0' }}>
+              <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: '0.125rem 0 0' }}>
                 {jobStatus && <Badge variant={jobStatus === 'READY' ? 'success' : jobStatus === 'FAILED' ? 'danger' : 'warning'}>{jobStatus}</Badge>}
               </p>
             </div>
@@ -322,14 +322,14 @@ export default function UploadPage() {
             {processSteps.map((s) => (
               <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', fontSize: '0.8125rem' }}>
                 <span style={{ color: stepColor(s.status), width: 16, textAlign: 'center' }}>{stepIcon(s.status)}</span>
-                <span style={{ color: s.status === 'pending' ? '#737373' : '#f5f5f5' }}>{s.label}</span>
+                <span style={{ color: s.status === 'pending' ? 'var(--admin-muted, var(--color-muted))' : 'var(--admin-ink, var(--color-ink))' }}>{s.label}</span>
               </div>
             ))}
           </div>
 
           {jobLog && (
-            <div style={{ marginTop: '1rem', padding: '0.75rem', background: '#111111', borderRadius: 6, border: '1px solid #2a2a2a', maxHeight: 200, overflow: 'auto' }}>
-              <pre style={{ color: '#737373', fontSize: '0.6875rem', margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
+            <div style={{ marginTop: '1rem', padding: '0.75rem', background: 'var(--color-input)', borderRadius: 6, border: 'var(--rule)', maxHeight: 200, overflow: 'auto' }}>
+              <pre style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'monospace' }}>
                 {jobLog}
               </pre>
             </div>
@@ -356,3 +356,4 @@ export default function UploadPage() {
     </div>
   );
 }
+

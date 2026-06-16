@@ -124,6 +124,7 @@ export interface ViewerOptions {
   budgetOverride?: number;
   disablePostFx?: boolean;
   questPerfEnabled?: boolean;
+  backgroundColor?: [number, number, number];
   onMarkerSelect?: (marker: MarkerPoint) => void;
   onProgress?: (progress: ViewerRuntimeProgress) => void;
   onReady?: () => void;
@@ -207,6 +208,7 @@ export interface ViewerRuntime {
   destroy(): void;
   setQuality(quality: QualityPreset): void;
   setCameraMode(mode: CameraMode): void;
+  setBackgroundColor(color: [number, number, number]): void;
   setMarkers(points: MarkerPoint[]): void;
   /** @deprecated Use setMarkers. */
   setAnnotations(points: MarkerPoint[]): void;

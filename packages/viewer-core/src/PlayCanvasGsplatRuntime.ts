@@ -531,6 +531,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.requestRender();
   }
 
+  setBackgroundColor(color: [number, number, number]): void {
+    this.options.backgroundColor = color;
+    if (this.camera?.camera) {
+      this.camera.camera.clearColor = new Color(color[0], color[1], color[2]);
+    }
+  }
+
   setCameraMode(mode: CameraMode): void {
     const previousMode = this.currentCameraMode;
     this.currentCameraMode = mode;
@@ -647,7 +654,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   }
 
   private createMarkerButton(point: MarkerPoint): HTMLButtonElement {
-    const accent = point.color || '#f5f5f5';
+    const accent = point.color || 'var(--color-accent, #f5f5f5)';
+    const accentGlow = point.color ? `0 0 0 4px ${point.color}33, 0 0 18px ${point.color}` : '0 0 0 4px var(--color-splat-glow, rgba(245,245,245,0.24)), 0 0 18px var(--color-splat-glow, rgba(245,245,245,0.34))';
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'gsplat-marker';
@@ -663,15 +671,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     button.style.maxWidth = '190px';
     button.style.minHeight = '28px';
     button.style.padding = '6px 10px';
-    button.style.border = '1px solid rgba(255,255,255,0.35)';
+    button.style.border = '1px solid var(--color-rule-strong, rgba(255,255,255,0.35))';
     button.style.borderRadius = '999px';
-    button.style.background = 'rgba(12,12,12,0.82)';
-    button.style.color = '#f7f7f7';
+    button.style.background = 'var(--color-viewer-overlay, rgba(12,12,12,0.82))';
+    button.style.color = 'var(--color-ink, #f7f7f7)';
     button.style.font = '600 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     button.style.textAlign = 'left';
     button.style.whiteSpace = 'normal';
     button.style.cursor = 'pointer';
-    button.style.boxShadow = '0 8px 26px rgba(0,0,0,0.38)';
+    button.style.boxShadow = '0 8px 26px var(--color-shadow-strong, rgba(0,0,0,0.38))';
     button.style.pointerEvents = 'auto';
     button.style.overflow = 'hidden';
     button.style.backdropFilter = 'blur(10px)';
@@ -683,7 +691,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     dot.style.height = '10px';
     dot.style.borderRadius = '50%';
     dot.style.background = accent;
-    dot.style.boxShadow = `0 0 0 4px ${accent}33, 0 0 18px ${accent}`;
+    dot.style.boxShadow = accentGlow;
     dot.style.flex = '0 0 auto';
     button.appendChild(dot);
 
@@ -710,7 +718,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     body.style.maxHeight = '0';
     body.style.opacity = '0';
     body.style.overflow = 'hidden';
-    body.style.color = 'rgba(255,255,255,0.78)';
+    body.style.color = 'var(--color-ink-soft, rgba(255,255,255,0.78))';
     body.style.font = '400 12px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     body.style.lineHeight = '1.35';
     body.style.transition = 'max-height 180ms ease, opacity 160ms ease';
@@ -729,8 +737,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       button.style.maxWidth = expanded ? '280px' : '190px';
       button.style.padding = expanded ? '10px 12px' : '6px 10px';
       button.style.borderRadius = expanded ? '10px' : '999px';
-      button.style.background = expanded ? 'rgba(12,12,12,0.94)' : 'rgba(12,12,12,0.82)';
-      button.style.boxShadow = expanded ? '0 14px 42px rgba(0,0,0,0.52)' : '0 8px 26px rgba(0,0,0,0.38)';
+      button.style.background = expanded ? 'var(--color-panel-popover, rgba(12,12,12,0.94))' : 'var(--color-viewer-overlay, rgba(12,12,12,0.82))';
+      button.style.boxShadow = expanded ? '0 14px 42px var(--color-shadow-strong, rgba(0,0,0,0.52))' : '0 8px 26px var(--color-shadow-strong, rgba(0,0,0,0.38))';
       button.style.transform = expanded ? 'translate(-50%, -50%) scale(1.04)' : 'translate(-50%, -50%) scale(1)';
       if (body) {
         body.style.maxHeight = expanded ? '120px' : '0';
@@ -942,8 +950,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.app!.root.addChild(this.cameraRoot);
     const settings = this.getEffectiveQualitySettings();
 
+    const background = this.options.backgroundColor ?? [0.02, 0.02, 0.02];
     this.camera.addComponent('camera', {
-      clearColor: new Color(0.02, 0.02, 0.02),
+      clearColor: new Color(background[0], background[1], background[2]),
       nearClip: settings.nearClip,
       farClip: 1000,
       fov: 60,
@@ -1255,9 +1264,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     gizmo.style.width = '14px';
     gizmo.style.height = '14px';
     gizmo.style.borderRadius = '50%';
-    gizmo.style.border = '1px solid rgba(255,255,255,0.9)';
-    gizmo.style.background = 'rgba(255,255,255,0.24)';
-    gizmo.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.28)';
+    gizmo.style.border = '1px solid var(--color-ink-soft, rgba(255,255,255,0.9))';
+    gizmo.style.background = 'var(--color-pill, rgba(255,255,255,0.24))';
+    gizmo.style.boxShadow = '0 0 0 1px var(--color-panel-solid, rgba(0,0,0,0.28)), 0 4px 14px var(--color-shadow, rgba(0,0,0,0.28))';
     gizmo.style.pointerEvents = 'none';
     gizmo.style.transform = 'translate(-50%, -50%)';
     gizmo.style.zIndex = '5';
@@ -2327,8 +2336,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     base.style.width = '104px';
     base.style.height = '104px';
     base.style.borderRadius = '50%';
-    base.style.background = 'rgba(245,245,245,0.12)';
-    base.style.border = '1px solid rgba(255,255,255,0.22)';
+    base.style.background = 'var(--color-pill, rgba(245,245,245,0.12))';
+    base.style.border = '1px solid var(--color-rule, rgba(255,255,255,0.22))';
     base.style.backdropFilter = 'blur(8px)';
     base.style.pointerEvents = 'auto';
     base.style.touchAction = 'none';
@@ -2342,10 +2351,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     knob.style.width = '42px';
     knob.style.height = '42px';
     knob.style.borderRadius = '50%';
-    knob.style.background = 'rgba(245,245,245,0.34)';
-    knob.style.border = '1px solid rgba(255,255,255,0.28)';
+    knob.style.background = 'var(--color-hover-sheen, rgba(245,245,245,0.34))';
+    knob.style.border = '1px solid var(--color-rule-strong, rgba(255,255,255,0.28))';
     knob.style.transform = 'translate(-50%, -50%)';
-    knob.style.boxShadow = '0 8px 24px rgba(0,0,0,0.25)';
+    knob.style.boxShadow = '0 8px 24px var(--color-shadow, rgba(0,0,0,0.25))';
     base.appendChild(knob);
     return base;
   }

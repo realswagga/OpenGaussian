@@ -10,7 +10,7 @@ interface ModalProps {
 const overlayStyle: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(0, 0, 0, 0.7)',
+  background: 'var(--color-viewer-scrim)',
   display: 'flex',
   alignItems: 'center',
   justifyContent: 'center',
@@ -19,15 +19,15 @@ const overlayStyle: React.CSSProperties = {
 };
 
 const panelStyle: React.CSSProperties = {
-  background: '#111111',
-  border: '1px solid #2a2a2a',
-  borderRadius: '12px',
+  background: 'var(--admin-panel-solid, var(--color-panel-solid))',
+  border: 'var(--admin-rule, 1px solid var(--color-rule))',
+  borderRadius: 'var(--radius-card, 8px)',
   padding: '24px',
   maxWidth: '520px',
   width: '100%',
   maxHeight: '90vh',
   overflow: 'auto',
-  color: '#f5f5f5',
+  color: 'var(--admin-ink, var(--color-ink))',
 };
 
 const headerStyle: React.CSSProperties = {
@@ -40,14 +40,14 @@ const headerStyle: React.CSSProperties = {
 const titleStyle: React.CSSProperties = {
   fontSize: '18px',
   fontWeight: 600,
-  color: '#f5f5f5',
+  color: 'var(--admin-ink, var(--color-ink))',
   margin: 0,
 };
 
 const closeButtonStyle: React.CSSProperties = {
   background: 'transparent',
   border: 'none',
-  color: '#a3a3a3',
+  color: 'var(--admin-soft, var(--color-ink-soft))',
   fontSize: '20px',
   cursor: 'pointer',
   padding: '4px 8px',

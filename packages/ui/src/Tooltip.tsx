@@ -10,10 +10,10 @@ interface TooltipProps {
 const tooltipBase: React.CSSProperties = {
   position: 'absolute',
   padding: '4px 8px',
-  background: '#1a1a1a',
-  border: '1px solid #2a2a2a',
+  background: 'var(--admin-panel-popover, var(--color-panel-popover))',
+  border: 'var(--admin-rule, 1px solid var(--color-rule))',
   borderRadius: '4px',
-  color: '#f5f5f5',
+  color: 'var(--admin-ink, var(--color-ink))',
   fontSize: '12px',
   whiteSpace: 'nowrap',
   pointerEvents: 'none',

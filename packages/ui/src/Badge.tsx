@@ -7,10 +7,10 @@ interface BadgeProps {
 }
 
 const variantStyles: Record<string, React.CSSProperties> = {
-  default: { background: '#171717', color: '#a3a3a3', border: '1px solid #2a2a2a' },
-  success: { background: '#052e16', color: '#22c55e', border: '1px solid #166534' },
-  danger: { background: '#2e0510', color: '#ef4444', border: '1px solid #661111' },
-  warning: { background: '#2e1f05', color: '#eab308', border: '1px solid #663e11' },
+  default: { background: 'var(--admin-panel-2, var(--color-panel-2))', color: 'var(--admin-soft, var(--color-ink-soft))', border: 'var(--admin-rule, 1px solid var(--color-rule))' },
+  success: { background: 'oklch(78% 0.13 145 / 0.12)', color: 'var(--admin-success)', border: '1px solid var(--admin-success)' },
+  danger: { background: 'oklch(70% 0.14 25 / 0.12)', color: 'var(--admin-danger)', border: '1px solid var(--admin-danger)' },
+  warning: { background: 'oklch(82% 0.11 83 / 0.12)', color: 'var(--admin-warning)', border: '1px solid var(--admin-warning)' },
 };
 
 const baseStyle: React.CSSProperties = {

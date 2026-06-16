@@ -15,21 +15,21 @@ const baseStyles: React.CSSProperties = {
   display: 'inline-flex',
   alignItems: 'center',
   justifyContent: 'center',
-  border: '1px solid #2a2a2a',
-  borderRadius: '6px',
+  border: 'var(--admin-rule, 1px solid var(--color-rule))',
+  borderRadius: 'var(--radius-md, 6px)',
   cursor: 'pointer',
   fontFamily: 'inherit',
   fontWeight: 500,
-  transition: 'background 150ms, border-color 150ms, opacity 150ms',
-  background: '#0d0d0d',
-  color: '#f5f5f5',
+  transition: 'background 150ms, border-color 150ms, opacity 150ms, transform 120ms',
+  background: 'var(--admin-panel, var(--color-panel))',
+  color: 'var(--admin-ink, var(--color-ink))',
 };
 
 const variantStyles: Record<string, React.CSSProperties> = {
-  primary: { background: '#f5f5f5', color: '#050505', border: '1px solid #f5f5f5' },
-  secondary: { background: '#171717', color: '#f5f5f5', border: '1px solid #2a2a2a' },
-  danger: { background: '#ef4444', color: '#ffffff', border: '1px solid #ef4444' },
-  ghost: { background: 'transparent', color: '#a3a3a3', border: '1px solid transparent' },
+  primary: { background: 'var(--admin-accent, var(--color-accent))', color: 'var(--admin-accent-ink, var(--color-accent-ink))', border: '1px solid var(--admin-accent, var(--color-accent))' },
+  secondary: { background: 'var(--admin-panel, var(--color-panel))', color: 'var(--admin-ink, var(--color-ink))', border: 'var(--admin-rule, 1px solid var(--color-rule))' },
+  danger: { background: 'var(--admin-danger, var(--color-error))', color: 'var(--color-accent-ink)', border: '1px solid var(--admin-danger, var(--color-error))' },
+  ghost: { background: 'transparent', color: 'var(--admin-soft, var(--color-ink-soft))', border: '1px solid transparent' },
 };
 
 const sizeStyles: Record<string, React.CSSProperties> = {

@@ -16,8 +16,8 @@ body {
 body {
   margin: 0;
   background:
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.026) 0 1px, transparent 1px 42px),
-    repeating-linear-gradient(0deg, oklch(100% 0 0 / 0.016) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(90deg, var(--color-page-grid-major) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(0deg, var(--color-page-grid-minor) 0 1px, transparent 1px 42px),
     linear-gradient(112deg, var(--admin-bg) 0%, var(--admin-bg) 54%, var(--admin-bg-2) 54%, var(--admin-bg-2) 100%);
   color: var(--admin-ink);
   font-family: var(--font-body);
@@ -63,7 +63,7 @@ button {
   display: flex;
   flex-direction: column;
   border-right: var(--rule);
-  background: oklch(7% 0.004 95 / 0.84);
+  background: var(--color-chrome);
   backdrop-filter: blur(18px);
 }
 
@@ -191,7 +191,7 @@ button {
   gap: var(--space-md);
   padding: 0 var(--space-lg);
   border-bottom: var(--rule);
-  background: oklch(7% 0.004 95 / 0.78);
+  background: var(--color-chrome);
   backdrop-filter: blur(18px);
 }
 
@@ -334,7 +334,7 @@ button {
 }
 
 .admin-table tr.is-selected td {
-  background: oklch(100% 0 0 / 0.035);
+  background: var(--color-pill);
 }
 
 .admin-org-cell {
@@ -378,7 +378,7 @@ button {
   border-radius: var(--radius-md);
   outline: 2px solid transparent;
   outline-offset: 1px;
-  background: oklch(8% 0.004 95 / 0.86);
+  background: var(--color-input);
   color: var(--admin-ink);
   padding: 0 var(--space-sm);
   transition:
@@ -427,7 +427,8 @@ button {
 
 .admin-button,
 .admin-button-secondary,
-.admin-icon-button {
+.admin-icon-button,
+.theme-switch {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
@@ -448,6 +449,43 @@ button {
   white-space: nowrap;
 }
 
+.theme-switch {
+  min-width: 6.4rem;
+  padding-inline: var(--space-sm);
+  background: var(--admin-panel);
+  color: var(--admin-soft);
+  font-weight: 700;
+}
+
+.theme-switch__track {
+  width: 2rem;
+  height: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: var(--rule);
+  border-radius: 999px;
+  background: var(--admin-bg-2);
+}
+
+.theme-switch__thumb {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  background: var(--admin-soft);
+  transform: translateX(0);
+  transition: transform var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+}
+
+.theme-switch[aria-checked="true"] .theme-switch__thumb {
+  background: var(--admin-accent);
+  transform: translateX(0.86rem);
+}
+
+.theme-switch__label {
+  font-size: 0.78rem;
+}
+
 .admin-button {
   border-color: var(--admin-accent);
   background: var(--admin-accent);
@@ -462,7 +500,8 @@ button {
 
 @media (hover: hover) {
   .admin-button-secondary:hover,
-  .admin-icon-button:hover {
+  .admin-icon-button:hover,
+  .theme-switch:hover {
     transform: translateY(-1px);
     border-color: var(--admin-rule-strong);
     background: var(--admin-panel-2);
@@ -476,7 +515,8 @@ button {
 
 .admin-button:active,
 .admin-button-secondary:active,
-.admin-icon-button:active {
+.admin-icon-button:active,
+.theme-switch:active {
   transform: translateY(1px);
 }
 
@@ -498,7 +538,7 @@ button {
   padding: 0 var(--space-xs);
   border: var(--rule);
   border-radius: var(--radius-sm);
-  background: oklch(100% 0 0 / 0.035);
+  background: var(--color-pill);
   color: var(--admin-soft);
   font-family: var(--font-mono);
   font-size: 0.74rem;
@@ -579,7 +619,7 @@ button {
   padding: 0 var(--space-sm);
   border: var(--rule);
   border-radius: var(--radius-md);
-  background: oklch(100% 0 0 / 0.035);
+  background: var(--color-pill);
   color: var(--admin-soft);
 }
 
@@ -595,7 +635,7 @@ button {
   padding: var(--space-md);
   border: var(--rule);
   border-radius: var(--radius-card);
-  background: oklch(8% 0.004 95 / 0.9);
+  background: var(--color-input);
   color: var(--admin-soft);
   font-family: var(--font-mono);
   font-size: 0.8rem;
@@ -643,7 +683,7 @@ button {
   aspect-ratio: 16 / 9;
   background:
     linear-gradient(135deg, var(--admin-panel), var(--admin-panel-2)),
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.035) 0 1px, transparent 1px 22px);
+    repeating-linear-gradient(90deg, var(--color-page-grid-minor) 0 1px, transparent 1px 22px);
 }
 
 .admin-preview-body {
@@ -769,7 +809,7 @@ button {
   gap: var(--space-sm);
   padding: var(--space-md);
   border-right: var(--rule);
-  background: oklch(100% 0 0 / 0.018);
+  background: var(--color-pill);
 }
 
 .admin-preview-frame,
@@ -783,7 +823,7 @@ button {
   border-radius: var(--radius-md);
   background:
     linear-gradient(135deg, var(--admin-panel), var(--admin-panel-2)),
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.035) 0 1px, transparent 1px 22px);
+    repeating-linear-gradient(90deg, var(--color-page-grid-minor) 0 1px, transparent 1px 22px);
   color: var(--admin-muted);
 }
 
@@ -870,7 +910,7 @@ button {
   padding: var(--space-xs);
   border: var(--rule);
   border-radius: var(--radius-md);
-  background: oklch(100% 0 0 / 0.022);
+  background: var(--color-pill);
   color: var(--admin-muted);
   cursor: pointer;
   text-align: left;
@@ -878,7 +918,7 @@ button {
 
 .admin-preview-history-item.is-current {
   border-color: var(--admin-rule-strong);
-  background: oklch(100% 0 0 / 0.045);
+  background: var(--color-pill);
 }
 
 .admin-preview-history-item img {
@@ -971,7 +1011,7 @@ button {
   place-items: center;
   border: 2px dashed var(--color-rule);
   border-radius: var(--radius-card);
-  background: oklch(100% 0 0 / 0.018);
+  background: var(--color-pill);
   color: var(--admin-soft);
   cursor: pointer;
   transition:
@@ -997,7 +1037,7 @@ button {
   padding: var(--space-sm);
   border: var(--rule);
   border-radius: var(--radius-card);
-  background: oklch(8% 0.004 95 / 0.72);
+  background: var(--color-viewer-overlay);
 }
 
 .admin-reframe-frame {
@@ -1015,7 +1055,7 @@ button {
   position: absolute;
   z-index: 2;
   pointer-events: none;
-  background: oklch(100% 0 0 / 0.28);
+  background: var(--color-rule-strong);
 }
 
 .admin-reframe-rule--vertical {
@@ -1220,3 +1260,4 @@ button {
     transition-duration: 150ms !important;
   }
 }
+

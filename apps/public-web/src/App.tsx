@@ -4,8 +4,10 @@ import ViewerPage from './pages/ViewerPage';
 import CatalogPage from './pages/CatalogPage';
 import OrganizationPage from './pages/OrganizationPage';
 import AuthPage from './pages/AuthPage';
+import { useTheme } from './theme';
 
 export default function App() {
+  useTheme();
   return (
     <Routes>
       <Route path="/" element={<CatalogPage />} />

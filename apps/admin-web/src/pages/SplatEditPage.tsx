@@ -46,10 +46,10 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, 
 }) {
   const fieldStyle: React.CSSProperties = {
     padding: '0.5rem 0.625rem',
-    background: '#111111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-input)',
+    border: 'var(--rule)',
     borderRadius: 6,
-    color: '#f5f5f5',
+    color: 'var(--admin-ink, var(--color-ink))',
     fontSize: '0.8125rem',
     outline: 'none',
     width: '100%',
@@ -64,14 +64,14 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, 
       </h2>
 
       {error && (
-        <div style={{ padding: '0.625rem 0.75rem', background: '#1a0a0a', border: '1px solid #ef4444', borderRadius: 6, marginBottom: '1rem', color: '#ef4444', fontSize: '0.8125rem' }}>
+        <div style={{ padding: '0.625rem 0.75rem', background: 'oklch(70% 0.14 25 / 0.14)', border: '1px solid var(--admin-danger, var(--color-error))', borderRadius: 6, marginBottom: '1rem', color: 'var(--admin-danger, var(--color-error))', fontSize: '0.8125rem' }}>
           {error}
         </div>
       )}
 
       <form onSubmit={onSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Organization</span>
+          <span style={{ fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>Organization</span>
           <select value={form.organizationId} onChange={(e) => setForm({ ...form, organizationId: e.target.value })} required style={fieldStyle}>
             <option value="">Select organization</option>
             {organizations.map((org) => (
@@ -80,15 +80,15 @@ function MetadataTab({ form, setForm, saving, error, onSubmit, isNew, navigate, 
           </select>
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Title</span>
+          <span style={{ fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>Title</span>
           <input type="text" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} required style={fieldStyle} />
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>URL handle</span>
+          <span style={{ fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>URL handle</span>
           <input type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} required pattern="[a-z0-9-]+" placeholder="my-scene" style={fieldStyle} />
         </label>
         <label style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.6875rem', color: '#737373' }}>Description</span>
+          <span style={{ fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>Description</span>
           <textarea
             value={form.description}
             onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -125,7 +125,7 @@ function VersionsTab({ splatId, versions, loading, servingVersionId, actionLoadi
   if (versions.length === 0) {
     return (
       <Card style={{ padding: '2rem', textAlign: 'center' }}>
-        <p style={{ color: '#737373', fontSize: '0.8125rem', margin: '0 0 0.75rem' }}>No versions yet. Upload a file to create one.</p>
+        <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.8125rem', margin: '0 0 0.75rem' }}>No versions yet. Upload a file to create one.</p>
       </Card>
     );
   }
@@ -134,7 +134,7 @@ function VersionsTab({ splatId, versions, loading, servingVersionId, actionLoadi
     <Card style={{ padding: '0' }}>
       <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.8125rem' }}>
         <thead>
-          <tr style={{ borderBottom: '1px solid #2a2a2a' }}>
+          <tr style={{ borderBottom: 'var(--rule)' }}>
             <th style={thStyle}>Version</th>
             <th style={thStyle}>Status</th>
             <th style={thStyle}>Output</th>
@@ -166,13 +166,13 @@ function VersionsTab({ splatId, versions, loading, servingVersionId, actionLoadi
                   <span style={{ fontFamily: 'monospace', fontSize: '0.6875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {outputLabel(v)}
                   </span>
-                  <span style={{ color: '#737373', fontSize: '0.6875rem' }}>
+                  <span style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem' }}>
                     {v.productionFormat || 'source'}{v.posterKey ? ' / preview' : ''}{v.settingsKey ? ' / settings' : ''}
                   </span>
                 </div>
               </td>
               <td style={tdStyle}>{v.markerCount ?? 0}</td>
-              <td style={{ ...tdStyle, color: '#737373', fontSize: '0.6875rem', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              <td style={{ ...tdStyle, color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', maxWidth: 250, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                 {v.processingLog?.split('\n').pop() || '—'}
               </td>
               <td style={tdStyle}>
@@ -232,7 +232,7 @@ function PreviewTab({ splatId, versions, selectedVersionId, onSelectedVersionIdC
   );
 }
 
-const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.5rem 1rem', color: '#737373', fontWeight: 400, fontSize: '0.6875rem' };
+const thStyle: React.CSSProperties = { textAlign: 'left', padding: '0.5rem 1rem', color: 'var(--admin-muted, var(--color-muted))', fontWeight: 400, fontSize: '0.6875rem' };
 const tdStyle: React.CSSProperties = { padding: '0.5rem 1rem' };
 
 export default function SplatEditPage(_props: { user?: AuthUser }) {
@@ -412,8 +412,8 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
   if (error) {
     return (
       <div style={{ paddingTop: '0.5rem' }}>
-        <Card style={{ borderColor: '#ef4444', background: '#1a0a0a', padding: '1.5rem' }}>
-          <p style={{ color: '#ef4444', margin: '0 0 1rem', fontSize: '0.875rem' }}>
+        <Card style={{ borderColor: 'var(--admin-danger, var(--color-error))', background: 'oklch(70% 0.14 25 / 0.14)', padding: '1.5rem' }}>
+          <p style={{ color: 'var(--admin-danger, var(--color-error))', margin: '0 0 1rem', fontSize: '0.875rem' }}>
             Failed to load splat: {error}
           </p>
           <Button variant="secondary" onClick={() => navigate('/splats')}>← Back to Splats</Button>
@@ -484,7 +484,7 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
             }>
               {splatStatus || 'DRAFT'}
             </Badge>
-            <span style={{ fontSize: '0.6875rem', color: '#737373' }}>{form.slug}</span>
+            <span style={{ fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>{form.slug}</span>
           </div>
         </div>
 
@@ -517,9 +517,10 @@ export default function SplatEditPage(_props: { user?: AuthUser }) {
         </div>
       </div>
 
-      <p style={{ fontSize: '0.75rem', color: '#737373', margin: '0 0 1rem 0' }}>Edit splat details and manage versions.</p>
+      <p style={{ fontSize: '0.75rem', color: 'var(--admin-muted, var(--color-muted))', margin: '0 0 1rem 0' }}>Edit splat details and manage versions.</p>
 
       <Tabs tabs={tabs} activeTabId={activeTabId} onTabChange={setActiveTabId} />
     </div>
   );
 }
+

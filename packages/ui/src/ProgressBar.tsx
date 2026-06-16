@@ -9,9 +9,9 @@ interface ProgressBarProps {
 }
 
 const variantColors: Record<string, { bar: string; track: string }> = {
-  default: { bar: '#f5f5f5', track: '#2a2a2a' },
-  success: { bar: '#22c55e', track: '#14532d' },
-  danger: { bar: '#ef4444', track: '#661111' },
+  default: { bar: 'var(--admin-accent, var(--color-accent))', track: 'var(--color-rule)' },
+  success: { bar: 'var(--admin-success)', track: 'oklch(78% 0.13 145 / 0.16)' },
+  danger: { bar: 'var(--admin-danger, var(--color-error))', track: 'oklch(70% 0.14 25 / 0.16)' },
 };
 
 const sizes: Record<string, { height: number }> = {
@@ -49,7 +49,7 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   return (
     <div className={className} style={{ width: '100%' }}>
       {label && (
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 12, color: '#a3a3a3' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 12, color: 'var(--admin-soft, var(--color-ink-soft))' }}>
           <span>{label}</span>
           <span>{Math.round(clamped)}%</span>
         </div>

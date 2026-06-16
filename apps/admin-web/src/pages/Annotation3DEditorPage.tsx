@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
+import { useTheme, type AppTheme } from '../theme';
 import {
   applyDeadzone,
   clamp,
@@ -78,6 +79,31 @@ interface PretransformFormState {
 }
 
 const COLOR_PRESETS = ['#ffffff', '#ef4444', '#22c55e', '#3b82f6', '#eab308', '#a855f7', '#06b6d4', '#f97316', '#ec4899', '#8b5cf6'];
+const EDITOR_THEME: Record<AppTheme, {
+  background: string;
+  gridMajor: string;
+  gridMinor: string;
+  anchorBorder: string;
+  anchorBg: string;
+  anchorShadow: string;
+}> = {
+  dark: {
+    background: '#050505',
+    gridMajor: '#2a2a2a',
+    gridMinor: '#1a1a1a',
+    anchorBorder: 'rgba(255,255,255,0.9)',
+    anchorBg: 'rgba(255,255,255,0.24)',
+    anchorShadow: '0 0 0 1px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.28)',
+  },
+  light: {
+    background: '#ebe8dd',
+    gridMajor: '#aaa399',
+    gridMinor: '#cbc6ba',
+    anchorBorder: 'rgba(38,34,28,0.88)',
+    anchorBg: 'rgba(38,34,28,0.16)',
+    anchorShadow: '0 0 0 1px rgba(255,255,255,0.65), 0 4px 14px rgba(42,38,31,0.16)',
+  },
+};
 
 const ICON_OPTIONS = [
   { value: 'dot', label: '●' },
@@ -252,6 +278,8 @@ function loadSogBinPositions(_buffer: ArrayBuffer): Float32Array {
 export default function Annotation3DEditorPage() {
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { theme } = useTheme();
+  const editorTheme = EDITOR_THEME[theme];
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [splat, setSplat] = useState<SplatInfo | null>(null);
@@ -334,6 +362,7 @@ export default function Annotation3DEditorPage() {
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const groundRef = useRef<THREE.Mesh | null>(null);
   const gridRef = useRef<THREE.GridHelper | null>(null);
+  const orbitAnchorRef = useRef<HTMLDivElement | null>(null);
   const animFrameRef = useRef<number>(0);
   const pointerRef = useRef<THREE.Vector2>(new THREE.Vector2());
   // Cache the untransformed vertex positions so we can re-apply pretransform in-place
@@ -699,8 +728,8 @@ export default function Annotation3DEditorPage() {
     rendererRef.current = renderer;
 
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color('#050505');
-    scene.fog = new THREE.Fog('#050505', 5, 50);
+    scene.background = new THREE.Color(editorTheme.background);
+    scene.fog = new THREE.Fog(editorTheme.background, 5, 50);
     sceneRef.current = scene;
 
     const aspect = width / Math.max(height, 1);
@@ -732,14 +761,15 @@ export default function Annotation3DEditorPage() {
     orbitAnchorEl.style.width = '14px';
     orbitAnchorEl.style.height = '14px';
     orbitAnchorEl.style.borderRadius = '50%';
-    orbitAnchorEl.style.border = '1px solid rgba(255,255,255,0.9)';
-    orbitAnchorEl.style.background = 'rgba(255,255,255,0.24)';
-    orbitAnchorEl.style.boxShadow = '0 0 0 1px rgba(0,0,0,0.28), 0 4px 14px rgba(0,0,0,0.28)';
+    orbitAnchorEl.style.border = `1px solid ${editorTheme.anchorBorder}`;
+    orbitAnchorEl.style.background = editorTheme.anchorBg;
+    orbitAnchorEl.style.boxShadow = editorTheme.anchorShadow;
     orbitAnchorEl.style.pointerEvents = 'none';
     orbitAnchorEl.style.transform = 'translate(-50%, -50%)';
     orbitAnchorEl.style.zIndex = '12';
     orbitAnchorEl.style.display = 'none';
     container.appendChild(orbitAnchorEl);
+    orbitAnchorRef.current = orbitAnchorEl;
 
     const depthRayOffsets: readonly (readonly [number, number])[] = [
       [0, 0],
@@ -1097,7 +1127,7 @@ export default function Annotation3DEditorPage() {
     dirLight.position.set(5, 8, 5);
     scene.add(dirLight);
 
-    const gridHelper = new THREE.GridHelper(10, 20, '#2a2a2a', '#1a1a1a');
+    const gridHelper = new THREE.GridHelper(10, 20, editorTheme.gridMajor, editorTheme.gridMinor);
     scene.add(gridHelper);
     gridRef.current = gridHelper;
     scene.add(new THREE.AxesHelper(2));
@@ -1303,6 +1333,7 @@ export default function Annotation3DEditorPage() {
       document.exitPointerLock();
       renderer.dispose();
       orbitAnchorEl.remove();
+      orbitAnchorRef.current = null;
       if (splatCloudRef.current) {
         splatCloudRef.current.geometry.dispose();
         (splatCloudRef.current.material as THREE.Material).dispose();
@@ -1318,6 +1349,39 @@ export default function Annotation3DEditorPage() {
       gridRef.current = null;
     };
   }, [loading]);
+
+  useEffect(() => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    scene.background = new THREE.Color(editorTheme.background);
+    if (scene.fog instanceof THREE.Fog) {
+      scene.fog.color = new THREE.Color(editorTheme.background);
+    }
+
+    const orbitAnchor = orbitAnchorRef.current;
+    if (orbitAnchor) {
+      orbitAnchor.style.border = `1px solid ${editorTheme.anchorBorder}`;
+      orbitAnchor.style.background = editorTheme.anchorBg;
+      orbitAnchor.style.boxShadow = editorTheme.anchorShadow;
+    }
+
+    const previousGrid = gridRef.current;
+    const position = previousGrid?.position.clone() ?? new THREE.Vector3();
+    if (previousGrid) {
+      scene.remove(previousGrid);
+      previousGrid.geometry.dispose();
+      const material = previousGrid.material;
+      const materials = Array.isArray(material) ? material : [material];
+      materials.forEach((item) => item.dispose());
+    }
+
+    const nextGrid = new THREE.GridHelper(10, 20, editorTheme.gridMajor, editorTheme.gridMinor);
+    nextGrid.position.copy(position);
+    scene.add(nextGrid);
+    gridRef.current = nextGrid;
+    if (rendererRef.current && cameraRef.current) rendererRef.current.render(scene, cameraRef.current);
+  }, [editorTheme]);
 
   const splatLoadKey = splat?.productionObjectKey
     ? [
@@ -1801,18 +1865,18 @@ export default function Annotation3DEditorPage() {
   }
 
   if (error) {
-    return <div style={{ padding: '2rem', color: '#ef4444' }}>Error: {error}</div>;
+    return <div style={{ padding: '2rem', color: 'var(--admin-danger, var(--color-error))' }}>Error: {error}</div>;
   }
 
   const numInputStyle: React.CSSProperties = {
-    width: '100%', padding: '0.4rem 0.5rem', background: '#111', border: '1px solid #2a2a2a',
-    borderRadius: 4, color: '#f5f5f5', fontSize: '0.75rem', outline: 'none', boxSizing: 'border-box',
+    width: '100%', padding: '0.4rem 0.5rem', background: 'var(--color-input)', border: 'var(--rule)',
+    borderRadius: 4, color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.75rem', outline: 'none', boxSizing: 'border-box',
     fontFamily: 'inherit',
   };
 
   const inputStyle: React.CSSProperties = {
-    padding: '0.4rem 0.5rem', background: '#111', border: '1px solid #2a2a2a',
-    borderRadius: 4, color: '#f5f5f5', fontSize: '0.8125rem', outline: 'none', width: '100%', boxSizing: 'border-box',
+    padding: '0.4rem 0.5rem', background: 'var(--color-input)', border: 'var(--rule)',
+    borderRadius: 4, color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.8125rem', outline: 'none', width: '100%', boxSizing: 'border-box',
     fontFamily: 'inherit',
   };
 
@@ -1824,7 +1888,7 @@ export default function Annotation3DEditorPage() {
           <Link to={`/splats/${id}`} style={backLinkStyle}>← Splat</Link>
           <span style={{ fontSize: '0.875rem', fontWeight: 600 }}>{splat?.title || 'Scene'} — 3D Editor</span>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.6875rem', color: '#737373' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.6875rem', color: 'var(--admin-muted, var(--color-muted))' }}>
           {versions.length > 0 && (
             <select
               value={selectedVersionId || ''}
@@ -1834,7 +1898,7 @@ export default function Annotation3DEditorPage() {
                 if (next) setSearchParams({ versionId: next }, { replace: true });
               }}
               title="Version"
-              style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, color: '#f5f5f5', fontSize: '0.6875rem', padding: '0.25rem 0.5rem' }}
+              style={{ background: 'var(--color-input)', border: 'var(--rule)', borderRadius: 4, color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.6875rem', padding: '0.25rem 0.5rem' }}
             >
               {versions.map((v) => (
                 <option key={v.id} value={v.id}>v{v.version}{v.isServed ? ' served' : ''}</option>
@@ -1846,9 +1910,9 @@ export default function Annotation3DEditorPage() {
             title="Place Marker mode (P) — click ground to place, XYZ gizmo appears immediately"
             style={{
               padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
-              background: placeMode ? '#22c55e' : '#171717',
-              border: placeMode ? '1px solid #22c55e' : '1px solid #2a2a2a',
-              color: placeMode ? '#050505' : '#a3a3a3', cursor: 'pointer',
+              background: placeMode ? 'var(--admin-success)' : 'var(--admin-panel, var(--color-panel))',
+              border: placeMode ? '1px solid var(--admin-success)' : 'var(--rule)',
+              color: placeMode ? 'var(--color-viewer-bg)' : 'var(--admin-soft, var(--color-ink-soft))', cursor: 'pointer',
               fontWeight: placeMode ? 600 : 400,
             }}
           >
@@ -1867,9 +1931,9 @@ export default function Annotation3DEditorPage() {
             title="Fly mode — WASD + mouse look, Shift=boost, Q/E=up/down"
             style={{
               padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
-              background: flyMode ? '#3b82f6' : '#171717',
-              border: flyMode ? '1px solid #3b82f6' : '1px solid #2a2a2a',
-              color: flyMode ? '#ffffff' : '#a3a3a3', cursor: 'pointer',
+              background: flyMode ? 'var(--color-focus)' : 'var(--admin-panel, var(--color-panel))',
+              border: flyMode ? '1px solid var(--color-focus)' : 'var(--rule)',
+              color: flyMode ? 'var(--admin-accent-ink, var(--color-accent-ink))' : 'var(--admin-soft, var(--color-ink-soft))', cursor: 'pointer',
               fontWeight: flyMode ? 600 : 400,
             }}
           >
@@ -1882,9 +1946,9 @@ export default function Annotation3DEditorPage() {
             disabled={cameraSaving}
             style={{
               padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
-              background: splat?.defaultCameraJson ? '#0a2a0a' : '#171717',
-              border: splat?.defaultCameraJson ? '1px solid #22c55e' : '1px solid #2a2a2a',
-              color: splat?.defaultCameraJson ? '#22c55e' : '#a3a3a3', cursor: 'pointer',
+              background: splat?.defaultCameraJson ? 'oklch(78% 0.13 145 / 0.12)' : 'var(--admin-panel, var(--color-panel))',
+              border: splat?.defaultCameraJson ? '1px solid var(--admin-success)' : 'var(--rule)',
+              color: splat?.defaultCameraJson ? 'var(--admin-success)' : 'var(--admin-soft, var(--color-ink-soft))', cursor: 'pointer',
               fontWeight: splat?.defaultCameraJson ? 600 : 400,
             }}
           >
@@ -1892,7 +1956,7 @@ export default function Annotation3DEditorPage() {
           </button>
 
           {hasSelection && (
-            <div style={{ display: 'flex', gap: 2, background: '#111', borderRadius: 4, border: '1px solid #2a2a2a', overflow: 'hidden' }}>
+            <div style={{ display: 'flex', gap: 2, background: 'var(--color-input)', borderRadius: 4, border: 'var(--rule)', overflow: 'hidden' }}>
               {(['translate', 'rotate', 'scale'] as GizmoMode[]).map((m) => (
                 <button
                   key={m}
@@ -1900,8 +1964,8 @@ export default function Annotation3DEditorPage() {
                   title={`${m} (${m[0]!.toUpperCase()}) — drag the colored arrows/rings`}
                   style={{
                     padding: '0.25rem 0.5rem', fontSize: '0.625rem', border: 'none', cursor: 'pointer',
-                    background: gizmoMode === m ? '#f5f5f5' : 'transparent',
-                    color: gizmoMode === m ? '#050505' : '#737373',
+                    background: gizmoMode === m ? 'var(--admin-ink, var(--color-ink))' : 'transparent',
+                    color: gizmoMode === m ? 'var(--color-viewer-bg)' : 'var(--admin-muted, var(--color-muted))',
                     fontWeight: gizmoMode === m ? 600 : 400,
                   }}
                 >
@@ -1912,14 +1976,14 @@ export default function Annotation3DEditorPage() {
           )}
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} style={{ accentColor: '#f5f5f5' }} />
+            <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} style={{ accentColor: 'var(--admin-ink, var(--color-ink))' }} />
             Snap
           </label>
           {snapEnabled && (
             <select
               value={snapValue}
               onChange={(e) => setSnapValue(parseFloat(e.target.value))}
-              style={{ background: '#111', border: '1px solid #2a2a2a', borderRadius: 4, color: '#f5f5f5', fontSize: '0.625rem', padding: '0.125rem 0.25rem' }}
+              style={{ background: 'var(--color-input)', border: 'var(--rule)', borderRadius: 4, color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.625rem', padding: '0.125rem 0.25rem' }}
             >
               <option value={0.01}>0.01</option>
               <option value={0.1}>0.1</option>
@@ -1952,12 +2016,12 @@ export default function Annotation3DEditorPage() {
           onClick={handleCanvasClick}
         >
           {splatLoading && (
-            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '0.5rem 1rem', background: 'rgba(13,13,13,0.85)', border: '1px solid #2a2a2a', borderRadius: 8, color: '#a3a3a3', fontSize: '0.75rem', zIndex: 20 }}>
+            <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '0.5rem 1rem', background: 'var(--color-viewer-overlay)', border: 'var(--rule)', borderRadius: 8, color: 'var(--admin-soft, var(--color-ink-soft))', fontSize: '0.75rem', zIndex: 20 }}>
               Loading point cloud...
             </div>
           )}
           {splatError && (
-            <div style={{ position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', padding: '0.5rem 1rem', background: 'rgba(20,5,5,0.9)', border: '1px solid #ef4444', borderRadius: 8, color: '#ef4444', fontSize: '0.75rem', zIndex: 20 }}>
+            <div style={{ position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', padding: '0.5rem 1rem', background: 'oklch(70% 0.14 25 / 0.14)', border: '1px solid var(--admin-danger, var(--color-error))', borderRadius: 8, color: 'var(--admin-danger, var(--color-error))', fontSize: '0.75rem', zIndex: 20 }}>
               Failed to load splat: {splatError}
             </div>
           )}
@@ -2008,10 +2072,10 @@ export default function Annotation3DEditorPage() {
         {/* Right panel */}
         <div style={panelStyle}>
           {/* Marker list */}
-          <div style={{ padding: '0.875rem', borderBottom: '1px solid #2a2a2a' }}>
+          <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>Markers ({annotations.length})</h3>
             {annotations.length === 0 && (
-              <p style={{ color: '#737373', fontSize: '0.75rem', margin: 0 }}>No markers. Click "Place Marker" to add.</p>
+              <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: 0 }}>No markers. Click "Place Marker" to add.</p>
             )}
             <div style={{ maxHeight: 180, overflowY: 'auto' }}>
               {annotations.map((ann) => (
@@ -2020,20 +2084,20 @@ export default function Annotation3DEditorPage() {
                   onClick={() => { setPlaceMode(false); selectAnnotation(ann); }}
                   style={{
                     display: 'flex', alignItems: 'center', width: '100%', padding: '0.375rem 0.5rem',
-                    border: `1px solid ${selectedId === ann.id ? '#f5f5f5' : '#2a2a2a'}`,
-                    borderRadius: 4, background: selectedId === ann.id ? '#171717' : '#0d0d0d',
-                    color: '#f5f5f5', cursor: 'pointer', marginBottom: '0.25rem', fontSize: '0.75rem',
+                    border: `1px solid ${selectedId === ann.id ? 'var(--admin-ink, var(--color-ink))' : 'var(--color-rule)'}`,
+                    borderRadius: 4, background: selectedId === ann.id ? 'var(--admin-panel, var(--color-panel))' : 'var(--admin-panel-solid, var(--color-panel-solid))',
+                    color: 'var(--admin-ink, var(--color-ink))', cursor: 'pointer', marginBottom: '0.25rem', fontSize: '0.75rem',
                     textAlign: 'left',
                   }}
                 >
                   <span style={{
                     display: 'inline-block', width: 8, height: 8, borderRadius: '50%',
-                    background: ann.color || '#ffffff', marginRight: '0.5rem', flexShrink: 0,
+                    background: ann.color || 'var(--admin-accent-ink, var(--color-accent-ink))', marginRight: '0.5rem', flexShrink: 0,
                   }} />
                   <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {ann.title || (ann.id.startsWith('preview-') ? '(new marker)' : '(untitled)')}
                   </span>
-                  <span style={{ fontSize: '0.625rem', color: '#737373', marginLeft: 'auto', flexShrink: 0 }}>
+                  <span style={{ fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))', marginLeft: 'auto', flexShrink: 0 }}>
                     [{ann.positionX.toFixed(1)},{ann.positionY.toFixed(1)},{ann.positionZ.toFixed(1)}]
                   </span>
                 </button>
@@ -2042,13 +2106,13 @@ export default function Annotation3DEditorPage() {
           </div>
 
           {/* Edit form */}
-          <div style={{ padding: '0.875rem', borderBottom: '1px solid #2a2a2a' }}>
+          <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.75rem 0' }}>
               {isPreview ? 'New Marker (drag XYZ gizmo to position)' : isNewMarker ? 'New Marker' : 'Edit Marker'}
             </h3>
 
             {!hasSelection && (
-              <p style={{ color: '#737373', fontSize: '0.75rem', margin: 0 }}>
+              <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: 0 }}>
                 Select a marker from the list above, or click "Place Marker" and click on the scene to create one.
               </p>
             )}
@@ -2080,13 +2144,13 @@ export default function Annotation3DEditorPage() {
                       <button key={c} type="button" onClick={() => updateSelectedMarkerForm({ color: c })}
                         style={{
                           width: 22, height: 22, borderRadius: 4, background: c,
-                          border: editForm.color === c ? '2px solid #f5f5f5' : '1px solid #2a2a2a',
+                          border: editForm.color === c ? '2px solid var(--admin-ink, var(--color-ink))' : 'var(--rule)',
                           cursor: 'pointer', transition: 'border-color 150ms',
                         }} title={c}
                       />
                     ))}
                     <input type="color" value={editForm.color} onChange={(e) => updateSelectedMarkerForm({ color: e.target.value })}
-                      style={{ width: 22, height: 22, borderRadius: 4, border: '1px solid #2a2a2a', cursor: 'pointer', padding: 0, background: 'none' }}
+                      style={{ width: 22, height: 22, borderRadius: 4, border: 'var(--rule)', cursor: 'pointer', padding: 0, background: 'none' }}
                     />
                   </div>
                 </div>
@@ -2098,9 +2162,9 @@ export default function Annotation3DEditorPage() {
                       <button key={opt.value} type="button" onClick={() => updateSelectedMarkerForm({ icon: opt.value })}
                         style={{
                           width: 28, height: 28, borderRadius: 4, fontSize: '0.875rem',
-                          background: editForm.icon === opt.value ? '#171717' : '#0d0d0d',
-                          border: editForm.icon === opt.value ? '1px solid #f5f5f5' : '1px solid #2a2a2a',
-                          cursor: 'pointer', color: '#f5f5f5', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          background: editForm.icon === opt.value ? 'var(--admin-panel, var(--color-panel))' : 'var(--admin-panel-solid, var(--color-panel-solid))',
+                          border: editForm.icon === opt.value ? '1px solid var(--admin-ink, var(--color-ink))' : 'var(--rule)',
+                          cursor: 'pointer', color: 'var(--admin-ink, var(--color-ink))', display: 'flex', alignItems: 'center', justifyContent: 'center',
                         }} title={opt.value}
                       >
                         {opt.label}
@@ -2145,7 +2209,7 @@ export default function Annotation3DEditorPage() {
                   <span style={labelTextStyle}>Scale ({editForm.scale.toFixed(2)})</span>
                   <input type="range" min="0.1" max="10" step="0.1" value={editForm.scale}
                     onChange={(e) => updateSelectedMarkerForm({ scale: parseFloat(e.target.value) || 1 })}
-                    style={{ width: '100%', accentColor: '#f5f5f5' }}
+                    style={{ width: '100%', accentColor: 'var(--admin-ink, var(--color-ink))' }}
                   />
                 </label>
 
@@ -2163,23 +2227,23 @@ export default function Annotation3DEditorPage() {
           </div>
 
           {/* ── Default Camera Panel ── */}
-          <div style={{ padding: '0.875rem', borderBottom: '1px solid #2a2a2a' }}>
+          <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Initial Camera</h3>
-            <p style={{ fontSize: '0.625rem', color: '#737373', margin: '0 0 0.75rem 0' }}>
+            <p style={{ fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))', margin: '0 0 0.75rem 0' }}>
               Set the camera position that clients will see when first opening the splat. Navigate to your desired view in the 3D scene and click "Save Camera" below.
             </p>
 
             {splat?.defaultCameraJson && (
-              <div style={{ marginBottom: '0.75rem', padding: '0.5rem', background: '#0a2a0a', border: '1px solid #22c55e', borderRadius: 4 }}>
-                <div style={{ fontSize: '0.625rem', color: '#22c55e', fontWeight: 600, marginBottom: '0.25rem' }}>Current camera saved:</div>
-                <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+              <div style={{ marginBottom: '0.75rem', padding: '0.5rem', background: 'oklch(78% 0.13 145 / 0.12)', border: '1px solid var(--admin-success)', borderRadius: 4 }}>
+                <div style={{ fontSize: '0.625rem', color: 'var(--admin-success)', fontWeight: 600, marginBottom: '0.25rem' }}>Current camera saved:</div>
+                <div style={{ fontSize: '0.625rem', color: 'var(--admin-soft, var(--color-ink-soft))', fontFamily: 'monospace' }}>
                   pos: [{splat.defaultCameraJson.position.map((v: number) => v.toFixed(2)).join(', ')}]
                 </div>
-                <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+                <div style={{ fontSize: '0.625rem', color: 'var(--admin-soft, var(--color-ink-soft))', fontFamily: 'monospace' }}>
                   target: [{splat.defaultCameraJson.target.map((v: number) => v.toFixed(2)).join(', ')}]
                 </div>
                 {typeof splat.defaultCameraJson.fov === 'number' && (
-                  <div style={{ fontSize: '0.625rem', color: '#a3a3a3', fontFamily: 'monospace' }}>
+                  <div style={{ fontSize: '0.625rem', color: 'var(--admin-soft, var(--color-ink-soft))', fontFamily: 'monospace' }}>
                     fov: {splat.defaultCameraJson.fov.toFixed(2)}
                   </div>
                 )}
@@ -2196,7 +2260,7 @@ export default function Annotation3DEditorPage() {
                 </Button>
               )}
               {cameraMessage && (
-                <span style={{ fontSize: '0.6875rem', color: cameraMessage.startsWith('Error') ? '#ef4444' : '#22c55e', flexBasis: '100%', marginTop: '0.25rem' }}>
+                <span style={{ fontSize: '0.6875rem', color: cameraMessage.startsWith('Error') ? 'var(--admin-danger, var(--color-error))' : 'var(--admin-success)', flexBasis: '100%', marginTop: '0.25rem' }}>
                   {cameraMessage}
                 </span>
               )}
@@ -2206,7 +2270,7 @@ export default function Annotation3DEditorPage() {
           {/* ── Pretransform Panel ── */}
           <div style={{ padding: '0.875rem' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Pretransform</h3>
-            <p style={{ fontSize: '0.625rem', color: '#737373', margin: '0 0 0.75rem 0' }}>
+            <p style={{ fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))', margin: '0 0 0.75rem 0' }}>
               Adjust the splat's position, rotation, and scale. Save to persist; Apply reloads the 3D view.
             </p>
 
@@ -2273,7 +2337,7 @@ export default function Annotation3DEditorPage() {
                 Reset
               </Button>
               {ptMessage && (
-                <span style={{ fontSize: '0.6875rem', color: ptMessage.startsWith('Error') ? '#ef4444' : '#22c55e', flexBasis: '100%', marginTop: '0.25rem' }}>
+                <span style={{ fontSize: '0.6875rem', color: ptMessage.startsWith('Error') ? 'var(--admin-danger, var(--color-error))' : 'var(--admin-success)', flexBasis: '100%', marginTop: '0.25rem' }}>
                   {ptMessage}
                 </span>
               )}
@@ -2286,12 +2350,12 @@ export default function Annotation3DEditorPage() {
 }
 
 // ── Styles ──
-const layoutStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: '#050505', color: '#f5f5f5', margin: '-0.5rem -2rem 0' };
-const headerStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 1rem', borderBottom: '1px solid #2a2a2a', background: '#0d0d0d', flexShrink: 0 };
-const backLinkStyle: React.CSSProperties = { color: '#a3a3a3', textDecoration: 'underline', fontSize: '0.75rem' };
+const layoutStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 48px)', background: 'var(--color-viewer-bg)', color: 'var(--admin-ink, var(--color-ink))', margin: '-0.5rem -2rem 0' };
+const headerStyle: React.CSSProperties = { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 1rem', borderBottom: 'var(--rule)', background: 'var(--admin-panel-solid, var(--color-panel-solid))', flexShrink: 0 };
+const backLinkStyle: React.CSSProperties = { color: 'var(--admin-soft, var(--color-ink-soft))', textDecoration: 'underline', fontSize: '0.75rem' };
 const editorContainerStyle: React.CSSProperties = { flex: 1, display: 'flex', minHeight: 0 };
-const viewerPaneStyle: React.CSSProperties = { flex: 1, position: 'relative', cursor: 'crosshair', background: '#050505' };
-const hintOverlayStyle: React.CSSProperties = { position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', padding: '0.5rem 1rem', background: 'rgba(13,13,13,0.85)', border: '1px solid #2a2a2a', borderRadius: 8, color: '#a3a3a3', fontSize: '0.75rem', pointerEvents: 'none', zIndex: 10 };
+const viewerPaneStyle: React.CSSProperties = { flex: 1, position: 'relative', cursor: 'crosshair', background: 'var(--color-viewer-bg)' };
+const hintOverlayStyle: React.CSSProperties = { position: 'absolute', top: '1rem', left: '50%', transform: 'translateX(-50%)', padding: '0.5rem 1rem', background: 'var(--color-viewer-overlay)', border: 'var(--rule)', borderRadius: 8, color: 'var(--admin-soft, var(--color-ink-soft))', fontSize: '0.75rem', pointerEvents: 'none', zIndex: 10 };
 const flyJoystickLayerStyle: React.CSSProperties = { position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 30 };
 const flyJoystickBaseStyle: React.CSSProperties = {
   position: 'absolute',
@@ -2299,8 +2363,8 @@ const flyJoystickBaseStyle: React.CSSProperties = {
   width: 104,
   height: 104,
   borderRadius: '50%',
-  background: 'rgba(245,245,245,0.12)',
-  border: '1px solid rgba(255,255,255,0.22)',
+  background: 'var(--color-pill)',
+  border: 'var(--rule)',
   backdropFilter: 'blur(8px)',
   opacity: 0.55,
   pointerEvents: 'auto',
@@ -2315,11 +2379,12 @@ const flyJoystickKnobStyle: React.CSSProperties = {
   width: 42,
   height: 42,
   borderRadius: '50%',
-  background: 'rgba(245,245,245,0.34)',
-  border: '1px solid rgba(255,255,255,0.28)',
+  background: 'var(--color-hover-sheen)',
+  border: 'var(--rule)',
   transform: 'translate(calc(-50% + var(--jx)), calc(-50% + var(--jy)))',
-  boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+  boxShadow: '0 8px 24px var(--color-shadow)',
 };
-const panelStyle: React.CSSProperties = { width: 340, background: '#0d0d0d', borderLeft: '1px solid #2a2a2a', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' };
+const panelStyle: React.CSSProperties = { width: 340, background: 'var(--admin-panel-solid, var(--color-panel-solid))', borderLeft: 'var(--rule)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' };
 const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: '0.125rem' };
-const labelTextStyle: React.CSSProperties = { fontSize: '0.625rem', color: '#737373' };
+const labelTextStyle: React.CSSProperties = { fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))' };
+

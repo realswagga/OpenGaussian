@@ -17,10 +17,10 @@ const ToastContext = createContext<ToastContextValue>({ toast: () => {} });
 export const useToast = (): ToastContextValue => useContext(ToastContext);
 
 const typeStyles: Record<ToastType, React.CSSProperties> = {
-  info: { borderColor: '#2a2a2a', color: '#f5f5f5' },
-  success: { borderColor: '#22c55e', color: '#22c55e' },
-  error: { borderColor: '#ef4444', color: '#ef4444' },
-  warning: { borderColor: '#eab308', color: '#eab308' },
+  info: { borderColor: 'var(--color-rule)', color: 'var(--admin-ink, var(--color-ink))' },
+  success: { borderColor: 'var(--admin-success)', color: 'var(--admin-success)' },
+  error: { borderColor: 'var(--admin-danger, var(--color-error))', color: 'var(--admin-danger, var(--color-error))' },
+  warning: { borderColor: 'var(--admin-warning)', color: 'var(--admin-warning)' },
 };
 
 export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -58,7 +58,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
             key={t.id}
             style={{
               padding: '10px 16px',
-              background: '#111111',
+              background: 'var(--admin-panel-popover, var(--color-panel-popover))',
               border: '1px solid',
               borderRadius: 8,
               fontSize: 14,
@@ -77,7 +77,7 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               style={{
                 background: 'none',
                 border: 'none',
-                color: '#737373',
+                color: 'var(--admin-muted, var(--color-muted))',
                 cursor: 'pointer',
                 fontSize: 16,
                 padding: '0 0 0 12px',

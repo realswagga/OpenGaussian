@@ -17,8 +17,8 @@ export const Spinner: React.FC<SpinnerProps> = ({ size = 'md', className = '' })
   const style: React.CSSProperties = {
     width: s.width,
     height: s.height,
-    border: `${s.borderWidth} solid #2a2a2a`,
-    borderTopColor: '#f5f5f5',
+    border: `${s.borderWidth} solid var(--color-rule)`,
+    borderTopColor: 'var(--admin-accent, var(--color-accent))',
     borderRadius: '50%',
     animation: 'gs-spin 0.6s linear infinite',
   };

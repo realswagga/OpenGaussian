@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AuthUser } from '@gsplat/shared';
+import { ThemeSwitch } from '../theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -34,6 +35,7 @@ export default function PublicNav({ user: controlledUser }: { user?: AuthUser | 
     <nav className="og-nav" aria-label="Primary navigation">
       <Link className="og-brand" to="/">OpenGaussian</Link>
       <div className="og-nav-links">
+        <ThemeSwitch />
         {activeUser?.capabilities?.canAccessAdmin && <a className="og-nav-link" href="/admin/">Admin</a>}
         {activeUser ? (
           <Link className="og-user-chip" to="/login" title={activeUser.email}>

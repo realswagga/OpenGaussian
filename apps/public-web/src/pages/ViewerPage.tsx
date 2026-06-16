@@ -18,12 +18,17 @@ import type {
   QuestPerfVerdict,
 } from '@gsplat/viewer-core';
 import type { AssetVariantSelection, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
+import { useTheme, type AppTheme } from '../theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const VIEWER_READY_KEY = 'gsplat_viewer_ready_v1';
 
 type RendererPref = 'webgl2' | 'webgpu';
+const VIEWER_BACKGROUND_COLORS: Record<AppTheme, [number, number, number]> = {
+  dark: [0.02, 0.02, 0.02],
+  light: [0.88, 0.86, 0.8],
+};
 
 interface DebugInfo {
   fps: number;
@@ -103,6 +108,7 @@ function blobToDataUrl(blob: Blob) {
 
 export default function ViewerPage() {
   const { slug } = useParams<{ slug: string }>();
+  const { theme, toggleTheme } = useTheme();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const viewerRef = useRef<GsplatViewer | null>(null);
   const pendingVrStartRef = useRef(false);
@@ -395,6 +401,7 @@ export default function ViewerPage() {
       webgpuPipeline: 'off',
       showMarkers: true,
       questPerfEnabled: showQuestPerf || questPerfCapturing,
+      backgroundColor: VIEWER_BACKGROUND_COLORS[theme],
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
       },
@@ -517,6 +524,11 @@ export default function ViewerPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manifest, markers, rendererPref, assetVariant]);
+
+  // Update background color on theme change without destroying/recreating the viewer
+  useEffect(() => {
+    viewerRef.current?.setBackgroundColor(VIEWER_BACKGROUND_COLORS[theme]);
+  }, [theme]);
 
   useEffect(() => {
     viewerRef.current?.setQuestPerfEnabled(showQuestPerf || questPerfCapturing);
@@ -771,6 +783,17 @@ export default function ViewerPage() {
         </div>
 
         <div style={styles.controlsGroup}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={theme === 'light'}
+            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+            onClick={toggleTheme}
+            style={styles.themeButton}
+          >
+            {theme === 'light' ? 'Light' : 'Dark'}
+          </button>
           <select
             value={cameraMode}
             onChange={(e) => setCameraMode(e.target.value)}
@@ -997,7 +1020,7 @@ export default function ViewerPage() {
           <div style={styles.debugGrid}>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>FPS</span>
-              <span style={{ ...styles.debugValue, color: debugInfo.fps < 30 ? '#ef4444' : '#22c55e' }}>{debugInfo.fps}</span>
+              <span style={{ ...styles.debugValue, color: debugInfo.fps < 30 ? 'var(--color-error)' : 'var(--admin-success)' }}>{debugInfo.fps}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>Frame</span>
@@ -1121,10 +1144,10 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '1rem',
-    background: '#050505',
+    background: 'var(--color-viewer-bg)',
   },
   loadingText: {
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     fontSize: '0.875rem',
   },
   errorContainer: {
@@ -1134,14 +1157,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '1rem',
-    background: '#050505',
+    background: 'var(--color-viewer-bg)',
   },
   errorText: {
-    color: '#ef4444',
+    color: 'var(--color-error)',
     fontSize: '0.875rem',
   },
   backLink: {
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     textDecoration: 'underline',
     fontSize: '0.8125rem',
   },
@@ -1149,14 +1172,14 @@ const styles: Record<string, React.CSSProperties> = {
     height: '100vh',
     display: 'flex',
     flexDirection: 'column',
-    background: '#050505',
+    background: 'var(--color-viewer-bg)',
     position: 'relative',
   },
   posterOverlay: {
     position: 'absolute',
     inset: 0,
     zIndex: 20,
-    background: '#050505',
+    background: 'var(--color-viewer-bg)',
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1176,21 +1199,21 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: '0.75rem',
-    background: 'rgba(5, 5, 5, 0.5)',
+    background: 'var(--color-viewer-scrim)',
   },
   progressText: {
-    color: '#f5f5f5',
+    color: 'var(--color-ink)',
     fontSize: '0.75rem',
-    background: 'rgba(13,13,13,0.72)',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-viewer-overlay)',
+    border: 'var(--rule)',
     borderRadius: 6,
     padding: '0.375rem 0.625rem',
   },
   spinner: {
     width: 32,
     height: 32,
-    border: '3px solid #2a2a2a',
-    borderTopColor: '#f5f5f5',
+    border: '3px solid var(--color-rule)',
+    borderTopColor: 'var(--color-ink)',
     borderRadius: '50%',
     animation: 'spin 0.8s linear infinite',
   },
@@ -1201,8 +1224,8 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.75rem',
     flexWrap: 'wrap',
     padding: '0.75rem 1rem',
-    background: '#0d0d0d',
-    borderBottom: '1px solid #2a2a2a',
+    background: 'var(--color-panel-solid)',
+    borderBottom: 'var(--rule)',
     zIndex: 10,
     flexShrink: 0,
   },
@@ -1213,13 +1236,13 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '1rem',
   },
   backButton: {
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     textDecoration: 'none',
     fontSize: '0.875rem',
   },
   sceneTitle: {
     minWidth: 0,
-    color: '#f5f5f5',
+    color: 'var(--color-ink)',
     fontWeight: 600,
     fontSize: '0.9375rem',
     overflow: 'hidden',
@@ -1233,39 +1256,51 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'flex-end',
     flexWrap: 'wrap',
   },
+  themeButton: {
+    minHeight: 32,
+    padding: '0.375rem 0.75rem',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
+    borderRadius: 6,
+    color: 'var(--color-ink-soft)',
+    cursor: 'pointer',
+    fontSize: '0.75rem',
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+  },
   selectInput: {
     padding: '0.375rem 0.75rem',
-    background: '#171717',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 6,
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     cursor: 'pointer',
     fontSize: '0.75rem',
   },
   vrButton: {
     padding: '0.375rem 0.75rem',
-    background: '#171717',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 6,
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     cursor: 'pointer',
     fontSize: '0.75rem',
   },
   questPerfButtonActive: {
     padding: '0.375rem 0.75rem',
-    background: '#10251c',
-    border: '1px solid #34d399',
+    background: 'oklch(78% 0.13 145 / 0.12)',
+    border: '1px solid var(--admin-success)',
     borderRadius: 6,
-    color: '#a7f3d0',
+    color: 'var(--admin-success)',
     cursor: 'pointer',
     fontSize: '0.75rem',
   },
   takePreviewButton: {
     padding: '0.375rem 0.75rem',
-    background: '#f5f5f5',
-    border: '1px solid #f5f5f5',
+    background: 'var(--color-ink)',
+    border: '1px solid var(--color-accent)',
     borderRadius: 6,
-    color: '#050505',
+    color: 'var(--color-viewer-bg)',
     cursor: 'pointer',
     fontSize: '0.75rem',
     fontWeight: 700,
@@ -1292,8 +1327,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   annotationPanel: {
     width: 340,
-    background: '#0d0d0d',
-    borderLeft: '1px solid #2a2a2a',
+    background: 'var(--color-panel-solid)',
+    borderLeft: 'var(--rule)',
     padding: '1.25rem',
     overflowY: 'auto',
     display: 'flex',
@@ -1310,13 +1345,13 @@ const styles: Record<string, React.CSSProperties> = {
   annotationTitle: {
     fontSize: '1rem',
     fontWeight: 600,
-    color: '#f5f5f5',
+    color: 'var(--color-ink)',
     margin: 0,
   },
   closeButton: {
     background: 'none',
     border: 'none',
-    color: '#737373',
+    color: 'var(--color-muted)',
     cursor: 'pointer',
     fontSize: '1.25rem',
     padding: 0,
@@ -1324,20 +1359,20 @@ const styles: Record<string, React.CSSProperties> = {
   },
   annotationBody: {
     fontSize: '0.875rem',
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     lineHeight: 1.5,
     margin: 0,
   },
   annotationMeta: {
     fontSize: '0.75rem',
-    color: '#737373',
+    color: 'var(--color-muted)',
     display: 'flex',
     gap: '0.5rem',
     alignItems: 'center',
   },
   annotationKind: {
     padding: '0.125rem 0.5rem',
-    border: '1px solid #2a2a2a',
+    border: 'var(--rule)',
     borderRadius: 4,
   },
   annotationCoords: {
@@ -1345,8 +1380,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   annotationList: {
     padding: '0.5rem 1rem',
-    background: '#0d0d0d',
-    borderTop: '1px solid #2a2a2a',
+    background: 'var(--color-panel-solid)',
+    borderTop: 'var(--rule)',
     display: 'flex',
     gap: '0.5rem',
     overflowX: 'auto',
@@ -1355,10 +1390,10 @@ const styles: Record<string, React.CSSProperties> = {
   },
   annotationChip: {
     padding: '0.375rem 0.75rem',
-    background: '#171717',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 6,
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     cursor: 'pointer',
     fontSize: '0.75rem',
     whiteSpace: 'nowrap' as const,
@@ -1368,38 +1403,38 @@ const styles: Record<string, React.CSSProperties> = {
   featureBadgeOn: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#0a2a0a',
-    border: '1px solid #22c55e',
+    background: 'oklch(78% 0.13 145 / 0.12)',
+    border: '1px solid var(--admin-success)',
     borderRadius: 4,
-    color: '#22c55e',
+    color: 'var(--admin-success)',
     fontWeight: 600,
   },
   featureBadgeOff: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 4,
-    color: '#737373',
+    color: 'var(--color-muted)',
   },
   // Clickable renderer toggle button
   rendererBadgeActive: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#0a2a0a',
-    border: '1px solid #22c55e',
+    background: 'oklch(78% 0.13 145 / 0.12)',
+    border: '1px solid var(--admin-success)',
     borderRadius: 4,
-    color: '#22c55e',
+    color: 'var(--admin-success)',
     fontWeight: 600,
     cursor: 'pointer',
   },
   rendererBadgeInactive: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 4,
-    color: '#737373',
+    color: 'var(--color-muted)',
     cursor: 'pointer',
   },
   rendererBadgeDisabled: {
@@ -1409,10 +1444,10 @@ const styles: Record<string, React.CSSProperties> = {
   versionBadge: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 4,
-    color: '#555',
+    color: 'var(--color-muted)',
     fontFamily: 'monospace',
     letterSpacing: '0.02em',
     userSelect: 'none' as const,
@@ -1420,10 +1455,10 @@ const styles: Record<string, React.CSSProperties> = {
   vrUnavailable: {
     fontSize: '0.625rem',
     padding: '0.125rem 0.5rem',
-    background: '#111',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 4,
-    color: '#737373',
+    color: 'var(--color-muted)',
     cursor: 'not-allowed',
   },
   // VR error toast
@@ -1438,7 +1473,7 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '0.5rem',
     padding: '0.5rem 0.75rem',
     background: 'rgba(239, 68, 68, 0.92)',
-    color: '#fff',
+    color: 'var(--color-accent-ink)',
     borderRadius: 6,
     fontSize: '0.75rem',
     fontWeight: 500,
@@ -1448,7 +1483,7 @@ const styles: Record<string, React.CSSProperties> = {
   vrErrorClose: {
     background: 'none',
     border: 'none',
-    color: '#fff',
+    color: 'var(--color-accent-ink)',
     cursor: 'pointer',
     fontSize: '1rem',
     padding: 0,
@@ -1461,15 +1496,15 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 12,
     width: 340,
     maxWidth: 'calc(100vw - 24px)',
-    background: 'rgba(13,13,13,0.94)',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-viewer-overlay)',
+    border: 'var(--rule)',
     borderRadius: 8,
     padding: '0.75rem',
     zIndex: 55,
-    color: '#d4d4d4',
+    color: 'var(--color-ink-soft)',
     fontSize: '0.75rem',
     backdropFilter: 'blur(8px)',
-    boxShadow: '0 18px 60px rgba(0,0,0,0.42)',
+    boxShadow: '0 18px 60px var(--color-shadow-strong)',
   },
   questPerfHeader: {
     display: 'flex',
@@ -1477,16 +1512,16 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     marginBottom: '0.625rem',
     paddingBottom: '0.5rem',
-    borderBottom: '1px solid #2a2a2a',
+    borderBottom: 'var(--rule)',
   },
   questPerfTitle: {
-    color: '#f5f5f5',
+    color: 'var(--color-ink)',
     fontWeight: 700,
   },
   questPerfClose: {
     background: 'transparent',
     border: 'none',
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     cursor: 'pointer',
     fontSize: '0.75rem',
   },
@@ -1497,8 +1532,8 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: '0.625rem',
   },
   questPerfVerdict: {
-    border: '1px solid #334155',
-    background: 'rgba(15,23,42,0.72)',
+    border: '1px solid var(--color-rule-strong)',
+    background: 'var(--color-panel)',
     borderRadius: 6,
     padding: '0.5rem',
     marginBottom: '0.625rem',
@@ -1512,19 +1547,19 @@ const styles: Record<string, React.CSSProperties> = {
   },
   questPerfActionButton: {
     padding: '0.375rem 0.625rem',
-    background: '#171717',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-panel)',
+    border: 'var(--rule)',
     borderRadius: 6,
-    color: '#d4d4d4',
+    color: 'var(--color-ink-soft)',
     cursor: 'pointer',
     fontSize: '0.72rem',
   },
   questPerfDangerButton: {
     padding: '0.375rem 0.625rem',
-    background: '#3b1111',
-    border: '1px solid #ef4444',
+    background: 'oklch(70% 0.14 25 / 0.14)',
+    border: '1px solid var(--color-error)',
     borderRadius: 6,
-    color: '#fecaca',
+    color: 'var(--color-error)',
     cursor: 'pointer',
     fontSize: '0.72rem',
   },
@@ -1532,7 +1567,7 @@ const styles: Record<string, React.CSSProperties> = {
   bottomSheetOverlay: {
     position: 'fixed' as const,
     inset: 0,
-    background: 'rgba(0,0,0,0.5)',
+    background: 'var(--color-viewer-scrim)',
     zIndex: 30,
     animation: 'fadeIn 150ms ease',
   },
@@ -1541,8 +1576,8 @@ const styles: Record<string, React.CSSProperties> = {
     bottom: 0,
     left: 0,
     right: 0,
-    background: '#0d0d0d',
-    borderTop: '1px solid #2a2a2a',
+    background: 'var(--color-panel-solid)',
+    borderTop: 'var(--rule)',
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
     padding: '1rem 1.25rem 1.5rem',
@@ -1554,7 +1589,7 @@ const styles: Record<string, React.CSSProperties> = {
   bottomSheetHandle: {
     width: 36,
     height: 4,
-    background: '#2a2a2a',
+    background: 'var(--color-rule)',
     borderRadius: 2,
     margin: '0 auto 0.75rem',
   },
@@ -1564,8 +1599,8 @@ const styles: Record<string, React.CSSProperties> = {
     top: 60,
     right: 12,
     width: 220,
-    background: 'rgba(13,13,13,0.92)',
-    border: '1px solid #2a2a2a',
+    background: 'var(--color-viewer-overlay)',
+    border: 'var(--rule)',
     borderRadius: 8,
     padding: '0.75rem',
     zIndex: 50,
@@ -1580,14 +1615,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center' as const,
     marginBottom: '0.5rem',
     paddingBottom: '0.375rem',
-    borderBottom: '1px solid #2a2a2a',
+    borderBottom: 'var(--rule)',
   },
   debugTitle: {
-    color: '#f5f5f5',
+    color: 'var(--color-ink)',
     fontWeight: 600,
   },
   debugHint: {
-    color: '#737373',
+    color: 'var(--color-muted)',
     fontSize: '0.5625rem',
   },
   debugGrid: {
@@ -1600,10 +1635,10 @@ const styles: Record<string, React.CSSProperties> = {
     justifyContent: 'space-between' as const,
   },
   debugLabel: {
-    color: '#737373',
+    color: 'var(--color-muted)',
   },
   debugValue: {
-    color: '#a3a3a3',
+    color: 'var(--color-ink-soft)',
     fontWeight: 600,
   },
 };
@@ -1628,3 +1663,5 @@ styleSheet.textContent = `
   }
 `;
 document.head.appendChild(styleSheet);
+
+

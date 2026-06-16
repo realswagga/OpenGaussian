@@ -10,6 +10,7 @@ import Annotation3DEditorPage from './pages/Annotation3DEditorPage';
 import OrganizationsPage from './pages/OrganizationsPage';
 import MembersPage from './pages/MembersPage';
 import WidgetPage from './pages/WidgetPage';
+import { ThemeSwitch, useTheme } from './theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -134,6 +135,7 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
             <span>{roleLabel} / {user.email}</span>
           </div>
           <div className="admin-actions">
+            <ThemeSwitch />
             <a className="admin-button-secondary" href="/" target="_blank" rel="noreferrer"><Icon name="external" />Public site</a>
             <Link className="admin-button" to="/splats/new"><Icon name="plus" />New splat</Link>
           </div>
@@ -190,6 +192,7 @@ function AdminBootSkeleton() {
 }
 
 function AppInner() {
+  useTheme();
   const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
   const navigate = useNavigate();

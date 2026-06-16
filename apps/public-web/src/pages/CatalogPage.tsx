@@ -270,7 +270,6 @@ function OrganizationGroup({
   onOpen: () => void;
 }) {
   const initial = group.title.trim().charAt(0).toUpperCase() || 'O';
-  const shownCount = group.splats.length;
   const headerStyle = { '--i': index } as CSSProperties;
   const preview = (
     <div className="catalog-org-preview" aria-hidden="true">
@@ -292,7 +291,6 @@ function OrganizationGroup({
         {group.description && <p>{group.description}</p>}
         <div className="catalog-org-meta">
           <span>{formatCount(group.count)} published splats</span>
-          {showSplats && <span>{formatCount(shownCount)} shown</span>}
         </div>
       </div>
       {group.href && <span className="catalog-org-open" aria-hidden="true">Open</span>}

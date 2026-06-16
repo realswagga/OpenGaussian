@@ -31,6 +31,10 @@ export class GsplatViewer {
     this.runtime.setCameraMode(mode);
   }
 
+  setBackgroundColor(color: [number, number, number]): void {
+    this.runtime.setBackgroundColor(color);
+  }
+
   setMarkers(points: MarkerPoint[]): void {
     this.runtime.setMarkers(points);
   }

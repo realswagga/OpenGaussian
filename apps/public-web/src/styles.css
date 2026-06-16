@@ -17,8 +17,8 @@ body {
   margin: 0;
   overflow-x: clip;
   background:
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.026) 0 1px, transparent 1px 42px),
-    repeating-linear-gradient(0deg, oklch(100% 0 0 / 0.018) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(90deg, var(--color-page-grid-major) 0 1px, transparent 1px 42px),
+    repeating-linear-gradient(0deg, var(--color-page-grid-minor) 0 1px, transparent 1px 42px),
     linear-gradient(112deg, var(--color-bg) 0%, var(--color-bg) 48%, var(--color-bg-2) 48%, var(--color-bg-2) 100%);
   color: var(--color-ink);
   font-family: var(--font-body);
@@ -77,14 +77,14 @@ button {
 .og-backdrop::before {
   content: "";
   background:
-    linear-gradient(118deg, transparent 0 32%, oklch(100% 0 0 / 0.055) 32% 33%, transparent 33% 100%),
-    linear-gradient(64deg, transparent 0 72%, oklch(100% 0 0 / 0.04) 72% 73%, transparent 73% 100%);
+    linear-gradient(118deg, transparent 0 32%, var(--color-hover-sheen) 32% 33%, transparent 33% 100%),
+    linear-gradient(64deg, transparent 0 72%, var(--color-page-grid-minor) 72% 73%, transparent 73% 100%);
 }
 
 .og-backdrop::after {
   content: "";
   opacity: 0.28;
-  background-image: repeating-linear-gradient(135deg, oklch(100% 0 0 / 0.045) 0 1px, transparent 1px 8px);
+  background-image: repeating-linear-gradient(135deg, var(--color-pill) 0 1px, transparent 1px 8px);
   mask-image: linear-gradient(to bottom, oklch(0% 0 0), transparent 72%);
 }
 
@@ -106,7 +106,7 @@ button {
   min-height: 68px;
   padding: 0 max(var(--space-md), calc((100% - 1220px) / 2));
   border-bottom: var(--rule);
-  background: oklch(7% 0.004 95 / 0.78);
+  background: var(--color-chrome);
   backdrop-filter: blur(18px);
 }
 
@@ -134,7 +134,8 @@ button {
 
 .og-nav-link,
 .og-button,
-.og-button-secondary {
+.og-button-secondary,
+.theme-switch {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
@@ -153,6 +154,43 @@ button {
     border-color var(--dur-short) var(--ease-out),
     color var(--dur-short) var(--ease-out);
   white-space: nowrap;
+}
+
+.theme-switch {
+  min-width: 6.4rem;
+  padding-inline: var(--space-sm);
+  background: var(--color-panel);
+  color: var(--color-ink-soft);
+  font-weight: 700;
+}
+
+.theme-switch__track {
+  width: 2rem;
+  height: 1.05rem;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: var(--rule);
+  border-radius: 999px;
+  background: var(--color-bg-2);
+}
+
+.theme-switch__thumb {
+  width: 0.72rem;
+  height: 0.72rem;
+  border-radius: 999px;
+  background: var(--color-ink-soft);
+  transform: translateX(0);
+  transition: transform var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+}
+
+.theme-switch[aria-checked="true"] .theme-switch__thumb {
+  background: var(--color-accent);
+  transform: translateX(0.86rem);
+}
+
+.theme-switch__label {
+  font-size: 0.78rem;
 }
 
 .og-nav-link {
@@ -212,7 +250,8 @@ button {
 @media (hover: hover) {
   .og-nav-link:hover,
   .og-user-chip:hover,
-  .og-button-secondary:hover {
+  .og-button-secondary:hover,
+  .theme-switch:hover {
     transform: translateY(-1px);
     border-color: var(--color-rule-strong);
     background: var(--color-panel-2);
@@ -227,7 +266,8 @@ button {
 .og-nav-link:active,
 .og-user-chip:active,
 .og-button:active,
-.og-button-secondary:active {
+.og-button-secondary:active,
+.theme-switch:active {
   transform: translateY(1px);
 }
 
@@ -290,7 +330,7 @@ button {
   border: var(--rule);
   border-radius: var(--radius-card);
   background:
-    linear-gradient(135deg, oklch(20% 0.008 95), oklch(9% 0.004 95)),
+    linear-gradient(135deg, var(--color-viewer-bg-2), var(--color-viewer-bg)),
     var(--color-panel);
   color: var(--color-ink);
   text-decoration: none;
@@ -324,8 +364,8 @@ button {
   position: absolute;
   inset: 0;
   background:
-    linear-gradient(to top, oklch(7% 0.004 95 / 0.92), transparent 52%),
-    repeating-linear-gradient(0deg, oklch(100% 0 0 / 0.04) 0 1px, transparent 1px 8px);
+    linear-gradient(to top, var(--color-chrome-strong), transparent 52%),
+    repeating-linear-gradient(0deg, var(--color-page-grid-minor) 0 1px, transparent 1px 8px);
 }
 
 .catalog-hero-mark,
@@ -344,7 +384,7 @@ button {
   animation: og-skeleton var(--dur-long) var(--ease-in-out) infinite alternate;
   background:
     linear-gradient(120deg, var(--color-panel), var(--color-panel-2)),
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.035) 0 1px, transparent 1px 24px);
+    repeating-linear-gradient(90deg, var(--color-page-grid-minor) 0 1px, transparent 1px 24px);
 }
 
 .catalog-hero-pointfield {
@@ -421,7 +461,7 @@ button {
   backdrop-filter: blur(18px);
   overflow-anchor: none;
   scroll-margin-top: 78px;
-  box-shadow: 0 12px 38px oklch(0% 0 0 / 0.24);
+  box-shadow: 0 12px 38px var(--color-shadow);
   transform-origin: top center;
   will-change: transform;
   transition:
@@ -453,8 +493,8 @@ button {
 
 .catalog-console.is-docked {
   border-top-color: var(--catalog-rim-strong);
-  background: oklch(7% 0.004 95 / 0.92);
-  box-shadow: 0 20px 62px oklch(0% 0 0 / 0.36);
+  background: var(--color-chrome-strong);
+  box-shadow: 0 20px 62px var(--color-shadow-strong);
   transform: translateY(-2px) scale(1.048);
 }
 
@@ -511,7 +551,7 @@ button {
   border-radius: var(--radius-md);
   outline: 2px solid transparent;
   outline-offset: 1px;
-  background: oklch(8% 0.004 95 / 0.86);
+  background: var(--color-input);
   color: var(--color-ink);
   padding: 0 var(--space-md);
   transition:
@@ -610,7 +650,7 @@ button {
   border-color: var(--catalog-rim, var(--color-rule));
   border-radius: var(--radius-card);
   background: var(--color-panel-popover);
-  box-shadow: 0 24px 70px oklch(0% 0 0 / 0.42);
+  box-shadow: 0 24px 70px var(--color-shadow-strong);
   animation: catalog-popover-in var(--dur-short) var(--ease-out) both;
 }
 
@@ -786,7 +826,7 @@ button {
   border-left-color: var(--color-rule-strong);
   border-radius: var(--radius-card);
   background:
-    linear-gradient(90deg, oklch(100% 0 0 / 0.055), transparent 46%),
+    linear-gradient(90deg, var(--color-hover-sheen), transparent 46%),
     var(--color-panel);
   color: var(--color-ink);
   text-decoration: none;
@@ -801,7 +841,7 @@ button {
     transform: translateY(-1px);
     border-color: var(--color-rule-strong);
     background:
-      linear-gradient(90deg, oklch(100% 0 0 / 0.075), transparent 48%),
+      linear-gradient(90deg, var(--color-hover-sheen), transparent 48%),
       var(--color-panel-2);
   }
 }
@@ -818,7 +858,7 @@ button {
   border: var(--rule);
   border-radius: var(--radius-md);
   background:
-    linear-gradient(135deg, oklch(18% 0.008 95), oklch(10% 0.004 95)),
+    linear-gradient(135deg, var(--color-viewer-bg-2), var(--color-viewer-bg)),
     var(--color-panel);
 }
 
@@ -884,7 +924,7 @@ button {
   padding: 0 var(--space-xs);
   border: var(--rule);
   border-radius: var(--radius-sm);
-  background: oklch(100% 0 0 / 0.035);
+  background: var(--color-pill);
   color: var(--color-ink-soft);
 }
 
@@ -969,7 +1009,7 @@ button {
   place-items: center;
   border-bottom: var(--rule);
   background:
-    linear-gradient(135deg, oklch(18% 0.008 95), oklch(10% 0.004 95)),
+    linear-gradient(135deg, var(--color-viewer-bg-2), var(--color-viewer-bg)),
     var(--color-panel);
   color: var(--color-muted);
 }
@@ -996,9 +1036,9 @@ button {
   display: grid;
   place-items: center;
   background:
-    linear-gradient(135deg, oklch(100% 0 0 / 0.08) 0 1px, transparent 1px 100%),
-    repeating-linear-gradient(90deg, oklch(100% 0 0 / 0.04) 0 1px, transparent 1px 18px),
-    linear-gradient(135deg, oklch(18% 0.008 95), oklch(9% 0.004 95));
+    linear-gradient(135deg, var(--color-page-grid-major) 0 1px, transparent 1px 100%),
+    repeating-linear-gradient(90deg, var(--color-page-grid-minor) 0 1px, transparent 1px 18px),
+    linear-gradient(135deg, var(--color-viewer-bg-2), var(--color-viewer-bg));
 }
 
 .catalog-card-mark span {
@@ -1019,7 +1059,7 @@ button {
   padding: 0 var(--space-xs);
   border: var(--rule);
   border-radius: var(--radius-sm);
-  background: oklch(7% 0.004 95 / 0.72);
+  background: var(--color-chrome);
   color: var(--color-ink);
   font-family: var(--font-mono);
   font-size: 0.72rem;
@@ -1079,7 +1119,7 @@ button {
   padding: 0 var(--space-xs);
   border: var(--rule);
   border-radius: var(--radius-sm);
-  background: oklch(100% 0 0 / 0.035);
+  background: var(--color-pill);
   color: var(--color-ink-soft);
   text-decoration: none;
 }
@@ -1212,7 +1252,7 @@ button {
 @media (hover: hover) {
   .og-detail-back:hover {
     transform: translateX(-2px);
-    background: oklch(100% 0 0 / 0.045);
+    background: var(--color-pill);
     color: var(--color-ink);
   }
 }
@@ -1473,3 +1513,4 @@ button {
     to { opacity: 1; }
   }
 }
+

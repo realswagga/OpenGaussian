@@ -20,17 +20,17 @@ const wrapperStyle: React.CSSProperties = {
 
 const labelStyle: React.CSSProperties = {
   fontSize: '13px',
-  color: '#a3a3a3',
+  color: 'var(--admin-soft, var(--color-ink-soft))',
   fontWeight: 500,
 };
 
 const inputStyle: React.CSSProperties = {
-  background: '#0d0d0d',
-  border: '1px solid #2a2a2a',
-  borderRadius: '6px',
+  background: 'var(--color-input)',
+  border: 'var(--admin-rule, 1px solid var(--color-rule))',
+  borderRadius: 'var(--radius-md, 6px)',
   padding: '8px 12px',
   fontSize: '14px',
-  color: '#f5f5f5',
+  color: 'var(--admin-ink, var(--color-ink))',
   outline: 'none',
   transition: 'border-color 150ms',
   fontFamily: 'inherit',
@@ -38,7 +38,7 @@ const inputStyle: React.CSSProperties = {
 
 const errorStyle: React.CSSProperties = {
   fontSize: '12px',
-  color: '#ef4444',
+  color: 'var(--admin-danger, var(--color-error))',
 };
 
 export const Input: React.FC<InputProps> = ({
@@ -64,14 +64,14 @@ export const Input: React.FC<InputProps> = ({
         style={{
           ...inputStyle,
           ...style,
-          borderColor: error ? '#ef4444' : '#2a2a2a',
+          borderColor: error ? 'var(--admin-danger, var(--color-error))' : 'var(--color-rule)',
           opacity: disabled ? 0.5 : 1,
         }}
         onFocus={(e) => {
-          if (!error) e.target.style.borderColor = '#3a3a3a';
+          if (!error) e.target.style.borderColor = 'var(--admin-rule-strong, var(--color-rule-strong))';
         }}
         onBlur={(e) => {
-          if (!error) e.target.style.borderColor = '#2a2a2a';
+          if (!error) e.target.style.borderColor = 'var(--color-rule)';
         }}
       />
       {error && <span style={errorStyle}>{error}</span>}
