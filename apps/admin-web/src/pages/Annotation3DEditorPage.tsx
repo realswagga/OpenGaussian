@@ -7,6 +7,11 @@ import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
 import { useI18n } from '../i18n';
 import { useTheme, type AppTheme } from '../theme';
 import {
+  captureGizmoCameraPose,
+  restoreGizmoCameraPose,
+  type FrozenGizmoCameraPose,
+} from '../markerGizmoCamera';
+import {
   applyDeadzone,
   clamp,
   clampDollyStepToDepth,
@@ -1071,8 +1076,27 @@ export default function Annotation3DEditorPage() {
     const transform = new TransformControls(camera, renderer.domElement);
     transform.setMode('translate');
     transform.setSize(1.5);
+    let frozenGizmoCameraPose: FrozenGizmoCameraPose | null = null;
     transform.addEventListener('dragging-changed', (event) => {
-      orbit.enabled = !event.value && !flyModeRef.current;
+      const dragging = Boolean(event.value);
+      if (dragging) {
+        frozenGizmoCameraPose = captureGizmoCameraPose(camera, orbit.target);
+        orbit.enabled = false;
+        return;
+      }
+
+      if (frozenGizmoCameraPose) {
+        // Flush OrbitControls' pending damping delta, then restore the exact
+        // pre-drag pose so it cannot resume as a camera jump after pointer-up.
+        const dampingEnabled = orbit.enableDamping;
+        orbit.enableDamping = false;
+        orbit.update();
+        restoreGizmoCameraPose(camera, orbit.target, frozenGizmoCameraPose);
+        orbit.update();
+        orbit.enableDamping = dampingEnabled;
+        frozenGizmoCameraPose = null;
+      }
+      orbit.enabled = !flyModeRef.current;
     });
     transform.addEventListener('objectChange', () => {
       const obj = transform.object;
@@ -1089,7 +1113,6 @@ export default function Annotation3DEditorPage() {
           rotationZ: Math.round(THREE.MathUtils.radToDeg(obj.rotation.z) * 100) / 100,
           scale: Math.max(0.01, Math.round(obj.scale.x * 100) / 100),
         };
-        setOrbitTargetToPoint(position);
         setEditForm((prev) => ({
           ...prev,
           ...next,
@@ -1257,6 +1280,10 @@ export default function Annotation3DEditorPage() {
       animFrameRef.current = requestAnimationFrame(animate);
       if (flyModeRef.current) {
         updateFlyCamera(0.016);
+      } else if (transform.dragging) {
+        if (frozenGizmoCameraPose) {
+          restoreGizmoCameraPose(camera, orbit.target, frozenGizmoCameraPose);
+        }
       } else {
         updateOrbitAnchorTransition();
         updateOrbitPan(0.016);

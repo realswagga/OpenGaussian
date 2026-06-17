@@ -5,7 +5,7 @@
     "rootDir": "../..",
     "jsx": "react-jsx",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "baseUrl": ".",
     "paths": {
       "@gsplat/shared": ["../../packages/shared/src/index.ts"],
