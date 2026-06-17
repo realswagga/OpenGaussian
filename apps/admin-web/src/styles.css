@@ -428,7 +428,8 @@ button {
 .admin-button,
 .admin-button-secondary,
 .admin-icon-button,
-.theme-switch {
+.theme-switch,
+.language-switch {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
@@ -450,40 +451,83 @@ button {
 }
 
 .theme-switch {
-  min-width: 6.4rem;
-  padding-inline: var(--space-sm);
+  width: 44px;
+  min-width: 44px;
+  padding: 0;
   background: var(--admin-panel);
   color: var(--admin-soft);
   font-weight: 700;
 }
 
-.theme-switch__track {
-  width: 2rem;
-  height: 1.05rem;
-  display: inline-flex;
-  align-items: center;
-  padding: 2px;
-  border: var(--rule);
-  border-radius: 999px;
-  background: var(--admin-bg-2);
+.language-switch {
+  min-width: 76px;
+  padding: 0 var(--space-2xs);
+  background: var(--admin-panel);
+  color: var(--admin-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
-.theme-switch__thumb {
-  width: 0.72rem;
-  height: 0.72rem;
-  border-radius: 999px;
-  background: var(--admin-soft);
-  transform: translateX(0);
-  transition: transform var(--dur-short) var(--ease-out), background-color var(--dur-short) var(--ease-out);
+.language-switch span {
+  min-width: 28px;
+  min-height: 30px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  transition:
+    background-color var(--dur-short) var(--ease-out),
+    color var(--dur-short) var(--ease-out);
 }
 
-.theme-switch[aria-checked="true"] .theme-switch__thumb {
+.language-switch span.active {
   background: var(--admin-accent);
-  transform: translateX(0.86rem);
+  color: var(--admin-accent-ink);
 }
 
-.theme-switch__label {
-  font-size: 0.78rem;
+.theme-switch__icon {
+  position: relative;
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-grid;
+  place-items: center;
+  color: currentColor;
+  flex: 0 0 auto;
+}
+
+.theme-switch__glyph {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  fill: none;
+  transform-origin: 50% 50%;
+  transition:
+    opacity var(--dur-short) var(--ease-out),
+    transform var(--dur-short) var(--ease-out);
+}
+
+.theme-switch__glyph--sun {
+  opacity: 0;
+  transform: rotate(-45deg) scale(0.72);
+}
+
+.theme-switch__glyph--moon {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.theme-switch__icon[data-theme-state="light"] .theme-switch__glyph--sun {
+  opacity: 1;
+  transform: rotate(0deg) scale(1);
+}
+
+.theme-switch__icon[data-theme-state="light"] .theme-switch__glyph--moon {
+  opacity: 0;
+  transform: rotate(45deg) scale(0.72);
 }
 
 .admin-button {
@@ -501,7 +545,8 @@ button {
 @media (hover: hover) {
   .admin-button-secondary:hover,
   .admin-icon-button:hover,
-  .theme-switch:hover {
+  .theme-switch:hover,
+  .language-switch:hover {
     transform: translateY(-1px);
     border-color: var(--admin-rule-strong);
     background: var(--admin-panel-2);
@@ -516,7 +561,8 @@ button {
 .admin-button:active,
 .admin-button-secondary:active,
 .admin-icon-button:active,
-.theme-switch:active {
+.theme-switch:active,
+.language-switch:active {
   transform: translateY(1px);
 }
 
@@ -1258,6 +1304,11 @@ button {
     animation-duration: 150ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 150ms !important;
+  }
+
+  .theme-switch__glyph {
+    transform: none !important;
+    transition-property: opacity !important;
   }
 }
 

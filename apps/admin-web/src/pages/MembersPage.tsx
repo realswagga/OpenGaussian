@@ -1,15 +1,16 @@
 import { useEffect, useMemo, useState, type FormEvent } from 'react';
 import type { AdminMembership, AdminOrganization, AuthUser, EditorPermissions } from '@gsplat/shared';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 const permissionLabels: Array<[keyof EditorPermissions, string]> = [
-  ['canCreateSplats', 'Create splats'],
-  ['canUploadSplats', 'Upload assets'],
-  ['canEditSplats', 'Edit metadata'],
-  ['canDeleteSplats', 'Delete splats'],
-  ['canPublishSplats', 'Publish'],
-  ['canEditMarkers', '3D markers'],
+  ['canCreateSplats', 'perm.createSplats'],
+  ['canUploadSplats', 'perm.uploadAssets'],
+  ['canEditSplats', 'perm.editMetadata'],
+  ['canDeleteSplats', 'perm.deleteSplats'],
+  ['canPublishSplats', 'perm.publish'],
+  ['canEditMarkers', 'perm.markers3d'],
 ];
 
 const defaultEditorPermissions: EditorPermissions = {
@@ -26,8 +27,9 @@ function canAddManagers(user: AuthUser) {
 }
 
 function MemberSkeleton() {
+  const { t } = useI18n();
   return (
-    <div className="admin-table-skeleton" aria-label="Loading members">
+    <div className="admin-table-skeleton" aria-label={t('members.loading')}>
       {Array.from({ length: 5 }).map((_, index) => (
         <div className="admin-skeleton-row" key={index}>
           <div className="admin-skeleton-cell">
@@ -43,6 +45,7 @@ function MemberSkeleton() {
 }
 
 export default function MembersPage({ user }: { user: AuthUser }) {
+  const { t } = useI18n();
   const [organizations, setOrganizations] = useState<AdminOrganization[]>([]);
   const [selectedOrgId, setSelectedOrgId] = useState('');
   const [members, setMembers] = useState<AdminMembership[]>([]);
@@ -106,12 +109,12 @@ export default function MembersPage({ user }: { user: AuthUser }) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || 'Add member failed');
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('members.addFailed'));
       }
       setEmail('');
       loadMembers(selectedOrgId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Add member failed');
+      setError(err instanceof Error ? err.message : t('members.addFailed'));
     }
   };
 
@@ -126,11 +129,11 @@ export default function MembersPage({ user }: { user: AuthUser }) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || 'Update failed');
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('members.updateFailed'));
       }
       loadMembers(selectedOrgId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Update failed');
+      setError(err instanceof Error ? err.message : t('members.updateFailed'));
     }
   };
 
@@ -138,9 +141,9 @@ export default function MembersPage({ user }: { user: AuthUser }) {
     <>
       <div className="admin-page-head">
         <div>
-          <p className="admin-eyebrow">Approvals</p>
-          <h1>Members</h1>
-          <p>Promote self-signed clients into managers or editors for an organization.</p>
+          <p className="admin-eyebrow">{t('members.approvals')}</p>
+          <h1>{t('common.members')}</h1>
+          <p>{t('members.copy')}</p>
         </div>
       </div>
 
@@ -150,7 +153,7 @@ export default function MembersPage({ user }: { user: AuthUser }) {
         <section className="admin-table-wrap">
           <div className="admin-panel" style={{ border: 0, borderBottom: '1px solid var(--admin-rule)', borderRadius: 0 }}>
             <label className="admin-label">
-              Organization
+              {t('common.organization')}
               <select className="admin-select" value={selectedOrgId} onChange={(event) => setSelectedOrgId(event.target.value)}>
                 {organizations.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
               </select>
@@ -160,14 +163,14 @@ export default function MembersPage({ user }: { user: AuthUser }) {
           {loading ? (
             <MemberSkeleton />
           ) : members.length === 0 ? (
-            <div className="admin-empty">No members in this organization.</div>
+            <div className="admin-empty">{t('members.noMembers')}</div>
           ) : (
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>User</th>
-                  <th>Role</th>
-                  <th>Permissions</th>
+                  <th>{t('members.user')}</th>
+                  <th>{t('members.role')}</th>
+                  <th>{t('members.permissions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -180,7 +183,7 @@ export default function MembersPage({ user }: { user: AuthUser }) {
                     <td><span className="admin-pill">{member.role}</span></td>
                     <td>
                       {member.role === 'MANAGER' ? (
-                        <span className="admin-muted">Full organization access</span>
+                        <span className="admin-muted">{t('members.fullAccess')}</span>
                       ) : (
                         <div className="admin-checkbox-grid">
                           {permissionLabels.map(([key, label]) => (
@@ -190,7 +193,7 @@ export default function MembersPage({ user }: { user: AuthUser }) {
                                 checked={member.permissions[key]}
                                 onChange={(event) => patchMembership(member, { [key]: event.target.checked })}
                               />
-                              {label}
+                              {t(label)}
                             </label>
                           ))}
                         </div>
@@ -204,14 +207,14 @@ export default function MembersPage({ user }: { user: AuthUser }) {
         </section>
 
         <section className="admin-panel">
-          <p className="admin-eyebrow">Promote client</p>
+          <p className="admin-eyebrow">{t('members.promoteClient')}</p>
           <form className="admin-form" onSubmit={submit}>
             <label className="admin-label">
-              Client email
+              {t('members.clientEmail')}
               <input className="admin-input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="client@example.com" required />
             </label>
             <label className="admin-label">
-              Role
+              {t('members.role')}
               <select className="admin-select" value={role} onChange={(event) => setRole(event.target.value as 'EDITOR' | 'MANAGER')}>
                 <option value="EDITOR">Editor</option>
                 {canAddManagers(user) && <option value="MANAGER">Manager</option>}
@@ -226,12 +229,12 @@ export default function MembersPage({ user }: { user: AuthUser }) {
                       checked={permissions[key]}
                       onChange={(event) => setPermissions((current) => ({ ...current, [key]: event.target.checked }))}
                     />
-                    {label}
+                    {t(label)}
                   </label>
                 ))}
               </div>
             )}
-            <button className="admin-button" type="submit" disabled={!selectedOrg}>Add to organization</button>
+            <button className="admin-button" type="submit" disabled={!selectedOrg}>{t('members.add')}</button>
           </form>
         </section>
       </div>

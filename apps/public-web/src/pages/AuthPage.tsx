@@ -2,10 +2,12 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import type { AuthUser } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export default function AuthPage({ initialMode }: { initialMode: 'login' | 'signup' }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const location = useLocation();
   const [mode, setMode] = useState(initialMode);
@@ -45,13 +47,13 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || 'Authentication failed');
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('auth.failed'));
       }
       const data = await res.json();
       setUser(data.user);
       if (data.user?.capabilities?.canAccessAdmin) window.location.assign('/admin');
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Authentication failed');
+      setError(err instanceof Error ? err.message : t('auth.failed'));
     } finally {
       setLoading(false);
     }
@@ -70,43 +72,43 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
         <section className="og-auth-card">
           {user ? (
             <>
-              <p className="og-eyebrow">Account</p>
+              <p className="og-eyebrow">{t('auth.account')}</p>
               <h1>{user.name || user.email}</h1>
               <p className="og-card-desc" style={{ marginTop: 12 }}>
-                You are signed in as {user.role === 'CLIENT' ? 'viewer' : user.role.toLowerCase()}.
+                {t('auth.signedInAs', { role: user.role === 'CLIENT' ? t('auth.viewer') : user.role.toLowerCase() })}
               </p>
               <div className="og-hero-actions">
-                <Link className="og-button" to="/search">Browse catalog</Link>
-                {user.capabilities?.canAccessAdmin && <a className="og-button-secondary" href="/admin/">Open admin</a>}
-                <button className="og-button-secondary" type="button" onClick={logout}>Sign out</button>
+                <Link className="og-button" to="/search">{t('auth.browseCatalog')}</Link>
+                {user.capabilities?.canAccessAdmin && <a className="og-button-secondary" href="/admin/">{t('auth.openAdmin')}</a>}
+                <button className="og-button-secondary" type="button" onClick={logout}>{t('auth.signOut')}</button>
               </div>
             </>
           ) : (
             <>
-              <p className="og-eyebrow">{mode === 'signup' ? 'Self sign up' : 'Log in'}</p>
-              <h1>{mode === 'signup' ? 'Create account' : 'Sign in'}</h1>
+              <p className="og-eyebrow">{mode === 'signup' ? t('auth.selfSignUp') : t('auth.logIn')}</p>
+              <h1>{mode === 'signup' ? t('auth.createAccount') : t('auth.signIn')}</h1>
               <form onSubmit={submit}>
                 {mode === 'signup' && (
                   <label className="og-label">
-                    Name
+                    {t('auth.name')}
                     <input className="og-input" value={name} onChange={(event) => setName(event.target.value)} />
                   </label>
                 )}
                 <label className="og-label">
-                  Email
+                  {t('auth.email')}
                   <input className="og-input" type="email" value={email} onChange={(event) => setEmail(event.target.value)} required />
                 </label>
                 <label className="og-label">
-                  Password
+                  {t('auth.password')}
                   <input className="og-input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} required minLength={mode === 'signup' ? 8 : 1} />
                 </label>
                 {error && <div className="og-error">{error}</div>}
                 <button className="og-button" type="submit" disabled={loading}>
-                  {loading ? 'Please wait...' : mode === 'signup' ? 'Create account' : 'Sign in'}
+                  {loading ? t('auth.wait') : mode === 'signup' ? t('auth.createAccount') : t('auth.signIn')}
                 </button>
               </form>
               <p className="og-auth-switch">
-                {mode === 'signup' ? 'Already have an account?' : 'New here?'}{' '}
+                {mode === 'signup' ? t('auth.haveAccount') : t('auth.newHere')}{' '}
                 <button
                   type="button"
                   onClick={() => {
@@ -115,7 +117,7 @@ export default function AuthPage({ initialMode }: { initialMode: 'login' | 'sign
                     navigate(next === 'signup' ? '/signup' : '/login');
                   }}
                 >
-                  {mode === 'signup' ? 'Sign in' : 'Create account'}
+                  {mode === 'signup' ? t('auth.signIn') : t('auth.createAccount')}
                 </button>
               </p>
             </>

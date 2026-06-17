@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js';
 import { Card, Badge, Button, Spinner, Tabs } from '@gsplat/ui';
+import { useI18n } from '../i18n';
 import { useTheme, type AppTheme } from '../theme';
 import {
   applyDeadzone,
@@ -276,6 +277,7 @@ function loadSogBinPositions(_buffer: ArrayBuffer): Float32Array {
 // ── Component ──
 
 export default function Annotation3DEditorPage() {
+  const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const [searchParams, setSearchParams] = useSearchParams();
   const { theme } = useTheme();
@@ -1723,7 +1725,7 @@ export default function Annotation3DEditorPage() {
 
   const handleDelete = async () => {
     if (!selectedId) return;
-    if (!confirm('Delete this marker?')) return;
+    if (!confirm(t('common.delete'))) return;
     const deletedId = selectedId;
     // Optimistic: remove from local state immediately
     setAnnotations((prev) => prev.filter((a) => a.id !== deletedId));
@@ -1733,7 +1735,7 @@ export default function Annotation3DEditorPage() {
     try {
       await fetch(`${API_BASE}/admin/markers/${deletedId}`, { method: 'DELETE', credentials: 'include' });
     } catch {
-      alert('Delete failed');
+      alert(t('splats.deleteFailed'));
       fetchData();
     }
   };
@@ -1762,8 +1764,8 @@ export default function Annotation3DEditorPage() {
           scale: [pretransform.sclX, pretransform.sclY, pretransform.sclZ],
         }),
       });
-      if (!r.ok) throw new Error('Save failed');
-      setPtMessage('Saved ✓');
+      if (!r.ok) throw new Error(t('dashboard.saveFailed'));
+      setPtMessage(t('common.save'));
     } catch (err) {
       setPtMessage(`Error: ${err instanceof Error ? err.message : 'Unknown'}`);
     } finally {
@@ -1800,7 +1802,7 @@ export default function Annotation3DEditorPage() {
         credentials: 'include',
         body: JSON.stringify({ position, target, fov }),
       });
-      if (!r.ok) throw new Error('Save failed');
+      if (!r.ok) throw new Error(t('dashboard.saveFailed'));
       setCameraMessage('Camera saved ✓');
       setSplat((prev) => prev ? { ...prev, defaultCameraJson: { position, target, fov } } : prev);
     } catch (err) {
@@ -1907,7 +1909,7 @@ export default function Annotation3DEditorPage() {
           )}
           <button
             onClick={() => setPlaceMode(!placeMode)}
-            title="Place Marker mode (P) — click ground to place, XYZ gizmo appears immediately"
+            title={t('ann.placeMarker')}
             style={{
               padding: '0.25rem 0.625rem', fontSize: '0.6875rem', borderRadius: 4,
               background: placeMode ? 'var(--admin-success)' : 'var(--admin-panel, var(--color-panel))',
@@ -1916,7 +1918,7 @@ export default function Annotation3DEditorPage() {
               fontWeight: placeMode ? 600 : 400,
             }}
           >
-            {placeMode ? '▸ Placing...' : '+ Place Marker'}
+            {placeMode ? t('ann.cancelPlace') : t('ann.placeMarker')}
           </button>
 
           {/* Fly mode toggle */}
@@ -1977,7 +1979,7 @@ export default function Annotation3DEditorPage() {
 
           <label style={{ display: 'flex', alignItems: 'center', gap: '0.25rem', cursor: 'pointer', userSelect: 'none' }}>
             <input type="checkbox" checked={snapEnabled} onChange={(e) => setSnapEnabled(e.target.checked)} style={{ accentColor: 'var(--admin-ink, var(--color-ink))' }} />
-            Snap
+            {t('ann.snap')}
           </label>
           {snapEnabled && (
             <select
@@ -2017,7 +2019,7 @@ export default function Annotation3DEditorPage() {
         >
           {splatLoading && (
             <div style={{ position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)', padding: '0.5rem 1rem', background: 'var(--color-viewer-overlay)', border: 'var(--rule)', borderRadius: 8, color: 'var(--admin-soft, var(--color-ink-soft))', fontSize: '0.75rem', zIndex: 20 }}>
-              Loading point cloud...
+              {t('ann.loading')}
             </div>
           )}
           {splatError && (
@@ -2035,7 +2037,7 @@ export default function Annotation3DEditorPage() {
               <span>
                 {placeMode
                   ? 'Click on the ground plane to place a new marker (XYZ gizmo appears)'
-                  : 'Click "Place Marker" to add markers · Click existing markers to edit · Drag XYZ handles'}
+                  : t('ann.selectHint')}
               </span>
             </div>
           )}
@@ -2073,9 +2075,9 @@ export default function Annotation3DEditorPage() {
         <div style={panelStyle}>
           {/* Marker list */}
           <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
-            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>Markers ({annotations.length})</h3>
+            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.5rem 0' }}>{t('ann.markers', { count: annotations.length })}</h3>
             {annotations.length === 0 && (
-              <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: 0 }}>No markers. Click "Place Marker" to add.</p>
+              <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: 0 }}>{t('ann.noMarkers')}</p>
             )}
             <div style={{ maxHeight: 180, overflowY: 'auto' }}>
               {annotations.map((ann) => (
@@ -2108,12 +2110,12 @@ export default function Annotation3DEditorPage() {
           {/* Edit form */}
           <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
             <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.75rem 0' }}>
-              {isPreview ? 'New Marker (drag XYZ gizmo to position)' : isNewMarker ? 'New Marker' : 'Edit Marker'}
+              {isPreview ? t('ann.newMarkerDrag') : isNewMarker ? t('ann.newMarker') : t('ann.editMarker')}
             </h3>
 
             {!hasSelection && (
               <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: 0 }}>
-                Select a marker from the list above, or click "Place Marker" and click on the scene to create one.
+                {t('ann.selectHint')}
               </p>
             )}
 
@@ -2121,11 +2123,11 @@ export default function Annotation3DEditorPage() {
               <form onSubmit={handleSave} style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr auto', gap: '0.5rem' }}>
                   <label style={labelStyle}>
-                    <span style={labelTextStyle}>Title *</span>
+                    <span style={labelTextStyle}>{t('ann.title')}</span>
                     <input type="text" value={editForm.title} onChange={(e) => updateSelectedMarkerForm({ title: e.target.value })} required placeholder="Name..." style={inputStyle} />
                   </label>
                   <label style={labelStyle}>
-                    <span style={labelTextStyle}>Kind</span>
+                    <span style={labelTextStyle}>{t('ann.kind')}</span>
                     <select value={editForm.kind} onChange={(e) => updateSelectedMarkerForm({ kind: e.target.value })} style={inputStyle}>
                       {KIND_OPTIONS.map((k) => <option key={k} value={k}>{k}</option>)}
                     </select>
@@ -2133,12 +2135,12 @@ export default function Annotation3DEditorPage() {
                 </div>
 
                 <label style={labelStyle}>
-                  <span style={labelTextStyle}>Body</span>
+                  <span style={labelTextStyle}>{t('ann.body')}</span>
                   <input type="text" value={editForm.body} onChange={(e) => updateSelectedMarkerForm({ body: e.target.value })} placeholder="Description..." style={inputStyle} />
                 </label>
 
                 <div>
-                  <span style={labelTextStyle}>Color</span>
+                  <span style={labelTextStyle}>{t('ann.color')}</span>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.375rem', marginTop: '0.25rem' }}>
                     {COLOR_PRESETS.map((c) => (
                       <button key={c} type="button" onClick={() => updateSelectedMarkerForm({ color: c })}
@@ -2156,7 +2158,7 @@ export default function Annotation3DEditorPage() {
                 </div>
 
                 <div>
-                  <span style={labelTextStyle}>Icon</span>
+                  <span style={labelTextStyle}>{t('ann.icon')}</span>
                   <div style={{ display: 'flex', gap: '0.25rem', marginTop: '0.25rem' }}>
                     {ICON_OPTIONS.map((opt) => (
                       <button key={opt.value} type="button" onClick={() => updateSelectedMarkerForm({ icon: opt.value })}
@@ -2175,7 +2177,7 @@ export default function Annotation3DEditorPage() {
 
                 {/* Annotation Position */}
                 <div>
-                  <span style={labelTextStyle}>Position (drag XYZ gizmo arrows in 3D view)</span>
+                  <span style={labelTextStyle}>{t('ann.position')}</span>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.375rem', marginTop: '0.25rem' }}>
                     {['X', 'Y', 'Z'].map((axis, i) => {
                       const keys = ['positionX', 'positionY', 'positionZ'] as const;
@@ -2191,7 +2193,7 @@ export default function Annotation3DEditorPage() {
 
                 {/* Annotation Rotation */}
                 <div>
-                  <span style={labelTextStyle}>Rotation (degrees)</span>
+                  <span style={labelTextStyle}>{t('ann.rotation')}</span>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.375rem', marginTop: '0.25rem' }}>
                     {['X', 'Y', 'Z'].map((axis, i) => {
                       const keys = ['rotationX', 'rotationY', 'rotationZ'] as const;
@@ -2206,7 +2208,7 @@ export default function Annotation3DEditorPage() {
                 </div>
 
                 <label style={labelStyle}>
-                  <span style={labelTextStyle}>Scale ({editForm.scale.toFixed(2)})</span>
+                  <span style={labelTextStyle}>{t('ann.scale', { value: editForm.scale.toFixed(2) })}</span>
                   <input type="range" min="0.1" max="10" step="0.1" value={editForm.scale}
                     onChange={(e) => updateSelectedMarkerForm({ scale: parseFloat(e.target.value) || 1 })}
                     style={{ width: '100%', accentColor: 'var(--admin-ink, var(--color-ink))' }}
@@ -2215,12 +2217,12 @@ export default function Annotation3DEditorPage() {
 
                 <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
                   <Button type="submit" variant="primary" size="sm">
-                    {isNewMarker ? 'Create' : 'Update'}
+                    {isNewMarker ? t('ann.create') : t('ann.update')}
                   </Button>
                   {!isNewMarker && (
-                    <Button type="button" variant="danger" size="sm" onClick={handleDelete}>Delete</Button>
+                    <Button type="button" variant="danger" size="sm" onClick={handleDelete}>{t('common.delete')}</Button>
                   )}
-                  <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>Cancel</Button>
+                  <Button type="button" variant="secondary" size="sm" onClick={handleCancel}>{t('common.cancel')}</Button>
                 </div>
               </form>
             )}
@@ -2228,14 +2230,14 @@ export default function Annotation3DEditorPage() {
 
           {/* ── Default Camera Panel ── */}
           <div style={{ padding: '0.875rem', borderBottom: 'var(--rule)' }}>
-            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Initial Camera</h3>
+            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>{t('ann.initialCamera')}</h3>
             <p style={{ fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))', margin: '0 0 0.75rem 0' }}>
-              Set the camera position that clients will see when first opening the splat. Navigate to your desired view in the 3D scene and click "Save Camera" below.
+              {t('ann.cameraCopy')}
             </p>
 
             {splat?.defaultCameraJson && (
               <div style={{ marginBottom: '0.75rem', padding: '0.5rem', background: 'oklch(78% 0.13 145 / 0.12)', border: '1px solid var(--admin-success)', borderRadius: 4 }}>
-                <div style={{ fontSize: '0.625rem', color: 'var(--admin-success)', fontWeight: 600, marginBottom: '0.25rem' }}>Current camera saved:</div>
+                <div style={{ fontSize: '0.625rem', color: 'var(--admin-success)', fontWeight: 600, marginBottom: '0.25rem' }}>{t('ann.cameraSaved')}</div>
                 <div style={{ fontSize: '0.625rem', color: 'var(--admin-soft, var(--color-ink-soft))', fontFamily: 'monospace' }}>
                   pos: [{splat.defaultCameraJson.position.map((v: number) => v.toFixed(2)).join(', ')}]
                 </div>
@@ -2252,7 +2254,7 @@ export default function Annotation3DEditorPage() {
 
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <Button variant="primary" size="sm" onClick={handleCameraSave} disabled={cameraSaving}>
-                {cameraSaving ? 'Saving...' : 'Save Camera'}
+                {cameraSaving ? t('common.saving') : t('ann.saveCamera')}
               </Button>
               {splat?.defaultCameraJson && (
                 <Button variant="secondary" size="sm" onClick={handleCameraReset} disabled={cameraSaving}>
@@ -2269,14 +2271,14 @@ export default function Annotation3DEditorPage() {
 
           {/* ── Pretransform Panel ── */}
           <div style={{ padding: '0.875rem' }}>
-            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>Pretransform</h3>
+            <h3 style={{ fontSize: '0.8125rem', fontWeight: 600, margin: '0 0 0.25rem 0' }}>{t('ann.pretransform')}</h3>
             <p style={{ fontSize: '0.625rem', color: 'var(--admin-muted, var(--color-muted))', margin: '0 0 0.75rem 0' }}>
-              Adjust the splat's position, rotation, and scale. Save to persist; Apply reloads the 3D view.
+              {t('ann.pretransformCopy')}
             </p>
 
             {/* Position */}
             <div style={{ marginBottom: '0.625rem' }}>
-              <span style={labelTextStyle}>Position</span>
+              <span style={labelTextStyle}>{t('ann.positionLabel')}</span>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.25rem', marginTop: '0.125rem' }}>
                 {[
                   { label: 'X', val: pretransform.posX, set: (v: number) => setPretransform((p) => ({ ...p, posX: v })) },
@@ -2293,7 +2295,7 @@ export default function Annotation3DEditorPage() {
 
             {/* Rotation */}
             <div style={{ marginBottom: '0.625rem' }}>
-              <span style={labelTextStyle}>Rotation (degrees)</span>
+              <span style={labelTextStyle}>{t('ann.rotation')}</span>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.25rem', marginTop: '0.125rem' }}>
                 {[
                   { label: 'X', val: pretransform.rotX, set: (v: number) => setPretransform((p) => ({ ...p, rotX: v })) },
@@ -2310,7 +2312,7 @@ export default function Annotation3DEditorPage() {
 
             {/* Scale */}
             <div style={{ marginBottom: '0.75rem' }}>
-              <span style={labelTextStyle}>Scale</span>
+              <span style={labelTextStyle}>{t('ann.scaleMode')}</span>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.25rem', marginTop: '0.125rem' }}>
                 {[
                   { label: 'X', val: pretransform.sclX, set: (v: number) => setPretransform((p) => ({ ...p, sclX: v })) },
@@ -2328,10 +2330,10 @@ export default function Annotation3DEditorPage() {
             {/* Buttons */}
             <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <Button variant="primary" size="sm" onClick={handlePtSave} disabled={ptSaving}>
-                {ptSaving ? 'Saving...' : 'Save'}
+                {ptSaving ? t('common.saving') : t('common.save')}
               </Button>
               <Button variant="secondary" size="sm" onClick={handlePtApply} disabled={splatLoading}>
-                Apply to View
+                {t('ann.applyView')}
               </Button>
               <Button variant="secondary" size="sm" onClick={() => setPretransform({ posX: 0, posY: 0, posZ: 0, rotX: 0, rotY: 0, rotZ: 0, sclX: 1, sclY: 1, sclZ: 1 })}>
                 Reset

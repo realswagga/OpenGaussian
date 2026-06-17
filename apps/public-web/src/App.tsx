@@ -4,9 +4,10 @@ import ViewerPage from './pages/ViewerPage';
 import CatalogPage from './pages/CatalogPage';
 import OrganizationPage from './pages/OrganizationPage';
 import AuthPage from './pages/AuthPage';
+import { I18nProvider } from './i18n';
 import { useTheme } from './theme';
 
-export default function App() {
+function AppRoutes() {
   useTheme();
   return (
     <Routes>
@@ -19,5 +20,13 @@ export default function App() {
       <Route path="/signup" element={<AuthPage initialMode="signup" />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+export default function App() {
+  return (
+    <I18nProvider>
+      <AppRoutes />
+    </I18nProvider>
   );
 }

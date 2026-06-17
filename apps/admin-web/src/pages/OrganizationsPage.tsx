@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import type { AdminOrganization, AuthUser } from '@gsplat/shared';
+import { useI18n } from '../i18n';
 import PreviewImageEditor from '../components/PreviewImageEditor';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -40,8 +41,9 @@ function previewUrl(key: string) {
 }
 
 function OrganizationSkeleton() {
+  const { t } = useI18n();
   return (
-    <div className="admin-table-skeleton" aria-label="Loading organizations">
+    <div className="admin-table-skeleton" aria-label={t('org.loading')}>
       {Array.from({ length: 5 }).map((_, index) => (
         <div className="admin-skeleton-row" key={index}>
           <div className="admin-skeleton-thumb" />
@@ -59,6 +61,7 @@ function OrganizationSkeleton() {
 }
 
 export default function OrganizationsPage({ user }: { user: AuthUser }) {
+  const { t } = useI18n();
   const [organizations, setOrganizations] = useState<AdminOrganization[]>([]);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -81,7 +84,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
       setLoading(false);
       return items as AdminOrganization[];
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load organizations');
+      setError(err instanceof Error ? err.message : t('org.loading'));
       setLoading(false);
       return [] as AdminOrganization[];
     }
@@ -131,7 +134,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
       );
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || 'Save failed');
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('dashboard.saveFailed'));
       }
 
       const data = await res.json();
@@ -141,7 +144,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
       setEditingId(refreshed.id);
       setForm(formFromOrganization(refreshed));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Save failed');
+      setError(err instanceof Error ? err.message : t('dashboard.saveFailed'));
     } finally {
       setSaving(false);
     }
@@ -169,9 +172,9 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
     <>
       <div className="admin-page-head">
         <div>
-          <p className="admin-eyebrow">{user.capabilities?.isMasterAdmin ? 'Global groups' : 'Your groups'}</p>
-          <h1>Organizations</h1>
-          <p>Publish splats under named groups with public organization pages.</p>
+          <p className="admin-eyebrow">{user.capabilities?.isMasterAdmin ? t('org.globalGroups') : t('org.yourGroups')}</p>
+          <h1>{t('common.organizations')}</h1>
+          <p>{t('org.copy')}</p>
         </div>
       </div>
 
@@ -182,16 +185,16 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
           {loading ? (
             <OrganizationSkeleton />
           ) : organizations.length === 0 ? (
-            <div className="admin-empty">No organizations yet.</div>
+            <div className="admin-empty">{t('org.noOrganizations')}</div>
           ) : (
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Organization</th>
-                  <th>Members</th>
-                  <th>Splats</th>
-                  <th>Public</th>
-                  <th>Actions</th>
+                  <th>{t('common.organization')}</th>
+                  <th>{t('common.members')}</th>
+                  <th>{t('org.splats')}</th>
+                  <th>{t('common.public')}</th>
+                  <th>{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -211,10 +214,10 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                     </td>
                     <td>{org.memberCount}</td>
                     <td>{org.publishedSplatCount} / {org.splatCount}</td>
-                    <td><span className="admin-pill">{org.isPublic ? 'Public' : 'Hidden'}</span></td>
+                    <td><span className="admin-pill">{org.isPublic ? t('common.public') : t('common.hidden')}</span></td>
                     <td>
                       <button className="admin-button-secondary" type="button" onClick={() => startEdit(org)}>
-                        Edit
+                        {t('common.edit')}
                       </button>
                     </td>
                   </tr>
@@ -227,17 +230,17 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
         <div className="admin-side-stack">
           <section className="admin-panel">
             <div className="admin-form-head">
-              <p className="admin-eyebrow">{formMode === 'edit' ? 'Edit group' : 'Create group'}</p>
+              <p className="admin-eyebrow">{formMode === 'edit' ? t('org.editGroup') : t('org.createGroup')}</p>
               {formMode === 'edit' && (
                 <button className="admin-button-secondary" type="button" onClick={startCreate}>
-                  New group
+                  {t('org.newGroup')}
                 </button>
               )}
             </div>
 
             <form className="admin-form" onSubmit={submit}>
               <label className="admin-label">
-                Name
+                {t('common.name')}
                 <input
                   className="admin-input"
                   value={form.name}
@@ -246,7 +249,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                 />
               </label>
               <label className="admin-label">
-                URL handle
+                {t('org.urlHandle')}
                 <input
                   className="admin-input"
                   value={form.slug}
@@ -255,7 +258,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                 />
               </label>
               <label className="admin-label">
-                Description
+                {t('common.description')}
                 <textarea
                   className="admin-textarea"
                   value={form.description}
@@ -263,7 +266,7 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                 />
               </label>
               <label className="admin-label">
-                Website
+                {t('common.website')}
                 <input
                   className="admin-input"
                   value={form.websiteUrl}
@@ -276,10 +279,10 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
                   checked={form.isPublic}
                   onChange={(event) => setForm((f) => ({ ...f, isPublic: event.target.checked }))}
                 />
-                <span>Public page</span>
+                <span>{t('org.publicPage')}</span>
               </label>
               <button className="admin-button" type="submit" disabled={saving}>
-                {saving ? 'Saving...' : formMode === 'edit' ? 'Save changes' : 'Create organization'}
+                {saving ? t('common.saving') : formMode === 'edit' ? t('org.saveChanges') : t('org.createOrganization')}
               </button>
             </form>
           </section>
@@ -291,8 +294,8 @@ export default function OrganizationsPage({ user }: { user: AuthUser }) {
         <section className="admin-org-preview-wrap">
           <PreviewImageEditor
             currentKey={editingOrg.previewKey ?? null}
-            currentLabel="Organization preview"
-            emptyLabel="No organization preview"
+            currentLabel={t('org.previewLabel')}
+            emptyLabel={t('org.noPreview')}
             outputFilename={`organization-${editingOrg.id}.jpg`}
             uploadUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}
             resetUrl={`${API_BASE}/admin/organizations/${editingOrg.id}/preview`}

@@ -18,7 +18,8 @@ import type {
   QuestPerfVerdict,
 } from '@gsplat/viewer-core';
 import type { AssetVariantSelection, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
-import { useTheme, type AppTheme } from '../theme';
+import { LanguageSwitch, useI18n } from '../i18n';
+import { ThemeIcon, useTheme, type AppTheme } from '../theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -107,6 +108,7 @@ function blobToDataUrl(blob: Blob) {
 }
 
 export default function ViewerPage() {
+  const { t } = useI18n();
   const { slug } = useParams<{ slug: string }>();
   const { theme, toggleTheme } = useTheme();
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -687,7 +689,7 @@ export default function ViewerPage() {
     return (
       <div style={styles.loadingContainer}>
         <div style={styles.spinner} />
-        <p style={styles.loadingText}>Loading scene...</p>
+        <p style={styles.loadingText}>{t('viewer.loading')}</p>
       </div>
     );
   }
@@ -696,9 +698,9 @@ export default function ViewerPage() {
   if (error || !manifest) {
     return (
       <div style={styles.errorContainer}>
-        <p style={styles.errorText}>Failed to load scene: {error || 'Not found'}</p>
+        <p style={styles.errorText}>{error || t('viewer.loading')}</p>
         <Link to="/splats" style={styles.backLink}>
-          ← Back to scenes
+          {t('viewer.back')}
         </Link>
       </div>
     );
@@ -746,7 +748,7 @@ export default function ViewerPage() {
           <button
             onClick={() => setVrError(null)}
             style={styles.vrErrorClose}
-            aria-label="Dismiss VR error"
+            aria-label={t('viewer.close')}
           >
             ×
           </button>
@@ -757,7 +759,7 @@ export default function ViewerPage() {
       <div style={styles.topBar}>
         <div style={styles.topBarLeft}>
           <Link to="/splats" style={styles.backButton} tabIndex={0}>
-            ← Scenes
+            {t('viewer.back')}
           </Link>
           <span style={styles.sceneTitle}>{manifest.title}</span>
           {/* Clickable renderer toggle replaces static badges. */}
@@ -769,13 +771,13 @@ export default function ViewerPage() {
                 ...(rendererPref === 'webgpu' ? styles.rendererBadgeActive : styles.rendererBadgeInactive),
                 ...(rendererToggleLocked ? styles.rendererBadgeDisabled : {}),
               }}
-              title={rendererToggleLocked ? 'Exit VR before switching renderer' : `Click to switch to ${rendererPref === 'webgpu' ? 'WebGL2' : 'WebGPU'}`}
-              aria-label={`Renderer: ${rendererPref}. Click to switch.`}
+              title={rendererPref === 'webgpu' ? t('viewer.webgpu') : t('viewer.webgl2')}
+              aria-label={rendererPref === 'webgpu' ? t('viewer.webgpu') : t('viewer.webgl2')}
             >
               {rendererPref === 'webgpu' ? 'WebGPU' : 'WebGL2'}
             </button>
           ) : (
-            <span style={styles.featureBadgeOff} title="WebGPU not available in this browser">
+            <span style={styles.featureBadgeOff} title={t('viewer.webgl2')}>
               WebGL2
             </span>
           )}
@@ -783,25 +785,26 @@ export default function ViewerPage() {
         </div>
 
         <div style={styles.controlsGroup}>
+          <LanguageSwitch />
           <button
             type="button"
             role="switch"
             aria-checked={theme === 'light'}
-            aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
-            title={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
+            aria-label={t('theme.switch', { theme: theme === 'light' ? t('theme.dark') : t('theme.light') })}
+            title={t('theme.switch', { theme: theme === 'light' ? t('theme.dark') : t('theme.light') })}
             onClick={toggleTheme}
             style={styles.themeButton}
           >
-            {theme === 'light' ? 'Light' : 'Dark'}
+            <ThemeIcon theme={theme} />
           </button>
           <select
             value={cameraMode}
             onChange={(e) => setCameraMode(e.target.value)}
             style={styles.selectInput}
-            aria-label="Camera mode"
+            aria-label={t('viewer.camera')}
           >
-            <option value="orbit">Orbit</option>
-            <option value="fly">Fly</option>
+            <option value="orbit">{t('viewer.orbit')}</option>
+            <option value="fly">{t('viewer.fly')}</option>
 
             {manifest.viewer?.lockScene && <option value="locked">Locked</option>}
           </select>
@@ -809,20 +812,20 @@ export default function ViewerPage() {
             value={quality}
             onChange={(e) => setQuality(e.target.value)}
             style={styles.selectInput}
-            aria-label="Quality preset"
+            aria-label={t('viewer.quality')}
           >
-            <option value="auto">Auto</option>
-            <option value="low">Low</option>
-            <option value="medium">Medium</option>
-            <option value="high">High</option>
+            <option value="auto">{t('viewer.auto')}</option>
+            <option value="low">{t('viewer.low')}</option>
+            <option value="medium">{t('viewer.medium')}</option>
+            <option value="high">{t('viewer.high')}</option>
           </select>
           <button
             onClick={() => setQuestPerfPanelVisible(!showQuestPerf)}
             style={showQuestPerf ? styles.questPerfButtonActive : styles.vrButton}
-            title="Quest performance tools"
-            aria-label="Toggle Quest performance tools"
+            title={t('viewer.questPerfTitle')}
+            aria-label={t('viewer.questPerfTitle')}
           >
-            Quest Perf
+            {t('viewer.questPerf')}
           </button>
           {adminCanCapturePreview && (
             <button
@@ -832,10 +835,10 @@ export default function ViewerPage() {
                 ...styles.takePreviewButton,
                 ...(!viewerReady || capturePreviewBusy ? styles.takePreviewButtonDisabled : {}),
               }}
-              title={viewerReady ? 'Capture the viewer canvas for the admin preview editor' : 'Wait for the scene to finish loading'}
-              aria-label="Take preview"
+              title={t('viewer.takePreview')}
+              aria-label={t('viewer.takePreview')}
             >
-              {capturePreviewBusy ? 'Taking...' : 'Take preview'}
+              {capturePreviewBusy ? t('viewer.capturing') : t('viewer.takePreview')}
             </button>
           )}
           {manifest.viewer?.enableVr && vrSupported && (
@@ -843,10 +846,10 @@ export default function ViewerPage() {
               onClick={vrActive ? handleExitVr : handleEnterVr}
               disabled={vrLaunchPending}
               style={styles.vrButton}
-              title={vrLaunchPending ? 'Preparing VR renderer' : vrActive ? 'Exit VR mode' : 'Enter VR mode'}
-              aria-label={vrActive ? 'Exit VR' : 'Enter VR'}
+              title={vrLaunchPending ? t('viewer.startingVr') : vrActive ? t('viewer.vr') : t('viewer.enterVr')}
+              aria-label={vrActive ? t('viewer.vr') : t('viewer.enterVr')}
             >
-              {vrLaunchPending ? 'VR...' : vrActive ? 'Exit VR' : 'VR'}
+              {vrLaunchPending ? t('viewer.startingVr') : t('viewer.vr')}
             </button>
           )}
           {manifest.viewer?.enableVr && vrChecked && !vrSupported && (
@@ -866,13 +869,13 @@ export default function ViewerPage() {
 
         {/* Annotation side panel (desktop), hidden on mobile. */}
         {false && selectedMarker && (
-          <div style={styles.annotationPanel} role="complementary" aria-label="Marker information">
+          <div style={styles.annotationPanel} role="complementary" aria-label={t('viewer.annotations')}>
             <div style={styles.annotationPanelHeader}>
               <h3 style={styles.annotationTitle}>{selectedMarker!.title}</h3>
               <button
                 onClick={() => setSelectedMarker(null)}
                 style={styles.closeButton}
-                aria-label="Close panel"
+                aria-label={t('viewer.close')}
                 tabIndex={0}
               >
                 ×
@@ -895,7 +898,7 @@ export default function ViewerPage() {
 
       {/* Annotation list at bottom (quick reference) */}
       {false && markers.length > 0 && !selectedMarker && (
-        <div style={styles.annotationList} role="list" aria-label="Scene markers">
+        <div style={styles.annotationList} role="list" aria-label={t('viewer.annotations')}>
           {markers.map((a) => (
             <button
               key={a.id}
@@ -914,14 +917,14 @@ export default function ViewerPage() {
       {false && selectedMarker && (
         <>
           <div style={styles.bottomSheetOverlay} onClick={() => setSelectedMarker(null)} />
-          <div style={styles.bottomSheet} role="dialog" aria-label="Marker details">
+          <div style={styles.bottomSheet} role="dialog" aria-label={t('viewer.annotations')}>
             <div style={styles.bottomSheetHandle} />
             <div style={styles.annotationPanelHeader}>
               <h3 style={styles.annotationTitle}>{selectedMarker!.title}</h3>
               <button
                 onClick={() => setSelectedMarker(null)}
                 style={styles.closeButton}
-                aria-label="Close"
+                aria-label={t('viewer.close')}
                 tabIndex={0}
               >
                 ×
@@ -943,13 +946,13 @@ export default function ViewerPage() {
       )}
 
       {showQuestPerf && (
-        <div style={styles.questPerfPanel} aria-label="Quest performance lab" role="region">
+        <div style={styles.questPerfPanel} aria-label={t('viewer.questPerfTitle')} role="region">
           <div style={styles.questPerfHeader}>
-            <span style={styles.questPerfTitle}>Quest Perf</span>
+            <span style={styles.questPerfTitle}>{t('viewer.questPerfTitle')}</span>
             <button
               onClick={() => setQuestPerfPanelVisible(false)}
               style={styles.questPerfClose}
-              aria-label="Close Quest performance tools"
+              aria-label={t('viewer.closePanel')}
             >
               X
             </button>
@@ -976,35 +979,35 @@ export default function ViewerPage() {
               onClick={() => questPerfCapturing ? stopQuestPerfCapture() : startQuestPerfCapture()}
               style={questPerfCapturing ? styles.questPerfDangerButton : styles.questPerfActionButton}
             >
-              {questPerfCapturing ? 'Stop' : 'Capture'}
+              {questPerfCapturing ? t('viewer.stopCapture') : t('viewer.startCapture')}
             </button>
             <button
               onClick={runQuestPerfMatrix}
               disabled={questPerfCapturing}
               style={styles.questPerfActionButton}
             >
-              Run Matrix
+              {t('viewer.runMatrix')}
             </button>
             <button
               onClick={() => downloadQuestPerfTrace('csv')}
               disabled={!questPerfTrace}
               style={styles.questPerfActionButton}
             >
-              CSV
+              {t('viewer.downloadCsv')}
             </button>
             <button
               onClick={() => downloadQuestPerfTrace('json')}
               disabled={!questPerfTrace}
               style={styles.questPerfActionButton}
             >
-              JSON
+              {t('viewer.downloadJson')}
             </button>
             <button
               onClick={copyQuestPerfSummary}
               disabled={!questPerfTrace}
               style={styles.questPerfActionButton}
             >
-              {questPerfCopied ? 'Copied' : 'Copy'}
+              {questPerfCopied ? t('viewer.copied') : t('viewer.copy')}
             </button>
           </div>
         </div>
@@ -1012,10 +1015,10 @@ export default function ViewerPage() {
 
       {/* Debug overlay, toggle with ` key. */}
       {showDebug && (
-        <div style={styles.debugOverlay} aria-label="Debug info" role="region">
+        <div style={styles.debugOverlay} aria-label={t('viewer.debug')} role="region">
           <div style={styles.debugHeader}>
             <span style={styles.debugTitle}>🔍 Debug</span>
-            <span style={styles.debugHint}>Press ` to hide</span>
+            <span style={styles.debugHint}>{t('viewer.hideDebug')}</span>
           </div>
           <div style={styles.debugGrid}>
             <div style={styles.debugRow}>
@@ -1063,7 +1066,7 @@ export default function ViewerPage() {
               <span style={styles.debugValue}>{debugInfo.rendererPipeline}</span>
             </div>
             <div style={styles.debugRow}>
-              <span style={styles.debugLabel}>Asset</span>
+              <span style={styles.debugLabel}>{t('viewer.asset')}</span>
               <span style={styles.debugValue}>{debugInfo.assetFormat}{debugInfo.lodActive ? ' LOD' : ''}</span>
             </div>
             <div style={styles.debugRow}>
@@ -1075,7 +1078,7 @@ export default function ViewerPage() {
               <span style={styles.debugValue}>{debugInfo.loadPhase}</span>
             </div>
             <div style={styles.debugRow}>
-              <span style={styles.debugLabel}>Quality</span>
+              <span style={styles.debugLabel}>{t('viewer.quality')}</span>
               <span style={styles.debugValue}>{debugInfo.quality}</span>
             </div>
             <div style={styles.debugRow}>
@@ -1108,11 +1111,11 @@ export default function ViewerPage() {
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>On demand</span>
-              <span style={styles.debugValue}>{debugInfo.renderOnDemand ? 'yes' : 'no'}</span>
+              <span style={styles.debugValue}>{debugInfo.renderOnDemand ? t('viewer.yes') : t('viewer.no')}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>XR</span>
-              <span style={styles.debugValue}>{debugInfo.xrActive ? `${debugInfo.xrFrameRate || '-'}Hz` : 'off'}</span>
+              <span style={styles.debugValue}>{debugInfo.xrActive ? `${debugInfo.xrFrameRate || '-'}Hz` : t('viewer.off')}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>XR scale</span>
@@ -1257,16 +1260,17 @@ const styles: Record<string, React.CSSProperties> = {
     flexWrap: 'wrap',
   },
   themeButton: {
-    minHeight: 32,
-    padding: '0.375rem 0.75rem',
+    width: 44,
+    minHeight: 44,
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 0,
     background: 'var(--color-panel)',
     border: 'var(--rule)',
     borderRadius: 6,
     color: 'var(--color-ink-soft)',
     cursor: 'pointer',
-    fontSize: '0.75rem',
-    fontWeight: 700,
-    whiteSpace: 'nowrap',
   },
   selectInput: {
     padding: '0.375rem 0.75rem',
@@ -1663,5 +1667,6 @@ styleSheet.textContent = `
   }
 `;
 document.head.appendChild(styleSheet);
+
 
 

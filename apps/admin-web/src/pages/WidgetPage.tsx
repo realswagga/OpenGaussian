@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { SplatSummary } from '@gsplat/shared';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
 export default function WidgetPage() {
+  const { t } = useI18n();
   const [splats, setSplats] = useState<SplatSummary[]>([]);
   const [selectedId, setSelectedId] = useState('');
   const [copied, setCopied] = useState(false);
@@ -45,9 +47,9 @@ export default function WidgetPage() {
     <>
       <div className="admin-page-head">
         <div>
-          <p className="admin-eyebrow">Embed</p>
-          <h1>Widget</h1>
-          <p>Master admins and managers can generate embeds for published splats.</p>
+          <p className="admin-eyebrow">{t('widget.embed')}</p>
+          <h1>{t('common.widget')}</h1>
+          <p>{t('widget.copy')}</p>
         </div>
       </div>
 
@@ -64,7 +66,7 @@ export default function WidgetPage() {
           ) : (
             <form className="admin-form">
               <label className="admin-label">
-                Published splat
+                {t('widget.publishedSplat')}
                 <select className="admin-select" value={selectedId} onChange={(event) => setSelectedId(event.target.value)}>
                   {splats.map((s) => (
                     <option key={s.id} value={s.id}>{s.title}</option>
@@ -87,7 +89,7 @@ export default function WidgetPage() {
         </section>
 
         <section className="admin-panel">
-          <p className="admin-eyebrow">Snippet</p>
+          <p className="admin-eyebrow">{t('widget.snippet')}</p>
           {loading ? (
             <div className="admin-code admin-code--skeleton">
               <div className="admin-skeleton-line wide" />
@@ -97,10 +99,10 @@ export default function WidgetPage() {
           ) : snippet ? (
             <>
               <pre className="admin-code">{snippet}</pre>
-              <button className="admin-button" type="button" onClick={copy}>{copied ? 'Copied' : 'Copy embed'}</button>
+              <button className="admin-button" type="button" onClick={copy}>{copied ? t('common.copied') : t('widget.copyEmbed')}</button>
             </>
           ) : (
-            <div className="admin-empty">Publish a splat before generating a widget embed.</div>
+            <div className="admin-empty">{t('widget.empty')}</div>
           )}
         </section>
       </div>

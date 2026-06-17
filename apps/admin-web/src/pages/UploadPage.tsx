@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef, type DragEvent, type FormEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Card, Badge, Spinner, ProgressBar, Button } from '@gsplat/ui';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const MAX_MB = parseInt(import.meta.env.VITE_MAX_UPLOAD_MB || '2048', 10);
@@ -14,14 +15,23 @@ interface ProcessingStep {
 }
 
 const steps: ProcessingStep[] = [
-  { status: 'pending', label: 'Validating' },
-  { status: 'pending', label: 'Extracting metadata' },
-  { status: 'pending', label: 'Converting' },
-  { status: 'pending', label: 'Generating LOD' },
-  { status: 'pending', label: 'Generating preview' },
+  { status: 'pending', label: 'upload.steps.validating' },
+  { status: 'pending', label: 'upload.steps.metadata' },
+  { status: 'pending', label: 'upload.steps.converting' },
+  { status: 'pending', label: 'upload.steps.lod' },
+  { status: 'pending', label: 'upload.steps.preview' },
 ];
 
+const stepLogLabels: Record<string, string> = {
+  'upload.steps.validating': 'Validating',
+  'upload.steps.metadata': 'Extracting metadata',
+  'upload.steps.converting': 'Converting',
+  'upload.steps.lod': 'Generating LOD',
+  'upload.steps.preview': 'Generating preview',
+};
+
 export default function UploadPage() {
+  const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const dropRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -42,7 +52,7 @@ export default function UploadPage() {
     fetch(`${API_BASE}/admin/splats/${id}`, { credentials: 'include' })
       .then((r) => r.json())
       .then((data) => setSplat(data.splat || data))
-      .catch(() => setError('Failed to load splat'));
+      .catch(() => setError(t('upload.loadFailed')));
   }, [id]);
 
   // Poll job status via SSE
@@ -115,7 +125,7 @@ export default function UploadPage() {
   function updateStepsFromLog(log: string) {
     setProcessSteps((prev) =>
       prev.map((s) => {
-        if (log.includes(`${s.label}`)) {
+        if (log.includes(stepLogLabels[s.label] || s.label)) {
           return { ...s, status: log.includes('FAILED') ? 'failed' : log.includes('complete') ? 'done' : 'running', message: log };
         }
         return s;
@@ -143,11 +153,11 @@ export default function UploadPage() {
     const isCompressedPly = f.name.toLowerCase().endsWith('.compressed.ply');
     const extOk = accepted.includes(ext) || isCompressedPly;
     if (!extOk) {
-      setError(`Unsupported format "${ext}". Accepted: ${accepted.join(', ')}`);
+      setError(t('upload.unsupported', { ext, formats: accepted.join(', ') }));
       return;
     }
     if (f.size > MAX_MB * 1024 * 1024) {
-      setError(`File exceeds ${MAX_MB} MB limit`);
+      setError(t('upload.tooLarge', { max: MAX_MB }));
       return;
     }
     setFile(f);
@@ -180,22 +190,22 @@ export default function UploadPage() {
       } else {
         try {
           const data = JSON.parse(xhr.responseText);
-          setError(data.error?.message || `Upload failed (${xhr.status})`);
+          setError(data.error?.message || t('upload.uploadFailed', { status: xhr.status }));
         } catch {
-          setError(`Upload failed (${xhr.status})`);
+          setError(t('upload.uploadFailed', { status: xhr.status }));
         }
         setState('error');
       }
     });
 
-    xhr.addEventListener('error', () => { setError('Network error during upload'); setState('error'); });
+    xhr.addEventListener('error', () => { setError(t('upload.networkError')); setState('error'); });
     xhr.open('POST', `${API_BASE}/admin/splats/${id}/upload`);
     xhr.withCredentials = true;
     xhr.send(formData);
   };
 
   if (!id) {
-    return <div style={{ padding: '2rem', color: 'var(--admin-danger, var(--color-error))' }}>No splat ID specified.</div>;
+    return <div style={{ padding: '2rem', color: 'var(--admin-danger, var(--color-error))' }}>{t('upload.noSplatId')}</div>;
   }
 
   const stepIcon = (status: string) => {
@@ -218,7 +228,7 @@ export default function UploadPage() {
   return (
     <div style={{ paddingTop: '0.5rem' }}>
       <h1 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.25rem' }}>
-        Upload {splat ? `— ${splat.title}` : ''}
+        {t('upload.title', { title: splat ? `- ${splat.title}` : '' })}
       </h1>
 
       {error && (
@@ -249,13 +259,13 @@ export default function UploadPage() {
           >
             <div style={{ fontSize: '2rem', marginBottom: '0.75rem', color: 'var(--color-rule)' }}>📤</div>
             <p style={{ color: 'var(--admin-soft, var(--color-ink-soft))', fontSize: '0.875rem', margin: '0 0 0.5rem' }}>
-              Drop a splat file here or <span style={{ color: 'var(--admin-ink, var(--color-ink))', textDecoration: 'underline' }}>click to browse</span>
+              {t('upload.drop')} <span style={{ color: 'var(--admin-ink, var(--color-ink))', textDecoration: 'underline' }}>{t('upload.browse')}</span>
             </p>
             <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: 0 }}>
-              Accepted: .ply, .spz, .sog, .compressed.ply, .meta.json, .lod-meta.json
+              {t('upload.accepted')}
             </p>
             <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.6875rem', margin: '0.25rem 0 0' }}>
-              Max size: {MAX_MB} MB
+              {t('upload.maxSize', { max: MAX_MB })}
             </p>
           </div>
 
@@ -277,7 +287,7 @@ export default function UploadPage() {
                   ×
                 </button>
               </div>
-              <Button variant="primary" onClick={handleUpload}>Upload & Process</Button>
+              <Button variant="primary" onClick={handleUpload}>{t('upload.process')}</Button>
             </div>
           )}
 
@@ -296,9 +306,9 @@ export default function UploadPage() {
         <Card style={{ padding: '2rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
             <Spinner size="sm" />
-            <span style={{ fontSize: '0.875rem' }}>Uploading {file?.name}...</span>
+            <span style={{ fontSize: '0.875rem' }}>{t('upload.uploading', { name: file?.name ?? '' })}</span>
           </div>
-          <ProgressBar value={uploadProgress} label="Upload progress" />
+          <ProgressBar value={uploadProgress} label={t('upload.progress')} />
         </Card>
       )}
 
@@ -309,7 +319,7 @@ export default function UploadPage() {
             {state === 'processing' ? <Spinner size="sm" /> : <span style={{ fontSize: '1.25rem' }}>✓</span>}
             <div>
               <p style={{ color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
-                {state === 'done' ? 'Processing complete!' : 'Processing...'}
+                {state === 'done' ? t('upload.complete') : t('upload.processing')}
               </p>
               <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: '0.125rem 0 0' }}>
                 {jobStatus && <Badge variant={jobStatus === 'READY' ? 'success' : jobStatus === 'FAILED' ? 'danger' : 'warning'}>{jobStatus}</Badge>}
@@ -322,7 +332,7 @@ export default function UploadPage() {
             {processSteps.map((s) => (
               <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', fontSize: '0.8125rem' }}>
                 <span style={{ color: stepColor(s.status), width: 16, textAlign: 'center' }}>{stepIcon(s.status)}</span>
-                <span style={{ color: s.status === 'pending' ? 'var(--admin-muted, var(--color-muted))' : 'var(--admin-ink, var(--color-ink))' }}>{s.label}</span>
+                <span style={{ color: s.status === 'pending' ? 'var(--admin-muted, var(--color-muted))' : 'var(--admin-ink, var(--color-ink))' }}>{t(s.label)}</span>
               </div>
             ))}
           </div>
@@ -338,7 +348,7 @@ export default function UploadPage() {
           {state === 'done' && (
             <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.75rem' }}>
               <Link to={`/splats/${id}`} style={{ textDecoration: 'none' }}>
-                <Button variant="primary">← Back to Splat</Button>
+                <Button variant="primary">{t('upload.back')}</Button>
               </Link>
               <Button variant="secondary" onClick={() => {
                 setState('idle');
@@ -347,7 +357,7 @@ export default function UploadPage() {
                 setJobLog('');
                 setProcessSteps(steps.map((s) => ({ ...s, status: 'pending' as const })));
               }}>
-                Upload Another
+                {t('upload.another')}
               </Button>
             </div>
           )}

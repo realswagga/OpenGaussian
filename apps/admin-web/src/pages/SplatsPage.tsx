@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { AuthUser, SplatSummary } from '@gsplat/shared';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const ASSET_BASE = import.meta.env.VITE_ASSET_BASE_URL || '/assets';
@@ -19,8 +20,9 @@ function formatSize(bytes?: number | null) {
 }
 
 function SplatsTableSkeleton() {
+  const { t } = useI18n();
   return (
-    <div className="admin-table-wrap admin-table-wrap--skeleton" aria-label="Loading splats">
+    <div className="admin-table-wrap admin-table-wrap--skeleton" aria-label={t('splats.loading')}>
       {Array.from({ length: 6 }).map((_, index) => (
         <div className="admin-skeleton-row" key={index}>
           <div className="admin-skeleton-thumb" />
@@ -38,6 +40,7 @@ function SplatsTableSkeleton() {
 }
 
 export default function SplatsPage({ user }: { user: AuthUser }) {
+  const { t } = useI18n();
   const [splats, setSplats] = useState<SplatSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -84,28 +87,28 @@ export default function SplatsPage({ user }: { user: AuthUser }) {
       const res = await fetch(`${API_BASE}/admin/splats/${id}/${action}`, { method: 'POST', credentials: 'include' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || `${action} failed`);
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('splats.actionFailed', { action }));
       }
       fetchSplats();
     } catch (err) {
-      setError(err instanceof Error ? err.message : `${action} failed`);
+      setError(err instanceof Error ? err.message : t('splats.actionFailed', { action }));
     } finally {
       setActionLoading(null);
     }
   };
 
   const deleteSplat = async (splat: SplatSummary) => {
-    if (!window.confirm(`Delete "${splat.title}"? This cannot be undone.`)) return;
+    if (!window.confirm(t('splats.deleteConfirm', { title: splat.title }))) return;
     setActionLoading(`${splat.id}:delete`);
     try {
       const res = await fetch(`${API_BASE}/admin/splats/${splat.id}`, { method: 'DELETE', credentials: 'include' });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || 'Delete failed');
+        throw new Error((data as { error?: { message?: string } }).error?.message || t('splats.deleteFailed'));
       }
       fetchSplats();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Delete failed');
+      setError(err instanceof Error ? err.message : t('splats.deleteFailed'));
     } finally {
       setActionLoading(null);
     }
@@ -115,16 +118,16 @@ export default function SplatsPage({ user }: { user: AuthUser }) {
     <>
       <div className="admin-page-head">
         <div>
-          <p className="admin-eyebrow">{user.capabilities?.isMasterAdmin ? 'Global library' : 'Org library'}</p>
-          <h1>Splats</h1>
-          <p>Manage metadata, uploads, markers, publish state, and public viewer links.</p>
+          <p className="admin-eyebrow">{user.capabilities?.isMasterAdmin ? t('splats.globalLibrary') : t('splats.orgLibrary')}</p>
+          <h1>{t('common.splats')}</h1>
+          <p>{t('splats.copy')}</p>
         </div>
-        <Link className="admin-button" to="/splats/new">New splat</Link>
+        <Link className="admin-button" to="/splats/new">{t('nav.newSplat')}</Link>
       </div>
 
       <div className="admin-panel admin-toolbar">
         <div className="admin-actions">
-          <input className="admin-input admin-input--search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search splats or orgs" />
+          <input className="admin-input admin-input--search" value={search} onChange={(e) => setSearch(e.target.value)} placeholder={t('splats.searchPlaceholder')} />
           <select className="admin-select admin-select--status" value={status} onChange={(e) => setStatus(e.target.value)}>
             {statusOptions.map((item) => <option key={item} value={item}>{item}</option>)}
           </select>
@@ -134,18 +137,18 @@ export default function SplatsPage({ user }: { user: AuthUser }) {
       {error && <div className="admin-error" style={{ marginBottom: 16 }}>{error}</div>}
       {loading && <SplatsTableSkeleton />}
 
-      {!loading && filtered.length === 0 && <div className="admin-empty">No splats match this view.</div>}
+      {!loading && filtered.length === 0 && <div className="admin-empty">{t('splats.noMatch')}</div>}
 
       {!loading && filtered.length > 0 && (
         <div className="admin-table-wrap">
           <table className="admin-table">
             <thead>
               <tr>
-                <th>Splat</th>
-                <th>Organization</th>
-                <th>Status</th>
-                <th>Asset</th>
-                <th>Actions</th>
+                <th>{t('dashboard.splat')}</th>
+                <th>{t('common.organization')}</th>
+                <th>{t('common.status')}</th>
+                <th>{t('splats.asset')}</th>
+                <th>{t('common.actions')}</th>
               </tr>
             </thead>
             <tbody>
@@ -164,32 +167,32 @@ export default function SplatsPage({ user }: { user: AuthUser }) {
                         </div>
                       </div>
                     </td>
-                    <td>{s.organization ? <span className="admin-pill">{s.organization.name}</span> : <span className="admin-muted">Unassigned</span>}</td>
+                    <td>{s.organization ? <span className="admin-pill">{s.organization.name}</span> : <span className="admin-muted">{t('common.unassigned')}</span>}</td>
                     <td><span className="admin-pill">{s.status}</span></td>
                     <td>
                       <div className="admin-muted" style={{ fontSize: 12 }}>
-                        {s.sourceFormat ? `.${s.sourceFormat}` : 'No source'}<br />
+                        {s.sourceFormat ? `.${s.sourceFormat}` : t('common.noSource')}<br />
                         {formatSize(s.sizeBytes)}
                       </div>
                     </td>
                     <td>
                       <div className="admin-actions">
-                        <Link className="admin-button-secondary" to={`/splats/${s.id}`}>Edit</Link>
-                        <Link className="admin-button-secondary" to={`/splats/${s.id}/upload`}>Upload</Link>
-                        <Link className="admin-button-secondary" to={`/splats/${s.id}/markers-3d${s.servingVersionId ? `?versionId=${encodeURIComponent(s.servingVersionId)}` : ''}`}>3D editor</Link>
+                        <Link className="admin-button-secondary" to={`/splats/${s.id}`}>{t('splats.edit')}</Link>
+                        <Link className="admin-button-secondary" to={`/splats/${s.id}/upload`}>{t('splats.upload')}</Link>
+                        <Link className="admin-button-secondary" to={`/splats/${s.id}/markers-3d${s.servingVersionId ? `?versionId=${encodeURIComponent(s.servingVersionId)}` : ''}`}>{t('splats.editor3d')}</Link>
                         {s.status === 'READY' && (
                           <button className="admin-button-secondary" type="button" disabled={actionLoading === `${s.id}:publish`} onClick={() => postAction(s.id, 'publish')}>
-                            Publish
+                            {t('splats.publish')}
                           </button>
                         )}
                         {s.status === 'PUBLISHED' && (
                           <button className="admin-button-secondary" type="button" disabled={actionLoading === `${s.id}:unpublish`} onClick={() => postAction(s.id, 'unpublish')}>
-                            Unpublish
+                            {t('splats.unpublish')}
                           </button>
                         )}
-                        {s.status === 'PUBLISHED' && <a className="admin-button-secondary" href={`/splats/${s.slug}`} target="_blank" rel="noreferrer">View</a>}
+                        {s.status === 'PUBLISHED' && <a className="admin-button-secondary" href={`/splats/${s.slug}`} target="_blank" rel="noreferrer">{t('splats.view')}</a>}
                         <button className="admin-button-secondary" type="button" disabled={actionLoading === `${s.id}:delete`} onClick={() => deleteSplat(s)}>
-                          Delete
+                          {t('common.delete')}
                         </button>
                       </div>
                     </td>

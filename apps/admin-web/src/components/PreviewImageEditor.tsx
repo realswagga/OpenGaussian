@@ -10,6 +10,7 @@ import {
   type PointerEvent,
 } from 'react';
 import { Card, Button } from '@gsplat/ui';
+import { useI18n } from '../i18n';
 
 const ASSET_BASE = import.meta.env.VITE_ASSET_BASE_URL || '/assets';
 const PREVIEW_OUTPUT_WIDTH = 1600;
@@ -126,11 +127,11 @@ function isEditableElement(element: Element | null): boolean {
   return tag === 'input' || tag === 'textarea' || tag === 'select' || element.isContentEditable;
 }
 
-function validatePreviewSource(file: File): string | null {
+function validatePreviewSource(file: File, t: (key: string, values?: Record<string, string | number>) => string): string | null {
   const allowedType = ['image/jpeg', 'image/png', 'image/webp'].includes(file.type);
   const allowedName = /\.(jpe?g|png|webp)$/i.test(file.name);
-  if (!allowedType && !allowedName) return 'Preview source must be a JPEG, PNG, or WebP image.';
-  if (file.size > MAX_PREVIEW_SOURCE_MB * 1024 * 1024) return `Preview source exceeds ${MAX_PREVIEW_SOURCE_MB} MB.`;
+  if (!allowedType && !allowedName) return t('preview.imageType');
+  if (file.size > MAX_PREVIEW_SOURCE_MB * 1024 * 1024) return t('preview.imageSize', { max: MAX_PREVIEW_SOURCE_MB });
   return null;
 }
 
@@ -207,6 +208,9 @@ export default function PreviewImageEditor({
   onUploaded,
   onReset,
 }: PreviewImageEditorProps) {
+  const { t } = useI18n();
+  currentLabel = currentLabel === 'Current preview' ? t('preview.current') : currentLabel;
+  emptyLabel = emptyLabel === 'No preview image' ? t('preview.empty') : emptyLabel;
   const inputRef = useRef<HTMLInputElement>(null);
   const managerRef = useRef<HTMLElement>(null);
   const panelRef = useRef<HTMLElement>(null);
@@ -224,7 +228,7 @@ export default function PreviewImageEditor({
   const [capturedHistory, setCapturedHistory] = useState<PreviewHistoryItem[]>([]);
 
   const selectSource = useCallback(async (file: File) => {
-    const validationError = validatePreviewSource(file);
+    const validationError = validatePreviewSource(file, t);
     if (validationError) {
       setError(validationError);
       return;
@@ -242,7 +246,7 @@ export default function PreviewImageEditor({
       setOffsetY(0);
       panelRef.current?.focus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview source could not be loaded.');
+      setError(err instanceof Error ? err.message : t('preview.imageLoad'));
     } finally {
       setLoadingSource(false);
     }
@@ -255,7 +259,7 @@ export default function PreviewImageEditor({
 
     try {
       const file = await fileFromUrl(url, label);
-      const validationError = validatePreviewSource(file);
+      const validationError = validatePreviewSource(file, t);
       if (validationError) throw new Error(validationError);
       const nextSource = await readImageFile(file);
       setSource(nextSource);
@@ -264,7 +268,7 @@ export default function PreviewImageEditor({
       setOffsetY(0);
       panelRef.current?.focus();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview source could not be loaded.');
+      setError(err instanceof Error ? err.message : t('preview.imageLoad'));
     } finally {
       setLoadingSource(false);
     }
@@ -324,9 +328,9 @@ export default function PreviewImageEditor({
       };
       setCapturedHistory((current) => [item, ...current].slice(0, 8));
       void loadSourceFromUrl(payload.dataUrl, label);
-      setMessage('Taken preview loaded for reframing.');
+      setMessage(t('preview.loadedTaken'));
     } catch {
-      setError('Taken preview could not be loaded.');
+      setError(t('preview.loadTakenFailed'));
     }
   }, [incomingSourceKey, loadSourceFromUrl]);
 
@@ -437,9 +441,9 @@ export default function PreviewImageEditor({
       ].slice(0, 60));
       onUploaded(nextPreviewKey);
       setCacheKey(nextCacheKey);
-      setMessage('Preview updated.');
+      setMessage(t('preview.updated'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview upload failed.');
+      setError(err instanceof Error ? err.message : t('preview.uploadFailed'));
     } finally {
       setSaving(false);
     }
@@ -466,9 +470,9 @@ export default function PreviewImageEditor({
       setCacheKey(Date.now());
       setStoredHistory((current) => current.map((item) => ({ ...item, current: false })));
       onReset?.();
-      setMessage('Preview reset to default.');
+      setMessage(t('preview.resetDone'));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Preview reset failed.');
+      setError(err instanceof Error ? err.message : t('preview.resetFailed'));
     } finally {
       setResetting(false);
     }
@@ -488,7 +492,7 @@ export default function PreviewImageEditor({
       <section ref={managerRef} className="admin-preview-layout" aria-label="Preview editor">
         <aside className="admin-preview-current" aria-label={currentLabel}>
           <div className="admin-preview-frame">
-            {currentPreviewUrl ? <img src={currentPreviewUrl} alt="" /> : <span>No preview</span>}
+          {currentPreviewUrl ? <img src={currentPreviewUrl} alt="" /> : <span>{t('preview.noPreview')}</span>}
           </div>
           <div className="admin-preview-caption">
             <strong>{currentLabel}</strong>
@@ -496,21 +500,21 @@ export default function PreviewImageEditor({
           </div>
           <div className="admin-preview-current-actions">
             <Button type="button" variant="secondary" onClick={reframeCurrent} disabled={!currentPreviewUrl || saving || resetting || loadingSource}>
-              Reframe current
+              {t('preview.reframe')}
             </Button>
             {resetUrl && (
               <Button type="button" variant="danger" onClick={() => void resetPreview()} disabled={!currentPreviewUrl || saving || resetting || loadingSource}>
-                {resetting ? 'Resetting...' : 'Reset to default'}
+                {resetting ? t('preview.resetting') : t('preview.resetDefault')}
               </Button>
             )}
           </div>
 
-          <div className="admin-preview-history" aria-label="Recent previews">
+          <div className="admin-preview-history" aria-label={t('preview.history')}>
             <div className="admin-preview-history-head">
-              <strong>Recent previews</strong>
+              <strong>{t('preview.history')}</strong>
               {historyUrl && (
                 <button type="button" className="admin-preview-history-refresh" onClick={() => void loadHistory()}>
-                  Refresh
+                  {t('common.refresh')}
                 </button>
               )}
             </div>
@@ -525,7 +529,7 @@ export default function PreviewImageEditor({
                   >
                     <img src={item.url} alt="" />
                     <span>
-                      <strong>{item.source === 'capture' ? 'Taken preview' : item.current ? 'Current' : 'Stored preview'}</strong>
+                      <strong>{item.source === 'capture' ? t('preview.taken') : item.current ? t('preview.currentItem') : t('preview.stored')}</strong>
                       <em>{item.label}</em>
                       {item.createdAt && <small>{displayDate(item.createdAt)}</small>}
                     </span>
@@ -533,7 +537,7 @@ export default function PreviewImageEditor({
                 ))}
               </div>
             ) : (
-              <div className="admin-preview-history-empty">No saved previews yet.</div>
+              <div className="admin-preview-history-empty">{t('preview.noSaved')}</div>
             )}
           </div>
         </aside>
@@ -541,18 +545,18 @@ export default function PreviewImageEditor({
         <section
           ref={panelRef}
           className="admin-reframe-panel"
-          aria-label="Upload preview"
+          aria-label={t('preview.upload')}
           tabIndex={0}
           onPointerDown={focusPanelFromSurface}
           onPaste={handlePanelPaste}
         >
           <div className="admin-reframe-head">
             <div>
-              <h2>Preview</h2>
-              <p>16:9 poster, exported at {PREVIEW_OUTPUT_WIDTH}x{PREVIEW_OUTPUT_HEIGHT}.</p>
+              <h2>{t('preview.poster')}</h2>
+              <p>{t('preview.posterCopy', { width: PREVIEW_OUTPUT_WIDTH, height: PREVIEW_OUTPUT_HEIGHT })}</p>
             </div>
             <Button type="button" variant="secondary" onClick={() => inputRef.current?.click()} disabled={saving || resetting || loadingSource}>
-              {source ? 'Change image' : 'Select image'}
+              {source ? t('preview.changeImage') : t('preview.selectImage')}
             </Button>
           </div>
 
@@ -579,7 +583,7 @@ export default function PreviewImageEditor({
 
               <div className="admin-reframe-controls">
                 <label className="admin-range-field">
-                  <span>Zoom</span>
+                  <span>{t('preview.zoom')}</span>
                   <input className="admin-range" type="range" min="1" max="3" step="0.01" value={zoom} onChange={(event) => setZoom(Number(event.target.value))} />
                   <strong>{Math.round(zoom * 100)}%</strong>
                 </label>
@@ -598,9 +602,9 @@ export default function PreviewImageEditor({
               <div className="admin-preview-actions">
                 <span className="admin-muted">{source.file.name} / {source.width}x{source.height}</span>
                 <div className="admin-actions">
-                  <Button type="button" variant="secondary" onClick={resetFrame} disabled={saving || resetting}>Reset</Button>
+                  <Button type="button" variant="secondary" onClick={resetFrame} disabled={saving || resetting}>{t('common.reset')}</Button>
                   <Button type="button" variant="primary" onClick={uploadPreview} disabled={saving || resetting}>
-                    {saving ? 'Uploading...' : 'Save preview'}
+                    {saving ? t('preview.uploading') : t('preview.save')}
                   </Button>
                 </div>
               </div>
@@ -612,7 +616,7 @@ export default function PreviewImageEditor({
               onClick={() => inputRef.current?.click()}
               disabled={saving || resetting || loadingSource}
             >
-              {loadingSource ? 'Loading image...' : 'Select or paste an image to reframe'}
+              {loadingSource ? t('preview.loadingImage') : t('preview.selectPaste')}
             </button>
           )}
         </section>

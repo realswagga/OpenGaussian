@@ -6,6 +6,7 @@ import type {
   AuthUser,
   LandingFeaturedMode,
 } from '@gsplat/shared';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -22,6 +23,7 @@ function formatBytes(bytes: number): string {
 }
 
 function DashboardSkeleton() {
+  const { t } = useI18n();
   return (
     <>
       <div className="admin-page-head">
@@ -31,7 +33,7 @@ function DashboardSkeleton() {
           <div className="admin-skeleton-line" />
         </div>
       </div>
-      <section className="admin-skeleton-grid" aria-label="Loading dashboard">
+      <section className="admin-skeleton-grid" aria-label={t('dashboard.loading')}>
         {Array.from({ length: 6 }).map((_, index) => (
           <div className="admin-card admin-card--skeleton" key={index}>
             <div className="admin-skeleton-line short" />
@@ -48,6 +50,7 @@ function DashboardSkeleton() {
 }
 
 export default function DashboardPage({ user }: { user: AuthUser }) {
+  const { t } = useI18n();
   const [stats, setStats] = useState<AdminDashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -115,44 +118,44 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error((data as { error?: { message?: string } }).error?.message || `Save failed (${res.status})`);
+        throw new Error((data as { error?: { message?: string } }).error?.message || `${t('dashboard.saveFailed')} (${res.status})`);
       }
 
       const data = await res.json() as AdminLandingFeaturedResponse;
       setFeatured(data);
       setFeaturedMode(data.settings.mode);
       setFeaturedSplatId(data.settings.selectedSplatId ?? data.splat?.id ?? data.splats[0]?.id ?? '');
-      setFeaturedMessage('Landing featured splat updated.');
+      setFeaturedMessage(t('dashboard.featuredUpdated'));
     } catch (err) {
-      setFeaturedError(err instanceof Error ? err.message : 'Save failed');
+      setFeaturedError(err instanceof Error ? err.message : t('dashboard.saveFailed'));
     } finally {
       setFeaturedSaving(false);
     }
   };
 
   if (loading) return <DashboardSkeleton />;
-  if (error || !stats) return <div className="admin-error">Failed to load dashboard: {error || 'Unknown error'}</div>;
+  if (error || !stats) return <div className="admin-error">{t('dashboard.loadFailed', { error: error || 'Unknown error' })}</div>;
 
   const cards = [
-    ['Total splats', stats.totalSplats],
-    ['Published', stats.publishedSplats],
-    ['Processing', stats.processingSplats],
-    ['Failed', stats.failedSplats],
-    ['Markers', stats.totalAnnotations],
-    ['Storage', formatBytes(stats.storageBytesEstimate)],
+    [t('dashboard.totalSplats'), stats.totalSplats],
+    [t('dashboard.published'), stats.publishedSplats],
+    [t('dashboard.processing'), stats.processingSplats],
+    [t('dashboard.failed'), stats.failedSplats],
+    [t('dashboard.markers'), stats.totalAnnotations],
+    [t('dashboard.storage'), formatBytes(stats.storageBytesEstimate)],
   ];
 
   return (
     <>
       <div className="admin-page-head">
         <div>
-          <p className="admin-eyebrow">Workspace</p>
-          <h1>{user.capabilities?.isMasterAdmin ? 'Global overview' : 'Organization overview'}</h1>
-          <p>Operational status for the splats you can manage.</p>
+          <p className="admin-eyebrow">{t('dashboard.workspace')}</p>
+          <h1>{user.capabilities?.isMasterAdmin ? t('dashboard.globalOverview') : t('dashboard.orgOverview')}</h1>
+          <p>{t('dashboard.copy')}</p>
         </div>
         <div className="admin-actions">
-          <Link className="admin-button-secondary" to="/organizations">Organizations</Link>
-          <Link className="admin-button" to="/splats/new">New splat</Link>
+          <Link className="admin-button-secondary" to="/organizations">{t('common.organizations')}</Link>
+          <Link className="admin-button" to="/splats/new">{t('nav.newSplat')}</Link>
         </div>
       </div>
 
@@ -169,21 +172,21 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
         <section className="admin-panel" style={{ marginTop: 18 }}>
           <div className="admin-page-head" style={{ marginBottom: 6 }}>
             <div>
-              <p className="admin-eyebrow">Landing page</p>
-              <h1 style={{ fontSize: 24 }}>Featured splat</h1>
-              <p>Choose which published splat appears in the public hero.</p>
+              <p className="admin-eyebrow">{t('dashboard.landing')}</p>
+              <h1 style={{ fontSize: 24 }}>{t('dashboard.featuredSplat')}</h1>
+              <p>{t('dashboard.featuredCopy')}</p>
             </div>
           </div>
 
           {featuredLoading ? (
-            <div className="admin-empty">Loading featured settings...</div>
+            <div className="admin-empty">{t('dashboard.loadingFeatured')}</div>
           ) : (
             <div className="admin-form">
               {featuredError && <div className="admin-error">{featuredError}</div>}
               {featuredMessage && <div className="admin-success">{featuredMessage}</div>}
 
               <label className="admin-label">
-                Feature mode
+                {t('dashboard.featureMode')}
                 <select
                   className="admin-input"
                   value={featuredMode}
@@ -195,15 +198,15 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
                     }
                   }}
                 >
-                  <option value="manual">Selected splat</option>
-                  <option value="latest">Latest published splat</option>
-                  <option value="random">Random published splat</option>
+                  <option value="manual">{t('dashboard.selectedSplat')}</option>
+                  <option value="latest">{t('dashboard.latestSplat')}</option>
+                  <option value="random">{t('dashboard.randomSplat')}</option>
                 </select>
               </label>
 
               {featuredMode === 'manual' && (
                 <label className="admin-label">
-                  Published splat
+                  {t('dashboard.publishedSplat')}
                   <select
                     className="admin-input"
                     value={featuredSplatId}
@@ -215,7 +218,7 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
                         {splat.title}
                       </option>
                     )) : (
-                      <option value="">No published splats</option>
+                      <option value="">{t('dashboard.noPublishedSplats')}</option>
                     )}
                   </select>
                 </label>
@@ -228,15 +231,15 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
                   </div>
                   <div>
                     <strong>{featured.splat.title}</strong>
-                    <div className="admin-muted" style={{ fontSize: 12 }}>{featured.splat.organization?.name ?? 'No organization'}</div>
+                    <div className="admin-muted" style={{ fontSize: 12 }}>{featured.splat.organization?.name ?? t('dashboard.noOrganization')}</div>
                     <div className="admin-muted" style={{ marginTop: 4 }}>
-                      Currently shown by {featured.settings.mode === 'manual' ? 'manual selection' : featured.settings.mode === 'latest' ? 'latest published mode' : 'random mode'}.
+                      {t('dashboard.shownBy', { mode: featured.settings.mode === 'manual' ? t('dashboard.manualMode') : featured.settings.mode === 'latest' ? t('dashboard.latestMode') : t('dashboard.randomMode') })}
                     </div>
                   </div>
                 </div>
               )}
 
-              {!featured?.splat && <div className="admin-empty">No published splats are available for the landing page.</div>}
+              {!featured?.splat && <div className="admin-empty">{t('dashboard.noLandingSplats')}</div>}
 
               <div className="admin-actions">
                 <button
@@ -245,7 +248,7 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
                   disabled={featuredSaving || (featuredMode === 'manual' && !featuredSplatId)}
                   onClick={() => void saveFeaturedSettings()}
                 >
-                  {featuredSaving ? 'Saving...' : 'Save featured settings'}
+                  {featuredSaving ? t('common.saving') : t('dashboard.saveFeatured')}
                 </button>
               </div>
             </div>
@@ -256,8 +259,8 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
       <section className="admin-panel" style={{ marginTop: 18 }}>
         <div className="admin-page-head" style={{ marginBottom: 6 }}>
           <div>
-            <p className="admin-eyebrow">Queue</p>
-            <h1 style={{ fontSize: 24 }}>Recent jobs</h1>
+            <p className="admin-eyebrow">{t('dashboard.queue')}</p>
+            <h1 style={{ fontSize: 24 }}>{t('dashboard.recentJobs')}</h1>
           </div>
         </div>
         {stats.recentJobs.length > 0 ? (
@@ -265,9 +268,9 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th>Splat</th>
-                  <th>Status</th>
-                  <th>Version</th>
+                  <th>{t('dashboard.splat')}</th>
+                  <th>{t('common.status')}</th>
+                  <th>{t('common.version')}</th>
                 </tr>
               </thead>
               <tbody>
@@ -282,7 +285,7 @@ export default function DashboardPage({ user }: { user: AuthUser }) {
             </table>
           </div>
         ) : (
-          <div className="admin-empty">No recent jobs.</div>
+          <div className="admin-empty">{t('dashboard.noRecentJobs')}</div>
         )}
       </section>
     </>

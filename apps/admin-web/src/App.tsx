@@ -10,6 +10,7 @@ import Annotation3DEditorPage from './pages/Annotation3DEditorPage';
 import OrganizationsPage from './pages/OrganizationsPage';
 import MembersPage from './pages/MembersPage';
 import WidgetPage from './pages/WidgetPage';
+import { I18nProvider, LanguageSwitch, useI18n } from './i18n';
 import { ThemeSwitch, useTheme } from './theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
@@ -80,28 +81,29 @@ function isManager(user: AuthUser | null) {
 }
 
 function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+  const { t } = useI18n();
   const location = useLocation();
   const roleLabel = isMaster(user)
-    ? 'Master admin'
+    ? t('role.master')
     : isManager(user)
-      ? 'Manager'
-      : 'Editor';
+      ? t('role.manager')
+      : t('role.editor');
   const canManageOrg = isMaster(user) || isManager(user);
   const canUseWidget = canManageOrg;
   const title = useMemo(() => {
-    if (location.pathname.startsWith('/splats')) return 'Splats';
-    if (location.pathname.startsWith('/organizations')) return 'Organizations';
-    if (location.pathname.startsWith('/members')) return 'Members';
-    if (location.pathname.startsWith('/widget')) return 'Widget';
-    return 'Overview';
-  }, [location.pathname]);
+    if (location.pathname.startsWith('/splats')) return t('common.splats');
+    if (location.pathname.startsWith('/organizations')) return t('common.organizations');
+    if (location.pathname.startsWith('/members')) return t('common.members');
+    if (location.pathname.startsWith('/widget')) return t('common.widget');
+    return t('top.overview');
+  }, [location.pathname, t]);
 
   const nav: Array<{ to: string; label: string; icon: IconName; show: boolean }> = [
-    { to: '/', label: 'Home', icon: 'overview', show: true },
-    { to: '/splats', label: 'Splats', icon: 'splats', show: true },
-    { to: '/organizations', label: 'Orgs', icon: 'organizations', show: true },
-    { to: '/members', label: 'Members', icon: 'members', show: canManageOrg },
-    { to: '/widget', label: 'Widget', icon: 'widget', show: canUseWidget },
+    { to: '/', label: t('nav.home'), icon: 'overview', show: true },
+    { to: '/splats', label: t('common.splats'), icon: 'splats', show: true },
+    { to: '/organizations', label: t('nav.orgs'), icon: 'organizations', show: true },
+    { to: '/members', label: t('common.members'), icon: 'members', show: canManageOrg },
+    { to: '/widget', label: t('common.widget'), icon: 'widget', show: canUseWidget },
   ];
 
   return (
@@ -111,7 +113,7 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
           <Link to="/" aria-label="OpenGaussian admin">OG</Link>
           <span>{roleLabel}</span>
         </div>
-        <nav className="admin-nav" aria-label="Admin navigation">
+        <nav className="admin-nav" aria-label={t('nav.adminAria')}>
           {nav.filter((item) => item.show).map((item) => (
             <NavLink key={item.to} to={item.to} end={item.to === '/'} title={item.label} className={({ isActive }) => (isActive ? 'active' : '')}>
               <Icon name={item.icon} />
@@ -121,9 +123,9 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
         </nav>
         <div className="admin-user">
           <span className="admin-avatar" aria-hidden="true">{(user.name || user.email).slice(0, 2).toUpperCase()}</span>
-          <button className="admin-icon-button" type="button" onClick={onLogout} title="Sign out">
+          <button className="admin-icon-button" type="button" onClick={onLogout} title={t('nav.signOut')}>
             <Icon name="logout" />
-            <span className="admin-sr-only">Sign out</span>
+            <span className="admin-sr-only">{t('nav.signOut')}</span>
           </button>
         </div>
       </aside>
@@ -135,9 +137,10 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
             <span>{roleLabel} / {user.email}</span>
           </div>
           <div className="admin-actions">
+            <LanguageSwitch />
             <ThemeSwitch />
-            <a className="admin-button-secondary" href="/" target="_blank" rel="noreferrer"><Icon name="external" />Public site</a>
-            <Link className="admin-button" to="/splats/new"><Icon name="plus" />New splat</Link>
+            <a className="admin-button-secondary" href="/" target="_blank" rel="noreferrer"><Icon name="external" />{t('nav.publicSite')}</a>
+            <Link className="admin-button" to="/splats/new"><Icon name="plus" />{t('nav.newSplat')}</Link>
           </div>
         </header>
         <div className="admin-content">
@@ -161,17 +164,18 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
 }
 
 function NoAccess({ user, onLogout }: { user: AuthUser; onLogout: () => void }) {
+  const { t } = useI18n();
   return (
     <div className="admin-auth-wrap">
       <section className="admin-auth-card">
-        <p className="admin-eyebrow">Client account</p>
-        <h1>No admin workspace yet</h1>
+        <p className="admin-eyebrow">{t('auth.clientAccount')}</p>
+        <h1>{t('auth.noWorkspace')}</h1>
         <p className="admin-muted">
-          {user.email} is signed in as a client. A master admin can promote clients to manager, and managers can add clients as editors.
+          {t('auth.noWorkspaceCopy', { email: user.email })}
         </p>
         <div className="admin-actions" style={{ marginTop: 20 }}>
-          <a className="admin-button" href="/">Open public catalog</a>
-          <button className="admin-button-secondary" type="button" onClick={onLogout}>Sign out</button>
+          <a className="admin-button" href="/">{t('auth.openCatalog')}</a>
+          <button className="admin-button-secondary" type="button" onClick={onLogout}>{t('nav.signOut')}</button>
         </div>
       </section>
     </div>
@@ -179,9 +183,10 @@ function NoAccess({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
 }
 
 function AdminBootSkeleton() {
+  const { t } = useI18n();
   return (
     <div className="admin-auth-wrap">
-      <section className="admin-auth-card admin-auth-card--skeleton" aria-label="Loading workspace">
+      <section className="admin-auth-card admin-auth-card--skeleton" aria-label={t('common.loadingWorkspace')}>
         <div className="admin-skeleton-line short" />
         <div className="admin-skeleton-line title" />
         <div className="admin-skeleton-line" />
@@ -231,8 +236,10 @@ function AppInner() {
 
 export default function App() {
   return (
-    <BrowserRouter basename="/admin">
-      <AppInner />
-    </BrowserRouter>
+    <I18nProvider>
+      <BrowserRouter basename="/admin">
+        <AppInner />
+      </BrowserRouter>
+    </I18nProvider>
   );
 }

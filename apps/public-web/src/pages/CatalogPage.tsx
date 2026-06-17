@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { Link, useSearchParams } from 'react-router-dom';
 import type { LandingFeaturedResponse, OrganizationSummary, SearchResponse, SplatListItem } from '@gsplat/shared';
 import PublicNav from '../components/PublicNav';
+import { useI18n } from '../i18n';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const CATALOG_STATE_KEY = 'opengaussian_catalog_state_v1';
@@ -64,8 +65,8 @@ function formatCount(value: number) {
   return value.toLocaleString();
 }
 
-function sortFieldLabel(value: SortField) {
-  return value === 'date' ? 'Date' : 'Splat count';
+function sortFieldLabel(value: SortField, t: (key: string) => string) {
+  return value === 'date' ? t('catalog.sort.date') : t('catalog.sort.count');
 }
 
 function isSortField(value: unknown): value is SortField {
@@ -146,8 +147,8 @@ function groupFromSplatOrg(item: CatalogSplatItem): CatalogOrganizationGroup {
   if (!item.organizationId || !item.organizationSlug || !item.organizationName) {
     return {
       id: 'independent-splats',
-      title: 'Independent splats',
-      description: 'Published scenes without an organization.',
+      title: 'catalog.independentTitle',
+      description: 'catalog.independentDescription',
       href: null,
       posterUrl: item.posterUrl,
       count: 0,
@@ -230,6 +231,7 @@ function SplatPointField() {
 }
 
 function CatalogCard({ item, index }: { item: CatalogSplatItem; index: number }) {
+  const { t } = useI18n();
   const initial = item.title.trim().charAt(0).toUpperCase() || 'S';
 
   return (
@@ -242,7 +244,7 @@ function CatalogCard({ item, index }: { item: CatalogSplatItem; index: number })
             <span>{initial}</span>
           </div>
         )}
-        <span className="catalog-kind">Splat</span>
+        <span className="catalog-kind">{t('catalog.kind.splat')}</span>
       </div>
       <div className="catalog-card-body">
         <div>
@@ -251,7 +253,7 @@ function CatalogCard({ item, index }: { item: CatalogSplatItem; index: number })
         </div>
         <div className="catalog-card-meta">
           {item.organizationName && <span>{item.organizationName}</span>}
-          <span>{formatCount(item.count)} points</span>
+          <span>{formatCount(item.count)} {t('catalog.points')}</span>
         </div>
       </div>
     </Link>
@@ -269,6 +271,7 @@ function OrganizationGroup({
   showSplats: boolean;
   onOpen: () => void;
 }) {
+  const { t } = useI18n();
   const initial = group.title.trim().charAt(0).toUpperCase() || 'O';
   const headerStyle = { '--i': index } as CSSProperties;
   const preview = (
@@ -286,14 +289,14 @@ function OrganizationGroup({
     <>
       {preview}
       <div className="catalog-org-copy">
-        <p className="og-kicker">{group.synthetic ? 'Scene group' : 'Organization'}</p>
-        <h2>{group.title}</h2>
-        {group.description && <p>{group.description}</p>}
+        <p className="og-kicker">{group.synthetic ? t('catalog.kind.sceneGroup') : t('catalog.kind.organization')}</p>
+        <h2>{group.synthetic ? t(group.title) : group.title}</h2>
+        {group.description && <p>{group.synthetic ? t(group.description) : group.description}</p>}
         <div className="catalog-org-meta">
-          <span>{formatCount(group.count)} published splats</span>
+          <span>{formatCount(group.count)} {t('catalog.publishedSplats')}</span>
         </div>
       </div>
-      {group.href && <span className="catalog-org-open" aria-hidden="true">Open</span>}
+      {group.href && <span className="catalog-org-open" aria-hidden="true">{t('catalog.open')}</span>}
     </>
   );
 
@@ -308,14 +311,14 @@ function OrganizationGroup({
       )}
 
       {showSplats && group.splats.length > 0 && (
-        <div className="catalog-org-splats" aria-label={`${group.title} splats`}>
+        <div className="catalog-org-splats" aria-label={`${group.synthetic ? t(group.title) : group.title} ${t('catalog.splats')}`}>
           {group.splats.map((item, itemIndex) => (
             <CatalogCard key={item.id} item={item} index={index * 4 + itemIndex} />
           ))}
         </div>
       )}
       {showSplats && group.splats.length === 0 && (
-        <div className="catalog-org-empty">No matching splats inside this organization for the current filters.</div>
+        <div className="catalog-org-empty">{t('catalog.noOrgMatches')}</div>
       )}
     </section>
   );
@@ -370,6 +373,7 @@ function CatalogSkeleton({ grouped }: { grouped: boolean }) {
 }
 
 export default function CatalogPage() {
+  const { t } = useI18n();
   const [params, setParams] = useSearchParams();
   const initialRestore = useMemo(() => readCatalogRestoreState(), []);
   const [query, setQuery] = useState(initialRestore?.query ?? params.get('q') ?? '');
@@ -554,8 +558,8 @@ export default function CatalogPage() {
   const feedKey = `${query}|${includeSplats}|${includeOrganizations}|${sortField}|${sortDirection}|${feedIds}`;
   const isInitialLoading = loading && !data;
   const isRefreshing = loading && Boolean(data);
-  const typeSummary = includeSplats && includeOrganizations ? 'Splats + Orgs' : includeSplats ? 'Splats' : includeOrganizations ? 'Orgs' : 'None';
-  const filterSummary = `${sortFieldLabel(sortField)} / ${sortDirection === 'asc' ? 'Asc' : 'Desc'} / ${typeSummary}`;
+  const typeSummary = includeSplats && includeOrganizations ? `${t('catalog.splats')} + ${t('catalog.orgs')}` : includeSplats ? t('catalog.splats') : includeOrganizations ? t('catalog.orgs') : t('catalog.none');
+  const filterSummary = `${sortFieldLabel(sortField, t)} / ${sortDirection === 'asc' ? t('catalog.asc') : t('catalog.desc')} / ${typeSummary}`;
 
   const saveCatalogState = useCallback(() => {
     window.sessionStorage.setItem(
@@ -604,10 +608,10 @@ export default function CatalogPage() {
         <SplatPointField />
       )}
       <div className="og-hero-preview-caption">
-        <span>{isInitialLoading ? 'Catalog loading' : heroItem?.title ?? 'No matching preview'}</span>
-        <span>{heroItem ? formatCount(heroItem.count) : '-'} {heroItem?.kind === 'organization' ? 'published' : 'points'}</span>
+        <span>{isInitialLoading ? t('catalog.loading') : heroItem?.title ?? t('catalog.noPreview')}</span>
+        <span>{heroItem ? formatCount(heroItem.count) : '-'} {heroItem?.kind === 'organization' ? t('catalog.published') : t('catalog.points')}</span>
       </div>
-      {heroItem && <span className="og-hero-preview-action">Open {heroItem.kind === 'splat' ? 'scene' : 'organization'}</span>}
+      {heroItem && <span className="og-hero-preview-action">{heroItem.kind === 'splat' ? t('catalog.openScene') : t('catalog.openOrganization')}</span>}
     </>
   );
 
@@ -619,40 +623,40 @@ export default function CatalogPage() {
       <main className="og-page">
         <section className="og-hero">
           <div className="og-hero-copy">
-            <p className="og-kicker">Live Gaussian catalogue</p>
+            <p className="og-kicker">{t('catalog.heroKicker')}</p>
             <h1>OpenGaussian</h1>
             <p>
-              Search splats and organizations from one quiet surface, then open a scene without losing the visual thread.
+              {t('catalog.heroCopy')}
             </p>
           </div>
 
           {heroItem ? (
-            <Link className="og-hero-preview" to={heroItem.href} onClick={heroItem.kind === 'organization' ? saveCatalogState : undefined} aria-label={`Open ${heroItem.title}`}>
+            <Link className="og-hero-preview" to={heroItem.href} onClick={heroItem.kind === 'organization' ? saveCatalogState : undefined} aria-label={`${t('catalog.open')} ${heroItem.title}`}>
               {heroPreview}
             </Link>
           ) : (
-            <aside className="og-hero-preview" aria-label="Catalog preview">
+            <aside className="og-hero-preview" aria-label={t('catalog.previewLabel')}>
               {heroPreview}
             </aside>
           )}
         </section>
 
-        <section ref={consoleRef} className={`catalog-console${catalogDocked ? ' is-docked' : ''}`} id="catalog" aria-label="Search catalog">
+        <section ref={consoleRef} className={`catalog-console${catalogDocked ? ' is-docked' : ''}`} id="catalog" aria-label={t('catalog.searchArea')}>
           <div className="catalog-console-head">
-            <p className="og-kicker">Search area</p>
+            <p className="og-kicker">{t('catalog.searchArea')}</p>
             <p className="catalog-count" aria-live="polite">
-              {isRefreshing ? 'Refreshing...' : `${resultCount} result${resultCount === 1 ? '' : 's'}`}
+              {isRefreshing ? t('catalog.refreshing') : t(resultCount === 1 ? 'catalog.result' : 'catalog.results', { count: resultCount })}
             </p>
           </div>
 
           <div className="catalog-controls">
             <label className="catalog-search">
-              <span>Search</span>
+              <span>{t('catalog.search')}</span>
               <input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="Search scenes or organizations"
-                aria-label="Search splats and organizations"
+                placeholder={t('catalog.searchPlaceholder')}
+                aria-label={t('catalog.searchAria')}
               />
             </label>
 
@@ -664,48 +668,48 @@ export default function CatalogPage() {
                 aria-haspopup="dialog"
                 aria-expanded={settingsOpen}
               >
-                <span>Sort & filters</span>
+                <span>{t('catalog.sortFilters')}</span>
                 <strong>{filterSummary}</strong>
               </button>
 
               {settingsOpen && (
-                <div className="catalog-filter-popover" role="dialog" aria-label="Sort and filter results">
+                <div className="catalog-filter-popover" role="dialog" aria-label={t('catalog.sortFilterAria')}>
                   <label className="catalog-filter-combo">
-                    <span>Sort by</span>
+                    <span>{t('catalog.sortBy')}</span>
                     <select value={sortField} onChange={(event) => setSortField(event.target.value as SortField)}>
-                      <option value="date">Date</option>
-                      <option value="count">Splat count</option>
+                      <option value="date">{t('catalog.sort.date')}</option>
+                      <option value="count">{t('catalog.sort.count')}</option>
                     </select>
                   </label>
 
                   <div className="catalog-filter-section">
-                    <span className="catalog-filter-label">Direction</span>
-                    <div className="catalog-direction-tabs" role="group" aria-label="Sort direction">
+                    <span className="catalog-filter-label">{t('catalog.direction')}</span>
+                    <div className="catalog-direction-tabs" role="group" aria-label={t('catalog.directionAria')}>
                       <button type="button" className={sortDirection === 'desc' ? 'active' : ''} aria-pressed={sortDirection === 'desc'} onClick={() => setSortDirection('desc')}>
                         <svg aria-hidden="true" viewBox="0 0 24 24">
                           <path d="M12 5v14m0 0 5-5m-5 5-5-5" />
                         </svg>
-                        <span>Desc</span>
+                        <span>{t('catalog.desc')}</span>
                       </button>
                       <button type="button" className={sortDirection === 'asc' ? 'active' : ''} aria-pressed={sortDirection === 'asc'} onClick={() => setSortDirection('asc')}>
                         <svg aria-hidden="true" viewBox="0 0 24 24">
                           <path d="M12 19V5m0 0 5 5m-5-5-5 5" />
                         </svg>
-                        <span>Asc</span>
+                        <span>{t('catalog.asc')}</span>
                       </button>
                     </div>
                   </div>
 
                   <div className="catalog-filter-section">
-                    <span className="catalog-filter-label">Show</span>
-                    <div className="catalog-filter-checks" aria-label="Result type filters">
+                    <span className="catalog-filter-label">{t('catalog.show')}</span>
+                    <div className="catalog-filter-checks" aria-label={t('catalog.resultTypeAria')}>
                       <label>
                         <input type="checkbox" checked={includeSplats} onChange={(event) => setIncludeSplats(event.target.checked)} />
-                        <span>Splats</span>
+                        <span>{t('catalog.splats')}</span>
                       </label>
                       <label>
                         <input type="checkbox" checked={includeOrganizations} onChange={(event) => setIncludeOrganizations(event.target.checked)} />
-                        <span>Orgs</span>
+                        <span>{t('catalog.orgs')}</span>
                       </label>
                     </div>
                   </div>
@@ -734,8 +738,8 @@ export default function CatalogPage() {
             )
           ) : (
             <div className="og-empty">
-              <strong>No matching public results.</strong>
-              <span>Try enabling both result types or clearing the search phrase.</span>
+              <strong>{t('catalog.emptyTitle')}</strong>
+              <span>{t('catalog.emptyHint')}</span>
             </div>
           )}
         </section>

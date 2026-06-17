@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useI18n } from './i18n';
 
 export type AppTheme = 'dark' | 'light';
 
@@ -52,9 +53,29 @@ export function useTheme() {
   return { theme, setTheme, toggleTheme };
 }
 
+type ThemeIconProps = {
+  theme: AppTheme;
+};
+
+export function ThemeIcon({ theme }: ThemeIconProps) {
+  return (
+    <span className="theme-switch__icon" data-theme-state={theme} aria-hidden="true">
+      <svg className="theme-switch__glyph theme-switch__glyph--sun" viewBox="0 0 24 24" fill="none">
+        <circle cx="12" cy="12" r="3.8" />
+        <path d="M12 2.5v2.1M12 19.4v2.1M4.6 4.6l1.5 1.5M17.9 17.9l1.5 1.5M2.5 12h2.1M19.4 12h2.1M4.6 19.4l1.5-1.5M17.9 6.1l1.5-1.5" />
+      </svg>
+      <svg className="theme-switch__glyph theme-switch__glyph--moon" viewBox="0 0 24 24" fill="none">
+        <path d="M18.4 15.1A7.3 7.3 0 0 1 8.9 5.6a7.7 7.7 0 1 0 9.5 9.5Z" />
+      </svg>
+    </span>
+  );
+}
+
 export function ThemeSwitch() {
+  const { t } = useI18n();
   const { theme, toggleTheme } = useTheme();
   const isLight = theme === 'light';
+  const nextTheme = isLight ? t('theme.dark') : t('theme.light');
 
   return (
     <button
@@ -62,14 +83,11 @@ export function ThemeSwitch() {
       type="button"
       role="switch"
       aria-checked={isLight}
-      aria-label={`Switch to ${isLight ? 'dark' : 'light'} theme`}
-      title={`Switch to ${isLight ? 'dark' : 'light'} theme`}
+      aria-label={t('theme.switch', { theme: nextTheme })}
+      title={t('theme.switch', { theme: nextTheme })}
       onClick={toggleTheme}
     >
-      <span className="theme-switch__track" aria-hidden="true">
-        <span className="theme-switch__thumb" />
-      </span>
-      <span className="theme-switch__label">{isLight ? 'Light' : 'Dark'}</span>
+      <ThemeIcon theme={theme} />
     </button>
   );
 }
