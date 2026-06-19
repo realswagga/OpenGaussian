@@ -17,9 +17,10 @@ import type {
   QuestPerfTrace,
   QuestPerfVerdict,
 } from '@gsplat/viewer-core';
-import type { AssetVariantSelection, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
+import type { AssetVariantSelection, AuthUser, ViewerManifest, MarkerPoint, ViewerStats, ViewerRuntimeProgress, ViewerLoadPhase } from '@gsplat/shared';
 import { LanguageSwitch, useI18n } from '../i18n';
 import { ThemeIcon, useTheme, type AppTheme } from '../theme';
+import { canUseQuestPerformance } from '../viewerPermissions';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
@@ -151,6 +152,7 @@ export default function ViewerPage() {
   const [vrChecked, setVrChecked] = useState(false);
   const [showDebug, setShowDebug] = useState(() => localStorage.getItem(VIEWER_READY_KEY + '_debug') === 'true');
   const [adminCanCapturePreview, setAdminCanCapturePreview] = useState(false);
+  const [questPerfAllowed, setQuestPerfAllowed] = useState(false);
   const [capturePreviewBusy, setCapturePreviewBusy] = useState(false);
   const [showQuestPerf, setShowQuestPerf] = useState(() => {
     if (typeof window === 'undefined') return false;
@@ -217,10 +219,18 @@ export default function ViewerPage() {
     fetch(`${API_BASE}/auth/me`, { credentials: 'include' })
       .then((res) => (res.ok ? res.json() : null))
       .then((data) => {
-        if (!cancelled) setAdminCanCapturePreview(Boolean(data?.user?.capabilities?.canAccessAdmin));
+        if (cancelled) return;
+        const user = data?.user as AuthUser | null | undefined;
+        const allowed = canUseQuestPerformance(user);
+        setAdminCanCapturePreview(Boolean(user?.capabilities?.canAccessAdmin));
+        setQuestPerfAllowed(allowed);
+        if (!allowed) setShowQuestPerf(false);
       })
       .catch(() => {
-        if (!cancelled) setAdminCanCapturePreview(false);
+        if (cancelled) return;
+        setAdminCanCapturePreview(false);
+        setQuestPerfAllowed(false);
+        setShowQuestPerf(false);
       });
     return () => { cancelled = true; };
   }, []);
@@ -271,9 +281,10 @@ export default function ViewerPage() {
   }, [vrActive, vrLaunchPending]);
 
   const setQuestPerfPanelVisible = useCallback((visible: boolean) => {
+    if (visible && !questPerfAllowed) return;
     setShowQuestPerf(visible);
     localStorage.setItem(VIEWER_READY_KEY + '_quest_perf', String(visible));
-  }, []);
+  }, [questPerfAllowed]);
 
   const handleTakePreview = useCallback(async () => {
     if (!manifest || !canvasRef.current || !viewerReady || capturePreviewBusy) return;
@@ -300,7 +311,7 @@ export default function ViewerPage() {
   }, [capturePreviewBusy, manifest, viewerReady]);
 
   const startQuestPerfCapture = useCallback((experiments?: QuestPerfExperiment[]) => {
-    if (!manifest) return;
+    if (!manifest || !questPerfAllowed) return;
     const trace = createQuestPerfTrace({
       sceneId: manifest.id,
       sceneSlug: manifest.slug,
@@ -332,7 +343,7 @@ export default function ViewerPage() {
       activeExperimentRef.current = null;
       setQuestPerfExperiment('Manual capture');
     }
-  }, [manifest, setQuestPerfPanelVisible]);
+  }, [manifest, questPerfAllowed, setQuestPerfPanelVisible]);
 
   const stopQuestPerfCapture = useCallback(() => {
     const trace = questTraceRef.current;
@@ -342,14 +353,14 @@ export default function ViewerPage() {
     setQuestPerfCapturing(false);
     setQuestPerfExperiment('Idle');
     viewerRef.current?.setQuestPerfOverrides({});
-    viewerRef.current?.setQuestPerfEnabled(showQuestPerf);
+    viewerRef.current?.setQuestPerfEnabled(questPerfAllowed && showQuestPerf);
     if (!trace) return;
     trace.endedAt = new Date().toISOString();
     const verdict = analyzeQuestPerfTrace(trace);
     setQuestPerfVerdict(verdict);
     setQuestPerfTrace({ ...trace, samples: trace.samples });
     setQuestPerfSampleCount(trace.samples.length);
-  }, [showDebug, showQuestPerf]);
+  }, [questPerfAllowed, showDebug, showQuestPerf]);
 
   const downloadQuestPerfTrace = useCallback((format: 'csv' | 'json') => {
     const trace = questTraceRef.current || questPerfTrace;
@@ -402,7 +413,7 @@ export default function ViewerPage() {
       xrFixedFoveation: 1,
       webgpuPipeline: 'off',
       showMarkers: true,
-      questPerfEnabled: showQuestPerf || questPerfCapturing,
+      questPerfEnabled: questPerfAllowed && (showQuestPerf || questPerfCapturing),
       backgroundColor: VIEWER_BACKGROUND_COLORS[theme],
       onProgress: (progress: ViewerRuntimeProgress) => {
         setLoadProgress(progress);
@@ -533,8 +544,8 @@ export default function ViewerPage() {
   }, [theme]);
 
   useEffect(() => {
-    viewerRef.current?.setQuestPerfEnabled(showQuestPerf || questPerfCapturing);
-  }, [showDebug, showQuestPerf, questPerfCapturing]);
+    viewerRef.current?.setQuestPerfEnabled(questPerfAllowed && (showQuestPerf || questPerfCapturing));
+  }, [questPerfAllowed, showDebug, showQuestPerf, questPerfCapturing]);
 
   useEffect(() => {
     if (!questPerfCapturing || !experimentRunnerRef.current) return;
@@ -819,14 +830,16 @@ export default function ViewerPage() {
             <option value="medium">{t('viewer.medium')}</option>
             <option value="high">{t('viewer.high')}</option>
           </select>
-          <button
-            onClick={() => setQuestPerfPanelVisible(!showQuestPerf)}
-            style={showQuestPerf ? styles.questPerfButtonActive : styles.vrButton}
-            title={t('viewer.questPerfTitle')}
-            aria-label={t('viewer.questPerfTitle')}
-          >
-            {t('viewer.questPerf')}
-          </button>
+          {questPerfAllowed && (
+            <button
+              onClick={() => setQuestPerfPanelVisible(!showQuestPerf)}
+              style={showQuestPerf ? styles.questPerfButtonActive : styles.vrButton}
+              title={t('viewer.questPerfTitle')}
+              aria-label={t('viewer.questPerfTitle')}
+            >
+              {t('viewer.questPerf')}
+            </button>
+          )}
           {adminCanCapturePreview && (
             <button
               onClick={handleTakePreview}
@@ -945,7 +958,7 @@ export default function ViewerPage() {
         </>
       )}
 
-      {showQuestPerf && (
+      {questPerfAllowed && showQuestPerf && (
         <div style={styles.questPerfPanel} aria-label={t('viewer.questPerfTitle')} role="region">
           <div style={styles.questPerfHeader}>
             <span style={styles.questPerfTitle}>{t('viewer.questPerfTitle')}</span>
