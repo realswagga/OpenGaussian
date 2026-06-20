@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { PrismaClient } from '@prisma/client';
 import { requireAdmin, type AuthRequest } from '../../middleware/auth.js';
 import { canAccessSplat } from './permissions.js';
+import { enqueueSplatProcessing } from '../../lib/processingQueue.js';
 
 export async function adminJobRoutes(app: FastifyInstance) {
   const prisma: PrismaClient = (app as any).prisma;
@@ -90,13 +91,14 @@ export async function adminJobRoutes(app: FastifyInstance) {
     }
 
     // Poll every 2 seconds for status changes
-    const maxPolls = 300; // 10 minute timeout
+    const maxPolls = 43_200; // 24 hours; large LOD builds on small hosts can take hours.
     let polls = 0;
     let lastLog = version.processingLog || '';
 
     const interval = setInterval(async () => {
       polls++;
       try {
+        if (polls % 8 === 0) reply.raw.write(': keepalive\n\n');
         const current = await prisma.splatVersion.findUnique({
           where: { id },
           select: { processingStatus: true, processingLog: true, metricsJson: true },
@@ -169,7 +171,7 @@ export async function adminJobRoutes(app: FastifyInstance) {
       where: { id },
       include: {
         versions: {
-          where: { processingStatus: 'PENDING' },
+          where: { processingStatus: { in: ['PENDING', 'FAILED'] } },
           orderBy: { version: 'desc' },
           take: 1,
         },
@@ -191,53 +193,18 @@ export async function adminJobRoutes(app: FastifyInstance) {
       });
     }
 
-    // Mark as RUNNING and update status
-    await prisma.splatVersion.update({
-      where: { id: pendingVersion.id },
-      data: { processingStatus: 'RUNNING' },
+    const queued = await enqueueSplatProcessing(app, prisma, {
+      splatId: id,
+      versionId: pendingVersion.id,
+      sourceObjectKey: pendingVersion.sourceKey,
     });
-
-    await prisma.splat.update({
-      where: { id },
-      data: { status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'PROCESSING' },
-    });
-
-    // Enqueue BullMQ processing jobs
-    const queue = (app as any).processingQueue;
-    if (queue) {
-      try {
-        await queue.add('splat.validate', {
-          splatId: id,
-          versionId: pendingVersion.id,
-          sourceObjectKey: pendingVersion.sourceKey,
-          jobType: 'splat.validate',
-        });
-
-        await queue.add('splat.extractMetadata', {
-          splatId: id,
-          versionId: pendingVersion.id,
-          sourceObjectKey: pendingVersion.sourceKey,
-          jobType: 'splat.extractMetadata',
-        });
-
-        await queue.add('splat.convert', {
-          splatId: id,
-          versionId: pendingVersion.id,
-          sourceObjectKey: pendingVersion.sourceKey,
-          jobType: 'splat.convert',
-        });
-
-        app.log.info(`Enqueued processing jobs for splat ${id} version ${pendingVersion.version}`);
-      } catch (err) {
-        app.log.error(`Failed to enqueue jobs for splat ${id}: ${err}`);
-      }
-    }
 
     return {
       jobId: pendingVersion.id,
       version: pendingVersion.version,
-      status: 'RUNNING',
-      message: 'Processing jobs enqueued',
+      status: queued.status,
+      message: queued.status === 'RUNNING' ? 'Processing job enqueued' : 'Processing could not be queued',
+      error: queued.status === 'FAILED' ? queued.error : undefined,
     };
   });
 }

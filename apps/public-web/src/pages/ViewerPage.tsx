@@ -37,6 +37,8 @@ interface DebugInfo {
   splats: number;
   rendererMode: string;
   rendererPipeline: string;
+  rendererFallbackReason: string;
+  deviceProfile: string;
   quality: string;
   frameTimeMs: number;
   frameP95Ms: number;
@@ -59,6 +61,7 @@ interface DebugInfo {
   assetVariant: string;
   lodActive: boolean;
   renderOnDemand: boolean;
+  renderIdle: boolean;
   xrActive: boolean;
   xrFrameRate: number;
   xrFramebufferScale: number;
@@ -88,15 +91,6 @@ async function probeVrSupport(): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/jpeg', quality = 0.92) {
-  return new Promise<Blob>((resolve, reject) => {
-    canvas.toBlob((blob) => {
-      if (blob) resolve(blob);
-      else reject(new Error('Canvas capture failed'));
-    }, type, quality);
-  });
 }
 
 function blobToDataUrl(blob: Blob) {
@@ -172,6 +166,8 @@ export default function ViewerPage() {
     splats: 0,
     rendererMode: '-',
     rendererPipeline: '-',
+    rendererFallbackReason: '-',
+    deviceProfile: '-',
     quality: '-',
     frameTimeMs: 0,
     frameP95Ms: 0,
@@ -194,6 +190,7 @@ export default function ViewerPage() {
     assetVariant: '-',
     lodActive: false,
     renderOnDemand: false,
+    renderIdle: false,
     xrActive: false,
     xrFrameRate: 0,
     xrFramebufferScale: 0,
@@ -287,13 +284,13 @@ export default function ViewerPage() {
   }, [questPerfAllowed]);
 
   const handleTakePreview = useCallback(async () => {
-    if (!manifest || !canvasRef.current || !viewerReady || capturePreviewBusy) return;
+    if (!manifest || !viewerRef.current || !canvasRef.current || !viewerReady || capturePreviewBusy) return;
 
     setCapturePreviewBusy(true);
     setVrError(null);
     try {
       const canvas = canvasRef.current;
-      const blob = await canvasToBlob(canvas);
+      const blob = await viewerRef.current.captureFrame({ type: 'image/jpeg', quality: 0.92 });
       const dataUrl = await blobToDataUrl(blob);
       const createdAt = new Date().toISOString();
       sessionStorage.setItem(`gsplat_taken_preview_${manifest.id}`, JSON.stringify({
@@ -411,7 +408,7 @@ export default function ViewerPage() {
       xrQuality: 'balanced',
       xrFramebufferScale: 0.6,
       xrFixedFoveation: 1,
-      webgpuPipeline: 'off',
+      webgpuPipeline: 'auto',
       showMarkers: true,
       questPerfEnabled: questPerfAllowed && (showQuestPerf || questPerfCapturing),
       backgroundColor: VIEWER_BACKGROUND_COLORS[theme],
@@ -482,6 +479,8 @@ export default function ViewerPage() {
           splats: stats.approximateLoadedSplats ?? 0,
           rendererMode: stats.gsplatRenderer ? `${stats.rendererMode}/${stats.gsplatRenderer}` : stats.rendererMode,
           rendererPipeline: stats.rendererPipeline || '-',
+          rendererFallbackReason: stats.rendererFallbackReason || '-',
+          deviceProfile: stats.deviceProfile || '-',
           quality: stats.quality,
           frameTimeMs: stats.frameTimeMs ? Math.round(stats.frameTimeMs) : stats.fps > 0 ? Math.round(1000 / stats.fps) : 0,
           frameP95Ms: stats.frameP95Ms ? Math.round(stats.frameP95Ms) : 0,
@@ -504,6 +503,7 @@ export default function ViewerPage() {
           assetVariant: stats.activeAssetVariant || 'base',
           lodActive: Boolean(stats.lodActive),
           renderOnDemand: Boolean(stats.renderOnDemand),
+          renderIdle: Boolean(stats.renderIdle),
           xrActive: Boolean(stats.xrActive),
           xrFrameRate: stats.xrFrameRate ?? 0,
           xrFramebufferScale: stats.xrFramebufferScale ?? 0,
@@ -536,7 +536,7 @@ export default function ViewerPage() {
       setVrActive(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [manifest, markers, rendererPref, assetVariant]);
+  }, [manifest, rendererPref, assetVariant]);
 
   // Update background color on theme change without destroying/recreating the viewer
   useEffect(() => {
@@ -1079,6 +1079,16 @@ export default function ViewerPage() {
               <span style={styles.debugValue}>{debugInfo.rendererPipeline}</span>
             </div>
             <div style={styles.debugRow}>
+              <span style={styles.debugLabel}>Device</span>
+              <span style={styles.debugValue}>{debugInfo.deviceProfile}</span>
+            </div>
+            {debugInfo.rendererFallbackReason !== '-' && (
+              <div style={styles.debugRow}>
+                <span style={styles.debugLabel}>Fallback</span>
+                <span style={styles.debugValue}>{debugInfo.rendererFallbackReason}</span>
+              </div>
+            )}
+            <div style={styles.debugRow}>
               <span style={styles.debugLabel}>{t('viewer.asset')}</span>
               <span style={styles.debugValue}>{debugInfo.assetFormat}{debugInfo.lodActive ? ' LOD' : ''}</span>
             </div>
@@ -1124,7 +1134,7 @@ export default function ViewerPage() {
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>On demand</span>
-              <span style={styles.debugValue}>{debugInfo.renderOnDemand ? t('viewer.yes') : t('viewer.no')}</span>
+              <span style={styles.debugValue}>{debugInfo.renderOnDemand ? (debugInfo.renderIdle ? 'idle' : 'active') : t('viewer.no')}</span>
             </div>
             <div style={styles.debugRow}>
               <span style={styles.debugLabel}>XR</span>

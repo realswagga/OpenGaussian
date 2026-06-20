@@ -6,7 +6,15 @@ export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'd
 export type AssetVariantName = 'desktop' | 'mobile' | 'vr';
 export type AssetVariantSelection = 'auto' | AssetVariantName;
 export type XrQuality = 'performance' | 'balanced' | 'quality';
-export type WebgpuPipelineMode = 'off' | 'raster-cpu-sort' | 'compute-canary';
+export type WebgpuPipelineMode =
+  | 'auto'
+  | 'raster-cpu-sort'
+  | 'raster-gpu-sort'
+  | 'compute-lab'
+  /** @deprecated Use raster-cpu-sort. */
+  | 'off'
+  /** @deprecated Use compute-lab. */
+  | 'compute-canary';
 export type ViewerLoadPhase =
   | 'idle'
   | 'loading-metadata'
@@ -141,6 +149,8 @@ export interface ViewerStats {
   gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
   rendererPipeline?: WebgpuPipelineMode;
+  rendererFallbackReason?: string;
+  deviceProfile?: QualityProfileName;
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
@@ -167,6 +177,7 @@ export interface ViewerStats {
   lodRange?: [number, number];
   adaptiveQualityScale?: number;
   renderOnDemand?: boolean;
+  renderIdle?: boolean;
   loadPhase?: ViewerLoadPhase;
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;
@@ -214,6 +225,7 @@ export interface ViewerRuntime {
   setAnnotations(points: MarkerPoint[]): void;
   setQuestPerfEnabled(enabled: boolean): void;
   setQuestPerfOverrides(overrides: ViewerQuestPerfRuntimeOverrides): void;
+  captureFrame(options?: { type?: string; quality?: number }): Promise<Blob>;
   enterVr(): Promise<void>;
   exitVr(): Promise<void>;
 }
@@ -320,7 +332,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgl2',
+    preferredRenderer: 'webgpu',
   },
   desktopHigh: {
     splatBudget: 3_000_000,
@@ -339,7 +351,7 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     lodRange: [0, 3],
     highQualitySH: true,
     renderOnDemand: true,
-    preferredRenderer: 'webgl2',
+    preferredRenderer: 'webgpu',
   },
   vrQuest: {
     splatBudget: 60_000,
@@ -383,9 +395,10 @@ export function chooseRendererMode(input: {
     return 'webgpu';
   }
 
-  // Prefer WebGL2 by default because it is more visually stable across devices
-  // and avoids WebGPU rendering artifacts that are still being resolved
-  // upstream in the PlayCanvas GSplat pipeline.
+  if (desired === 'auto' && input.webgpuSupported) {
+    return 'webgpu';
+  }
+
   return 'webgl2';
 }
 

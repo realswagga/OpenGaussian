@@ -66,12 +66,15 @@ export async function adminSplatRoutes(app: FastifyInstance) {
 
   function serializeSplat(s: any) {
     const served = pickAdminServedVersion(s);
+    const status = s.status === 'FAILED' && served?.processingStatus === 'READY' && served?.convertedKey
+      ? 'READY'
+      : s.status;
     return {
       id: s.id,
       slug: s.slug,
       title: s.title,
       description: s.description,
-      status: s.status,
+      status,
       sourceFormat: s.sourceFormat,
       sourceObjectKey: s.sourceObjectKey,
       organizationId: s.organizationId,

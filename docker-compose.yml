@@ -19,6 +19,11 @@ services:
     environment:
       - VITE_API_BASE_URL=/api
       - VITE_ASSET_BASE_URL=/assets
+    depends_on:
+      api:
+        condition: service_started
+      minio:
+        condition: service_healthy
     restart: unless-stopped
 
   admin-web:
@@ -75,6 +80,8 @@ services:
       - S3_SECRET_KEY=minioadmin
       - S3_BUCKET=gsplat-assets
       - S3_FORCE_PATH_STYLE=true
+      - WORKER_CONCURRENCY=1
+      - NODE_OPTIONS=--max-old-space-size=4096
     depends_on:
       - api
       - postgres

@@ -28,7 +28,7 @@ export type AssetVariantSelection = 'auto' | AssetVariantName;
 
 export type XrQuality = 'performance' | 'balanced' | 'quality';
 
-export type WebgpuPipelineMode = 'off' | 'raster-cpu-sort' | 'compute-canary';
+export type WebgpuPipelineMode = 'auto' | 'raster-cpu-sort' | 'raster-gpu-sort' | 'compute-lab' | 'off' | 'compute-canary';
 
 export type ViewerLoadPhase =
   | 'idle'
@@ -270,6 +270,8 @@ export interface ViewerStats {
   gsplatRenderer?: string;
   rendererBackend?: 'playcanvas' | 'legacy-three';
   rendererPipeline?: WebgpuPipelineMode;
+  rendererFallbackReason?: string;
+  deviceProfile?: QualityProfileName;
   quality: QualityPreset;
   splatBudget: number;
   approximateLoadedSplats?: number;
@@ -296,6 +298,7 @@ export interface ViewerStats {
   lodRange?: [number, number];
   adaptiveQualityScale?: number;
   renderOnDemand?: boolean;
+  renderIdle?: boolean;
   loadPhase?: ViewerLoadPhase;
   lodActive?: boolean;
   assetFormat?: SplatAssetFormat;

@@ -170,8 +170,8 @@ importers:
         specifier: workspace:*
         version: link:../../packages/shared
       '@playcanvas/splat-transform':
-        specifier: 2.4.0
-        version: 2.4.0(playcanvas@2.18.2)
+        specifier: 2.6.0
+        version: 2.6.0(playcanvas@2.19.7)
       '@prisma/client':
         specifier: ^5.15.0
         version: 5.22.0(prisma@5.22.0)
@@ -236,15 +236,9 @@ importers:
   packages/viewer-core:
     dependencies:
       playcanvas:
-        specifier: ^2.18.1
-        version: 2.18.2
-      three:
-        specifier: ^0.170.0
-        version: 0.170.0
+        specifier: 2.19.7
+        version: 2.19.7
     devDependencies:
-      '@types/three':
-        specifier: ^0.170.0
-        version: 0.170.0
       typescript:
         specifier: ^5.5.0
         version: 5.9.3
@@ -879,8 +873,8 @@ packages:
     resolution: {integrity: sha512-+1VkjdD0QBLPodGrJUeqarH8VAIvQODIbwh9XpP5Syisf7YoQgsJKPNFoqqLQlu+VQ/tVSshMR6loPMn8U+dPg==}
     engines: {node: '>=14'}
 
-  '@playcanvas/splat-transform@2.4.0':
-    resolution: {integrity: sha512-EYauPPiZLzC+XiV7AxxQFJnsyOqHPQh182vPwWujAkuh5CNTTqDvvOboL6CX1RO5GWubEhXwAdDWAhPth/d/YA==}
+  '@playcanvas/splat-transform@2.6.0':
+    resolution: {integrity: sha512-uVj4QDeZBIfg18HJ1U2kbo3IOXYwiyicFCj1WuflsimvIqgY1v0LfltS//cSQVK1SAQfKVjw94fPsV0/NCVSgw==}
     engines: {node: '>=18.0.0'}
     hasBin: true
     peerDependencies:
@@ -1265,8 +1259,8 @@ packages:
   caniuse-lite@1.0.30001793:
     resolution: {integrity: sha512-iwSsYWaCOoh26cV8NwNRViHlrfUvYsHDfRVcbtmw0Kg6PJIZZXwMkj1442FYLBGkeUf1juAsU3DTfxW579mrPA==}
 
-  canvas@3.2.1:
-    resolution: {integrity: sha512-ej1sPFR5+0YWtaVp6S1N1FVz69TQCqmrkGeRvQxZeAB1nAIcjNTHVwrZtYtWFFBmQsF40/uDLehsW5KuYC99mg==}
+  canvas@3.2.3:
+    resolution: {integrity: sha512-PzE5nJZPz72YUAfo8oTp0u3fqqY7IzlTubneAihqDYAUcBk7ryeCmBbdJBEdaH0bptSOe2VT2Zwcb3UaFyaSWw==}
     engines: {node: ^18.12.0 || >= 20.9.0}
 
   chai@5.3.3:
@@ -1699,9 +1693,9 @@ packages:
     resolution: {integrity: sha512-8OEwKp5juEvb/MjpIc4hjqfgCNysrS94RIOMXYvpYCdm/jglrKEiAYmiumbmGhCvs+IcInsphYDFwqrjr7398w==}
     hasBin: true
 
-  playcanvas@2.18.2:
-    resolution: {integrity: sha512-iINfiQP7nVQ+Qjs+ApzEDVbeozbFZb7EBl9c/JxOUKmyLfjlbMaYTCJWtY+tuWWrPu4V27OYbMzzeOkZO6c+gQ==}
-    engines: {node: '>=18.0.0'}
+  playcanvas@2.19.7:
+    resolution: {integrity: sha512-AuGy5CuCj03FAEBE1qbhgA7ibvBjzG07j4MneT4nd3FEhfvW9IgUbdhRYZ8G6obXcdaIvHezEAhr7qjq0FkxHw==}
+    engines: {node: '>=18.3.0'}
 
   postcss@8.5.15:
     resolution: {integrity: sha512-FfR8sjd4em2T6fb3I2MwAJU7HWVMr9zba+enmQeeWFfCbm+UOC/0X4DS8XtpUTMwWMGbjKYP7xjfNekzyGmB3A==}
@@ -2731,10 +2725,10 @@ snapshots:
   '@pkgjs/parseargs@0.11.0':
     optional: true
 
-  '@playcanvas/splat-transform@2.4.0(playcanvas@2.18.2)':
+  '@playcanvas/splat-transform@2.6.0(playcanvas@2.19.7)':
     dependencies:
       '@adobe/spz': 0.2.2
-      playcanvas: 2.18.2
+      playcanvas: 2.19.7
       webgpu: 0.4.0
     transitivePeerDependencies:
       - supports-color
@@ -3094,7 +3088,7 @@ snapshots:
 
   caniuse-lite@1.0.30001793: {}
 
-  canvas@3.2.1:
+  canvas@3.2.3:
     dependencies:
       node-addon-api: 7.1.1
       prebuild-install: 7.1.3
@@ -3579,12 +3573,12 @@ snapshots:
       sonic-boom: 4.2.1
       thread-stream: 3.1.0
 
-  playcanvas@2.18.2:
+  playcanvas@2.19.7:
     dependencies:
       '@types/webxr': 0.5.24
       '@webgpu/types': 0.1.70
     optionalDependencies:
-      canvas: 3.2.1
+      canvas: 3.2.3
 
   postcss@8.5.15:
     dependencies:

@@ -766,6 +766,85 @@ button {
   animation: admin-skeleton var(--dur-long) var(--ease-in-out) infinite alternate;
 }
 
+.admin-upload-process button {
+  min-height: 44px;
+  white-space: nowrap;
+}
+
+.admin-upload-result {
+  width: 1.75rem;
+  height: 1.75rem;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border: var(--rule);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 1rem;
+  font-weight: 700;
+}
+
+.admin-upload-result--done {
+  border-color: var(--admin-success);
+  color: var(--admin-success);
+}
+
+.admin-upload-result--error {
+  border-color: var(--admin-danger);
+  color: var(--admin-danger);
+}
+
+.admin-upload-step {
+  min-height: 2rem;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  color: var(--admin-muted);
+  font-size: 0.82rem;
+}
+
+.admin-upload-step__mark {
+  width: 1.5rem;
+  min-width: 1.5rem;
+  display: inline-grid;
+  place-items: center;
+  color: currentColor;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.admin-upload-step.is-running {
+  color: var(--admin-ink);
+}
+
+.admin-upload-step.is-done .admin-upload-step__mark {
+  color: var(--admin-success);
+}
+
+.admin-upload-step.is-failed .admin-upload-step__mark {
+  color: var(--admin-danger);
+}
+
+.admin-upload-splat {
+  width: 1.125rem;
+  height: 1.125rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-3xs);
+  transform: rotate(12deg);
+}
+
+.admin-upload-splat i {
+  width: 0.2rem;
+  height: 0.2rem;
+  display: block;
+  place-self: center;
+  border-radius: 50%;
+  background: var(--admin-warning);
+  animation: admin-skeleton 840ms var(--ease-in-out) infinite alternate;
+  animation-delay: calc(var(--dot) * -70ms);
+}
+
 .admin-skeleton-line {
   width: 100%;
   height: 0.88rem;
@@ -1309,6 +1388,11 @@ button {
   .theme-switch__glyph {
     transform: none !important;
     transition-property: opacity !important;
+  }
+
+  .admin-upload-splat i {
+    animation-duration: 1800ms !important;
+    animation-iteration-count: infinite !important;
   }
 }
 

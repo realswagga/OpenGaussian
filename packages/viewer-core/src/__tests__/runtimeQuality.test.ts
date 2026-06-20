@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { GSPLAT_RENDERER_RASTER_CPU_SORT, GSPLAT_RENDERER_RASTER_GPU_SORT } from 'playcanvas';
 import { PlayCanvasGsplatRuntime } from '../PlayCanvasGsplatRuntime.js';
 import type { ViewerManifest, ViewerOptions } from '../types.js';
 
@@ -74,6 +75,17 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(component.lodBaseDistance).toBe(6);
     expect(component.lodMultiplier).toBe(3);
     expect(component.highQualitySH).toBe(true);
+    expect(gsplat.renderer).toBe(GSPLAT_RENDERER_RASTER_GPU_SORT);
+  });
+
+  it('keeps the CPU sorter as an explicit WebGPU kill switch', () => {
+    const { gsplat } = applyQuality('high', { webgpuPipeline: 'raster-cpu-sort' });
+    expect(gsplat.renderer).toBe(GSPLAT_RENDERER_RASTER_CPU_SORT);
+  });
+
+  it('enforces manifest budgets over runtime overrides', () => {
+    const { gsplat } = applyQuality('high', { budgetOverride: 3_000_000 });
+    expect(gsplat.splatBudget).toBe(900_000);
   });
 
   it('applies nofx by disabling expensive quality extras', () => {

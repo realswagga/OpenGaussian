@@ -52,6 +52,10 @@ export class GsplatViewer {
     this.runtime.setQuestPerfOverrides(overrides);
   }
 
+  captureFrame(options?: { type?: string; quality?: number }): Promise<Blob> {
+    return this.runtime.captureFrame(options);
+  }
+
   enterVr(): Promise<void> {
     return this.runtime.enterVr();
   }

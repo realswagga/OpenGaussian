@@ -13,6 +13,7 @@ import {
   GSPLAT_DEBUG_NONE,
   GSPLAT_RENDERER_COMPUTE,
   GSPLAT_RENDERER_RASTER_CPU_SORT,
+  GSPLAT_RENDERER_RASTER_GPU_SORT,
   Keyboard,
   LightComponentSystem,
   Mouse,
@@ -226,6 +227,20 @@ function isWebGPUAvailable(): boolean {
   }
 }
 
+function webGpuGate(manifestEnabled: boolean): { allowed: boolean; reason?: string } {
+  if (!manifestEnabled) return { allowed: false, reason: 'disabled-by-manifest' };
+  if (!isWebGPUAvailable()) return { allowed: false, reason: 'unsupported' };
+  try {
+    if (window.localStorage.getItem('gsplat:disable-webgpu') === '1' || window.sessionStorage.getItem('gsplat:disable-webgpu-session') === '1') {
+      return { allowed: false, reason: 'disabled-by-kill-switch' };
+    }
+  } catch {
+    // Storage can be unavailable in hardened/private contexts; WebGPU itself
+    // remains usable, so this is not a renderer failure.
+  }
+  return { allowed: true };
+}
+
 function filenameFromUrl(url: string): string {
   try {
     return new URL(url, window.location.href).pathname.split('/').pop() || 'scene';
@@ -344,6 +359,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private readonly canvas: HTMLCanvasElement;
   private readonly manifest: ViewerManifest;
   private readonly options: ViewerOptions;
+  private readonly deviceProfile = detectDeviceProfile();
   private resolvedAsset: ResolvedViewerAsset;
   private readonly xrQuality: XrQuality;
 
@@ -352,6 +368,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private currentCameraMode: CameraMode;
   private rendererMode: RendererBackend = 'webgl2';
   private rendererPipeline: WebgpuPipelineMode = 'raster-cpu-sort';
+  private rendererFallbackReason: string | undefined;
   private loadPhase: ViewerLoadPhase = 'idle';
 
   private app: GsplatApp | null = null;
@@ -370,6 +387,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private questPerfOverrides: ViewerQuestPerfRuntimeOverrides = {};
   private lastCpuBuckets: ViewerQuestPerfCpuBuckets | undefined;
   private gpuTimer: GpuTimerState | null = null;
+  private firstRenderableResolve: (() => void) | null = null;
+  private firstRenderableReject: ((reason?: unknown) => void) | null = null;
+  private activeLoadReject: ((reason?: unknown) => void) | null = null;
+  private firstFrameRendered = false;
+  private coarseStartup = false;
+  private continuousRenderUntil = 0;
+  private lastRenderedFrameTime = 0;
 
   private yaw = 0;
   private pitch = -0.2;
@@ -385,7 +409,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private lastPointerX = 0;
   private lastPointerY = 0;
   private fpsSamples: number[] = [];
-  private lastUpdateTime = 0;
   private loadedSplats = 0;
   private destroyed = false;
   private adaptiveQualityScale = 1;
@@ -416,6 +439,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private wheelProcessing = false;
   private orbitAnchorGizmo: HTMLDivElement | null = null;
   private orbitAnchorTransition: OrbitAnchorTransition | null = null;
+  private lastMarkerProjectionKey = '';
+  private loadAbortController: AbortController | null = null;
+  private deviceRecoveryActive = false;
 
   constructor(options: ViewerOptions) {
     this.canvas = options.canvas;
@@ -437,11 +463,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
     const requested = this.options.rendererMode || 'auto';
     this.resolvedAsset = resolveViewerAsset(this.manifest, this.options.assetVariant, false);
+    this.coarseStartup = this.resolvedAsset.isLod;
+    this.firstFrameRendered = false;
+    this.loadAbortController = new AbortController();
     const profile = this.getCurrentQualityProfile();
+    const webgpu = webGpuGate(this.manifest.viewer.enableWebGpu !== false);
+    this.rendererFallbackReason = webgpu.reason;
     this.rendererMode = chooseRendererMode({
       requested,
       isVrActive: false,
-      webgpuSupported: isWebGPUAvailable(),
+      webgpuSupported: webgpu.allowed,
       preferred: profile.preferredRenderer,
     });
 
@@ -450,6 +481,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     } catch (error) {
       if (this.rendererMode === 'webgpu') {
         console.warn('[GsplatViewer] PlayCanvas WebGPU init failed, falling back to WebGL2:', error);
+        this.rendererFallbackReason = `webgpu-init-failed:${error instanceof Error ? error.message : String(error)}`;
         this.rendererMode = 'webgl2';
         await this.createApp('webgl2');
       } else {
@@ -469,6 +501,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.app!.start();
     this.statsIntervalId = setInterval(() => this.emitStats(), 1000);
     await this.loadGsplatAsset();
+    this.loadAbortController = null;
     this.emitProgress(this.resolvedAsset.isLod ? 'refining' : 'complete', this.resolvedAsset.isLod ? 'LOD scene is renderable; refinement may continue' : 'Scene loaded');
     this.updateRenderPolicy();
     this.options.onReady?.();
@@ -476,6 +509,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   destroy(): void {
     this.destroyed = true;
+    const abortError = new DOMException('Viewer was destroyed while loading', 'AbortError');
+    this.activeLoadReject?.(abortError);
+    this.activeLoadReject = null;
+    this.firstRenderableReject?.(abortError);
+    this.loadAbortController?.abort();
+    this.loadAbortController = null;
+    this.firstRenderableResolve = null;
+    this.firstRenderableReject = null;
     if (this.statsIntervalId) {
       clearInterval(this.statsIntervalId);
       this.statsIntervalId = null;
@@ -499,23 +540,29 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.camera = null;
     this.cameraRoot = null;
 
-    // Release GPU context before destroying the app so a subsequent
-    // start() on the same canvas can acquire a fresh context cleanly.
-    // WebGL contexts are released via the WEBGL_lose_context extension;
-    // WebGPU contexts are released implicitly when the app destroys the device.
-    const gl = this.canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false }) as WebGL2RenderingContext | null;
-    if (gl) {
-      const ext = gl.getExtension('WEBGL_lose_context');
-      ext?.loseContext();
-    }
-
+    this.releaseGpuTimer();
     this.app?.destroy();
     this.app = null;
-
-    // Reset canvas dimensions to force clean GPU context state
-    this.canvas.width = 0;
-    this.canvas.height = 0;
     this.pendingQualityMarkerUpdate = false;
+  }
+
+  captureFrame(options: { type?: string; quality?: number } = {}): Promise<Blob> {
+    const app = this.app;
+    if (!app || this.destroyed) return Promise.reject(new Error('Viewer is not running'));
+    return new Promise<Blob>((resolve, reject) => {
+      const frameHandle = app.once('postrender', () => {
+        window.clearTimeout(timeout);
+        this.canvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error('Canvas capture failed'));
+        }, options.type ?? 'image/jpeg', options.quality ?? 0.92);
+      }, this);
+      const timeout = window.setTimeout(() => {
+        frameHandle.off();
+        reject(new Error('Timed out waiting for a renderable capture frame'));
+      }, 5000);
+      this.requestRender(false);
+    });
   }
 
   setQuality(quality: QualityPreset): void {
@@ -598,6 +645,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   setMarkers(points: MarkerPoint[]): void {
     this.markers = points;
+    this.lastMarkerProjectionKey = '';
     this.markerButtons.forEach((button) => button.remove());
     this.markerButtons.clear();
     if (this.selectedMarkerId && !points.some((point) => point.id === this.selectedMarkerId)) {
@@ -838,12 +886,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       antialias: profile.antialias,
       depth: true,
       stencil: false,
-      xrCompatible: rendererMode !== 'webgpu',
+      xrCompatible: true,
       powerPreference: 'high-performance' as const,
-      preserveDrawingBuffer: true,
+      preserveDrawingBuffer: false,
     };
     const device = await createGraphicsDevice(this.canvas, deviceOptions);
     this.rendererMode = device.deviceType === 'webgpu' ? 'webgpu' : 'webgl2';
+    if (rendererMode === 'webgpu' && this.rendererMode !== 'webgpu') {
+      this.rendererFallbackReason = 'graphics-device-selected-webgl2';
+    }
     device.maxPixelRatio = Math.min(window.devicePixelRatio || 1, profile.maxDevicePixelRatio);
 
     this.app = new GsplatApp(this.canvas, {
@@ -852,12 +903,42 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       touch: new TouchDevice(this.canvas),
       keyboard: new Keyboard(window),
     });
+    device.on('devicelost', this.onGraphicsDeviceLost, this);
     this.setupGpuTimer();
   }
+
+  private onGraphicsDeviceLost = (): void => {
+    if (this.destroyed || this.rendererMode !== 'webgpu' || this.deviceRecoveryActive) return;
+    this.deviceRecoveryActive = true;
+    this.rendererFallbackReason = 'webgpu-device-lost';
+    try {
+      window.sessionStorage.setItem('gsplat:disable-webgpu-session', '1');
+    } catch {
+      // The in-memory recovery still works when storage is unavailable.
+      this.options.rendererMode = 'webgl2';
+    }
+    window.setTimeout(() => {
+      const recover = async (): Promise<void> => {
+        this.destroy();
+        this.destroyed = false;
+        try {
+          await this.start();
+        } catch (error) {
+          this.options.onError?.(error instanceof Error ? error : new Error(String(error)));
+        } finally {
+          this.deviceRecoveryActive = false;
+        }
+      };
+      void recover();
+    }, 0);
+  };
 
   private configureScene(): void {
     if (!this.app) return;
     this.app.scene.ambientLight = new Color(0.51, 0.55, 0.65);
+    // Hybrid GPU sorting does not need the CPU centers buffer. Avoiding it
+    // removes roughly 12 bytes of resident memory per splat on WebGPU.
+    (this.app.scene as typeof this.app.scene & { gsplatCentersEnabled?: boolean }).gsplatCentersEnabled = this.rendererMode !== 'webgpu';
     this.app.scene.on('gsplat:sorted', this.onGsplatSorted, this);
     this.app.systems.gsplat?.on('frame:ready', this.onGsplatFrameReady, this);
     this.app.on('prerender', this.onPreRender, this);
@@ -865,9 +946,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.applyGsplatSettings();
   }
 
+  private releaseGpuTimer(): void {
+    const timer = this.gpuTimer;
+    if (!timer) return;
+    if (timer.activeQuery) timer.gl.deleteQuery(timer.activeQuery);
+    if (timer.pendingQuery) timer.gl.deleteQuery(timer.pendingQuery);
+    timer.activeQuery = null;
+    timer.pendingQuery = null;
+    this.gpuTimer = null;
+  }
+
   private setupGpuTimer(): void {
+    this.releaseGpuTimer();
     if (!this.questPerfEnabled || this.rendererMode !== 'webgl2') {
-      this.gpuTimer = this.gpuTimer ? { ...this.gpuTimer, status: 'disabled' } : null;
       return;
     }
     const gl = this.canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false }) as WebGL2RenderingContext | null;
@@ -909,6 +1000,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const timer = this.gpuTimer;
     if (!timer || !timer.activeQuery) {
       this.resolveGpuTimer();
+      this.recordRenderedFrame();
       return;
     }
     try {
@@ -922,7 +1014,42 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       timer.status = 'unsupported';
     }
     this.resolveGpuTimer();
+    this.recordRenderedFrame();
   };
+
+  private recordRenderedFrame(): void {
+    const now = performance.now();
+    if (this.lastRenderedFrameTime > 0) {
+      const delta = now - this.lastRenderedFrameTime;
+      // An idle render-on-demand gap is not a slow frame. Only feed actual
+      // contiguous rendered frames to adaptive quality and percentiles.
+      if (delta > 0 && delta < 250) {
+        this.lastFrameTimeMs = delta;
+        this.fpsSamples.push(1000 / delta);
+        if (this.fpsSamples.length > 90) this.fpsSamples.shift();
+        this.frameTimeSamples.push(delta);
+        if (this.frameTimeSamples.length > 120) this.frameTimeSamples.shift();
+      }
+    }
+    this.lastRenderedFrameTime = now;
+
+    if (!this.firstFrameRendered && this.splatEntity) {
+      this.firstFrameRendered = true;
+      this.emitProgress('renderable', 'First rendered splat frame is available', undefined, undefined, this.resolvedAsset.url);
+      this.firstRenderableResolve?.();
+      this.firstRenderableResolve = null;
+      this.firstRenderableReject = null;
+      if (this.coarseStartup) {
+        this.coarseStartup = false;
+        queueMicrotask(() => {
+          if (this.destroyed) return;
+          this.applyQualitySettings();
+          this.emitProgress('refining', 'Streaming full-detail LOD refinement', undefined, undefined, this.resolvedAsset.url);
+          this.requestRender();
+        });
+      }
+    }
+  }
 
   private resolveGpuTimer(): void {
     const timer = this.gpuTimer;
@@ -1006,28 +1133,20 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }, data);
     this.splatAsset = asset;
 
-    await new Promise<void>((resolve, reject) => {
-      asset.on('load', () => {
-        if (this.destroyed) return;
+    const firstRenderable = new Promise<void>((resolve, reject) => {
+      this.firstRenderableResolve = resolve;
+      this.firstRenderableReject = reject;
+    });
+    void firstRenderable.catch(() => undefined);
 
-        // Diagnostic: log resource state and canvas dimensions
-        const hasResource = asset.resource != null;
-        const canvasW = this.canvas?.clientWidth ?? 0;
-        const canvasH = this.canvas?.clientHeight ?? 0;
-        const bufferW = this.canvas?.width ?? 0;
-        const bufferH = this.canvas?.height ?? 0;
-        const gl = this.canvas?.getContext('webgl2') as WebGL2RenderingContext | null;
-        const glError = gl?.getError() ?? 0;
-        console.log(`[GsplatViewer] Asset loaded:`, {
-          url: this.resolvedAsset.url,
-          format: this.resolvedAsset.format,
-          hasResource,
-          resourceType: asset.resource?.constructor?.name ?? 'null',
-          canvasClient: `${canvasW}x${canvasH}`,
-          canvasBuffer: `${bufferW}x${bufferH}`,
-          glError: glError !== 0 ? glError : 'none',
-          crossOriginIsolated: typeof crossOriginIsolated !== 'undefined' ? crossOriginIsolated : 'n/a',
-        });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        this.activeLoadReject = reject;
+        asset.on('load', () => {
+          if (this.destroyed) {
+            reject(new DOMException('Viewer was destroyed while loading', 'AbortError'));
+            return;
+          }
 
         this.sceneRadius = readAabbRadius(asset.resource) || readAabbRadius(asset) || this.sceneRadius;
         const rawCenter = readAabbCenter(asset.resource) || readAabbCenter(asset) || new Vec3(0, 0, 0);
@@ -1064,42 +1183,31 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
         this.applyGsplatSettings();
         this.loadedSplats = readPossibleCount(asset.resource) || readPossibleCount(asset) || this.manifestHasCount();
-        this.emitProgress('renderable', 'First renderable splat frame is available', undefined, undefined, this.resolvedAsset.url);
-
-        // Delayed diagnostic: check rendering state after 3 seconds
-        setTimeout(() => {
-          if (this.destroyed) return;
-          const frameStats = (this.app?.stats as { frame?: { gsplats?: number } } | undefined)?.frame;
-          const gsplatComp = (this.splatEntity as unknown as { gsplat?: { _placement?: unknown; _instance?: unknown; enabled?: boolean } } | null)?.gsplat;
-          console.log(`[GsplatViewer] Render diagnostic (3s):`, {
-            sortTimeMs: this.lastSortTimeMs,
-            frameGsplats: frameStats?.gsplats,
-            loadedSplats: this.loadedSplats,
-            hasPlacement: gsplatComp?._placement != null,
-            hasInstance: gsplatComp?._instance != null,
-            componentEnabled: gsplatComp?.enabled,
-            entityEnabled: this.splatEntity?.enabled,
-            sceneChildren: this.app?.root?.children?.length,
-            canvasPixels: `${this.canvas?.width}x${this.canvas?.height}`,
-          });
-        }, 3000);
-
+        this.requestRender(false);
         resolve();
+        });
+        asset.on('progress', (received: number, length: number) => {
+          this.emitProgress('loading-asset', 'Loading Gaussian splat asset', received, length, this.resolvedAsset.url);
+        });
+        asset.on('error', (error: unknown) => {
+          reject(error instanceof Error ? error : new Error(String(error)));
+        });
+        this.app!.assets.add(asset);
+        this.app!.assets.load(asset);
       });
-      asset.on('progress', (received: number, length: number) => {
-        this.emitProgress('loading-asset', 'Loading Gaussian splat asset', received, length, this.resolvedAsset.url);
-      });
-      asset.on('error', (error: unknown) => {
-        reject(error instanceof Error ? error : new Error(String(error)));
-      });
-      this.app!.assets.add(asset);
-      this.app!.assets.load(asset);
-    });
+      this.activeLoadReject = null;
+      await firstRenderable;
+    } catch (error) {
+      this.activeLoadReject = null;
+      this.firstRenderableResolve = null;
+      this.firstRenderableReject = null;
+      throw error;
+    }
   }
 
   private async fetchMetaJson(url: string): Promise<object> {
     this.emitProgress('loading-metadata', 'Loading SOG metadata', undefined, undefined, url);
-    const response = await fetch(url);
+    const response = await fetch(url, { signal: this.loadAbortController?.signal });
     if (!response.ok) {
       throw new Error(`SOG metadata fetch failed: HTTP ${response.status}`);
     }
@@ -1114,7 +1222,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (this.vrActive || this.options.assetVariant === 'vr') {
       return qualityProfiles.vrQuest;
     }
-    return qualityForPreset(this.currentQuality);
+    return this.currentQuality === 'auto' ? qualityProfiles[this.deviceProfile] : qualityForPreset(this.currentQuality);
   }
 
   private getXrFramebufferScale(profile = qualityProfiles.vrQuest): number {
@@ -1145,8 +1253,20 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const scale = profile.adaptiveQualityEnabled ? this.adaptiveQualityScale : 1;
     const degradation = 1 / Math.max(0.35, scale);
     const budgetScale = this.resolvedAsset.isLod ? scale : 1;
-    const splatBudget = this.questPerfOverrides.splatBudget ?? this.options.budgetOverride ?? Math.max(1, Math.round(profile.splatBudget * budgetScale));
+    const requestedBudget = this.questPerfOverrides.splatBudget ?? this.options.budgetOverride ?? Math.max(1, Math.round(profile.splatBudget * budgetScale));
+    const manifestBudget = this.vrActive || this.options.assetVariant === 'vr'
+      ? this.manifest.viewer.budgets.vr
+      : this.deviceProfile.startsWith('phone')
+        ? this.manifest.viewer.budgets.mobile
+        : this.manifest.viewer.budgets.desktop;
+    const splatBudget = Number.isFinite(manifestBudget) && manifestBudget > 0
+      ? Math.min(requestedBudget, manifestBudget)
+      : requestedBudget;
     const lodRange: [number, number] = [...profile.lodRange];
+
+    if (this.coarseStartup && this.resolvedAsset.isLod) {
+      lodRange[0] = lodRange[1];
+    }
 
     if (this.resolvedAsset.isLod && scale < 0.6 && lodRange[0] < lodRange[1]) {
       lodRange[0] = Math.min(lodRange[1], lodRange[0] + 1);
@@ -1197,18 +1317,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       gsplat.maxPixelRadius = settings.maxPixelRadius;
     }
     gsplat.debug = GSPLAT_DEBUG_NONE;
-    // Always use CPU sort. GPU radix sort (GSPLAT_RENDERER_RASTER_GPU_SORT)
-    // introduces a billboard effect where splats incorrectly rotate relative
-    // to the camera. CPU sort runs in a dedicated Web Worker and preserves
-    // world-space rotation quaternions correctly. At the maximum user-facing
-    // budget of 900K splats, CPU sort takes 3–8ms in the worker thread,
-    // which fits comfortably within a 60 fps frame budget.
-    if (this.rendererMode === 'webgpu' && this.options.webgpuPipeline === 'compute-canary') {
-      gsplat.renderer = GSPLAT_RENDERER_COMPUTE;
-      this.rendererPipeline = 'compute-canary';
-    } else {
+    const requestedPipeline = this.options.webgpuPipeline ?? 'auto';
+    if (this.rendererMode !== 'webgpu' || requestedPipeline === 'off' || requestedPipeline === 'raster-cpu-sort') {
       gsplat.renderer = GSPLAT_RENDERER_RASTER_CPU_SORT;
       this.rendererPipeline = 'raster-cpu-sort';
+    } else if (requestedPipeline === 'compute-lab' || requestedPipeline === 'compute-canary') {
+      gsplat.renderer = GSPLAT_RENDERER_COMPUTE;
+      this.rendererPipeline = 'compute-lab';
+    } else {
+      // Current SuperSplat production path: raster rendering plus GPU radix
+      // sort. The full compute renderer stays explicitly lab-only.
+      gsplat.renderer = GSPLAT_RENDERER_RASTER_GPU_SORT;
+      this.rendererPipeline = 'raster-gpu-sort';
     }
 
     const component = (this.splatEntity as unknown as {
@@ -1332,6 +1452,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.canvas.addEventListener('dblclick', this.onDoubleClick);
     // Pointer lock change handler for fly mode
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
+    document.addEventListener('visibilitychange', this.onVisibilityChange);
   }
 
   private removeInput(): void {
@@ -1343,8 +1464,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.canvas.removeEventListener('wheel', this.onWheel);
     this.canvas.removeEventListener('dblclick', this.onDoubleClick);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
+    document.removeEventListener('visibilitychange', this.onVisibilityChange);
     document.exitPointerLock();
   }
+
+  private onVisibilityChange = (): void => {
+    this.lastRenderedFrameTime = 0;
+    if (document.visibilityState === 'visible') {
+      this.requestRender();
+    }
+  };
 
   private onContextMenu = (event: MouseEvent): void => {
     event.preventDefault();
@@ -1748,8 +1877,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private getPickerPoint(clientX: number, clientY: number, width: number, height: number, offsetX = 0, offsetY = 0): { x: number; y: number } {
     const rect = this.canvas.getBoundingClientRect();
     return {
-      x: clamp(clientX - rect.left + offsetX, 0, Math.max(0, width - 1)),
-      y: clamp(clientY - rect.top + offsetY, 0, Math.max(0, height - 1)),
+      x: clamp((clientX - rect.left + offsetX) * width / Math.max(1, rect.width), 0, Math.max(0, width - 1)),
+      y: clamp((clientY - rect.top + offsetY) * height / Math.max(1, rect.height), 0, Math.max(0, height - 1)),
     };
   }
 
@@ -1766,8 +1895,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private async getPickerDepthPickAtClientPoint(clientX: number, clientY: number): Promise<DepthPick | null> {
     if (!this.app || !this.camera?.camera || this.vrActive) return null;
     const rect = this.canvas.getBoundingClientRect();
-    const width = Math.max(1, Math.round(rect.width));
-    const height = Math.max(1, Math.round(rect.height));
+    const pickerScale = Math.min(1, 512 / Math.max(1, rect.width, rect.height));
+    const width = Math.max(1, Math.round(rect.width * pickerScale));
+    const height = Math.max(1, Math.round(rect.height * pickerScale));
     if (width <= 1 || height <= 1) return null;
 
     const picker = this.ensureDepthPicker(width, height);
@@ -1780,52 +1910,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       return null;
     }
 
-    const cameraPosition = this.camera.getPosition().clone();
-    const sampleResults = await Promise.all(DEPTH_RAY_OFFSETS.map(async ([offsetX, offsetY], index) => {
-      const pickerPoint = this.getPickerPoint(clientX, clientY, width, height, offsetX, offsetY);
-      const ray = this.getRayFromClientPoint(clientX, clientY, offsetX, offsetY);
-      if (!ray) return null;
-      const point = await picker.getWorldPointAsync(pickerPoint.x, pickerPoint.y);
-      if (!point) return null;
-      const distance = point.clone().sub(cameraPosition).dot(ray.direction);
+    const pickerPoint = this.getPickerPoint(clientX, clientY, width, height);
+    const point = await picker.getWorldPointAsync(pickerPoint.x, pickerPoint.y);
+    if (point) {
+      const distance = point.clone().sub(this.camera.getPosition()).dot(centerRay.direction);
       if (!Number.isFinite(distance) || distance <= 0) return null;
       return {
-        index,
         point,
         distance: this.clampInteractionDepth(distance),
-      };
-    }));
-
-    const samples = sampleResults.filter((sample): sample is { index: number; point: Vec3; distance: number } => Boolean(sample));
-    if (samples.length === 0) return null;
-
-    const centerSample = samples.find((sample) => sample.index === 0);
-    if (centerSample) {
-      return {
-        point: centerSample.point,
-        distance: centerSample.distance,
         confidence: 0.8,
         source: 'scene',
       };
     }
-
-    const fallbackDepth = this.getFallbackInteractionDepth();
-    const consensus = computeFrontDepthConsensus({
-      samples: samples.map((sample) => sample.distance),
-      fallbackDepth,
-      minSamples: 3,
-      minClusterSamples: 2,
-      maxClusterRelativeSpread: 0.32,
-    });
-
-    if (consensus.sampleCount < 2 || consensus.confidence < 0.25) return null;
-    const distance = this.clampInteractionDepth(consensus.distance);
-    return {
-      point: centerRay.origin.clone().add(centerRay.direction.clone().mulScalar(distance)),
-      distance,
-      confidence: consensus.confidence,
-      source: 'scene',
-    };
+    return null;
   }
 
   private dollyAlongOrbitAnchor(step: number): void {
@@ -2142,18 +2239,6 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       buckets[key] = next - checkpoint;
       checkpoint = next;
     };
-    if (this.lastUpdateTime > 0) {
-      const delta = now - this.lastUpdateTime;
-      if (delta > 0) {
-        this.lastFrameTimeMs = delta;
-        this.fpsSamples.push(1000 / delta);
-        if (this.fpsSamples.length > 90) this.fpsSamples.shift();
-        this.frameTimeSamples.push(delta);
-        if (this.frameTimeSamples.length > 120) this.frameTimeSamples.shift();
-      }
-    }
-    this.lastUpdateTime = now;
-
     this.updateAdaptiveQuality(now);
     markBucket('adaptiveQualityMs');
     this.updateRenderPolicy();
@@ -2183,7 +2268,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // The deferred update fires in the next frame when projection is ready.
     if (this.pendingQualityMarkerUpdate) {
       this.pendingQualityMarkerUpdate = false;
-    } else {
+    } else if (this.app?.autoRender || this.app?.renderNextFrame) {
       this.updateMarkerPositions();
     }
     markBucket('markerGizmoMs');
@@ -2197,6 +2282,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private updateAdaptiveQuality(now: number): void {
     const profile = this.getCurrentQualityProfile();
+    if (document.visibilityState === 'hidden') return;
+    if (this.lastRenderedFrameTime <= 0 || now - this.lastRenderedFrameTime > 500) return;
     if (!profile.adaptiveQualityEnabled) {
       this.adaptiveQualityScale = 1;
       return;
@@ -2437,6 +2524,16 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       this.updateOrbitAnchorGizmo();
       return;
     }
+    if (document.visibilityState === 'hidden') return;
+
+    const cameraPosition = this.camera.getPosition();
+    const projectionKey = [
+      cameraPosition.x.toFixed(4), cameraPosition.y.toFixed(4), cameraPosition.z.toFixed(4),
+      this.target.x.toFixed(4), this.target.y.toFixed(4), this.target.z.toFixed(4),
+      this.canvas.clientWidth, this.canvas.clientHeight, this.markers.length,
+    ].join(':');
+    if (projectionKey === this.lastMarkerProjectionKey) return;
+    this.lastMarkerProjectionKey = projectionKey;
 
     // PlayCanvas CameraComponent.worldToScreen passes device.clientRect
     // (CSS layout dimensions from getBoundingClientRect) as cw/ch to the
@@ -2518,24 +2615,24 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
   }
 
-  private requestRender(): void {
-    if (this.app) {
-      this.app.renderNextFrame = true;
+  private requestRender(keepAwake = true): void {
+    if (!this.app) return;
+    if (keepAwake) {
+      this.continuousRenderUntil = Math.max(this.continuousRenderUntil, performance.now() + 4000);
+      this.app.autoRender = true;
     }
+    this.app.renderNextFrame = true;
   }
 
   private updateRenderPolicy(): void {
     if (!this.app) return;
-    // Always keep the render loop alive. Stopping autoRender and restarting
-    // on interaction causes a cold-start GPU pipeline penalty (shader
-    // recompilation, GPU clock ramp-up, driver state revalidation) that
-    // manifests as a visible frame drop. PlayCanvas's own rAF loop naturally
-    // throttles when nothing changes, so keeping autoRender=true has
-    // negligible power cost while eliminating the stutter.
-    if (!this.app.autoRender) {
-      this.app.autoRender = true;
-      this.requestRender();
-    }
+    const settings = this.getEffectiveQualitySettings();
+    const loading = this.loadPhase === 'loading-metadata' || this.loadPhase === 'loading-asset';
+    const streaming = this.loadPhase === 'refining' && this.lodLoadingCount > 0;
+    const visible = document.visibilityState !== 'hidden';
+    const continuous = this.vrActive || (visible && (!settings.renderOnDemand || loading || streaming || this.isDragging || performance.now() < this.continuousRenderUntil));
+    this.app.autoRender = continuous;
+    if (continuous) this.app.renderNextFrame = true;
   }
 
   private applyQualitySettings(): void {
@@ -2643,6 +2740,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       gsplatRenderer: gsplat?.currentRenderer !== undefined ? String(gsplat.currentRenderer) : undefined,
       rendererBackend: 'playcanvas',
       rendererPipeline: this.rendererPipeline,
+      rendererFallbackReason: this.rendererFallbackReason,
+      deviceProfile: this.deviceProfile,
       quality: this.currentQuality,
       splatBudget: settings.splatBudget,
       approximateLoadedSplats: totalSplats,
@@ -2669,6 +2768,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       lodRange: settings.lodRange,
       adaptiveQualityScale: this.adaptiveQualityScale,
       renderOnDemand: settings.renderOnDemand,
+      renderIdle: Boolean(settings.renderOnDemand && this.app && !this.app.autoRender),
       loadPhase: this.loadPhase,
       lodActive: this.resolvedAsset.isLod || this.lodLoadingCount > 0,
       assetFormat: this.resolvedAsset.format,

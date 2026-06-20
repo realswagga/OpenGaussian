@@ -27,8 +27,8 @@ describe('chooseRendererMode', () => {
     expect(chooseRendererMode({ requested: 'webgl2', isVrActive: false, webgpuSupported: false })).toBe('webgl2');
   });
 
-  it('defaults to webgl2 in auto mode regardless of WebGPU support', () => {
-    expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: true })).toBe('webgl2');
+  it('defaults to WebGPU in auto mode when supported', () => {
+    expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: true })).toBe('webgpu');
     expect(chooseRendererMode({ requested: 'auto', isVrActive: false, webgpuSupported: false })).toBe('webgl2');
   });
 

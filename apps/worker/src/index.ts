@@ -1,19 +1,24 @@
 import 'dotenv/config';
 import Redis from 'ioredis';
-import { Queue, Worker, Job } from 'bullmq';
+import { Worker, Job } from 'bullmq';
 import { Prisma, PrismaClient } from '@prisma/client';
 import { S3Client, GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { Upload } from '@aws-sdk/lib-storage';
 import type { AssetVariantName } from '@gsplat/shared';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { spawn } from 'child_process';
+import { pipeline } from 'stream/promises';
+import { Readable } from 'stream';
+import { randomUUID } from 'crypto';
 import { createPlayCanvasLodManifest, sampleLodVertices, type LodCellManifestInput, type LodSourceVertex } from './lodManifest.js';
 import {
   SPLAT_VARIANT_CONFIGS,
   computeVariantTargets,
   type WorkerAssetVariantMetadata,
 } from './assetVariants.js';
+import { readHeaderSplatCount, readManifestSplatCount } from './assetMetadata.js';
 
 // Configuration from environment
 const REDIS_URL = process.env.REDIS_URL || 'redis://redis:6379';
@@ -58,10 +63,6 @@ const s3Client = new S3Client({
 
 const redisConnection = new Redis(REDIS_URL, {
   maxRetriesPerRequest: null,
-});
-
-const splatQueue = new Queue<JobData>('splat-processing', {
-  connection: redisConnection,
 });
 
 function getSplatExtension(filename: string): string {
@@ -219,8 +220,8 @@ async function syncSplatMirrorIfServed(splatId: string, versionId: string): Prom
 
 async function downloadOriginal(splatId: string, versionId: string, sourceKey: string): Promise<string> {
   const tmpDir = os.tmpdir();
-  const ext = path.extname(sourceKey) || '.ply';
-  const tmpFile = path.join(tmpDir, `${splatId}-${versionId}-source${ext}`);
+  const ext = getSplatExtension(sourceKey) || '.ply';
+  const tmpFile = path.join(tmpDir, `gsplat-worker-${splatId}-${versionId}-${randomUUID()}-source${ext}`);
 
   console.log(`[worker] Downloading ${sourceKey} from S3...`);
   const response = await s3Client.send(new GetObjectCommand({
@@ -228,30 +229,33 @@ async function downloadOriginal(splatId: string, versionId: string, sourceKey: s
     Key: sourceKey,
   }));
 
-  const stream = response.Body as NodeJS.ReadableStream;
-  const chunks: Buffer[] = [];
-  for await (const chunk of stream) {
-    chunks.push(Buffer.from(chunk));
-  }
-  const buffer = Buffer.concat(chunks);
-  await fs.promises.writeFile(tmpFile, buffer);
+  if (!response.Body) throw new Error(`S3 returned an empty body for ${sourceKey}`);
+  const stream = Readable.from(response.Body as AsyncIterable<Uint8Array>);
+  await pipeline(stream, fs.createWriteStream(tmpFile, { flags: 'wx' }));
 
-  console.log(`[worker] Downloaded ${sourceKey} to ${tmpFile} (${(buffer.length / 1024 / 1024).toFixed(2)} MB)`);
+  const stats = await fs.promises.stat(tmpFile);
+  console.log(`[worker] Downloaded ${sourceKey} to ${tmpFile} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
   return tmpFile;
 }
 
 async function uploadAsset(splatId: string, versionId: string, localPath: string, key: string, contentType?: string): Promise<string> {
-  const fileContent = await fs.promises.readFile(localPath);
   const fullKey = `splats/${splatId}/versions/${versionId}/${key}`;
+  const stats = await fs.promises.stat(localPath);
 
-  await s3Client.send(new PutObjectCommand({
+  await new Upload({
+    client: s3Client,
+    queueSize: 2,
+    partSize: 8 * 1024 * 1024,
+    leavePartsOnError: false,
+    params: {
     Bucket: S3_BUCKET,
     Key: fullKey,
-    Body: fileContent,
+    Body: fs.createReadStream(localPath),
     ContentType: contentType || 'application/octet-stream',
-  }));
+    },
+  }).done();
 
-  console.log(`[worker] Uploaded ${fullKey} (${(fileContent.length / 1024 / 1024).toFixed(2)} MB)`);
+  console.log(`[worker] Uploaded ${fullKey} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
   return fullKey;
 }
 
@@ -276,22 +280,42 @@ async function validateFile(filePath: string): Promise<{ format: string; fileSiz
 async function extractMetadata(filePath: string): Promise<{
   format: string;
   fileSize: number;
-  approximateSplatCount: number;
+  splatCount: number;
 }> {
   const stats = await fs.promises.stat(filePath);
   const format = formatFromExtension(getSplatExtension(filePath));
+  const prefixHandle = await fs.promises.open(filePath, 'r');
+  const prefix = Buffer.alloc(Math.min(stats.size, 64 * 1024));
+  try {
+    await prefixHandle.read(prefix, 0, prefix.length, 0);
+  } finally {
+    await prefixHandle.close();
+  }
 
-  // Rough estimate based on format
-  let bytesPerSplat = 100;
-  if (format === 'sog' || format === 'sog-meta' || format === 'lod-meta') bytesPerSplat = 40;
-  if (format === 'spz') bytesPerSplat = 60;
+  let splatCount = 0;
+  if (format === 'ply' || format === 'compressed-ply' || format === 'spz') {
+    splatCount = readHeaderSplatCount(format, prefix);
+  } else if (format === 'sog-meta' || format === 'lod-meta') {
+    try {
+      splatCount = readManifestSplatCount(JSON.parse(await fs.promises.readFile(filePath, 'utf8')));
+    } catch {
+      splatCount = 0;
+    }
+  }
 
-  const approximateSplatCount = Math.max(1, Math.round(stats.size / bytesPerSplat));
+  if (!Number.isFinite(splatCount) || splatCount <= 0) {
+    const summary = await runSplatTransform([filePath, '--summary', 'null']);
+    const match = /\*\*Row Count:\*\*\s+([\d,]+)/.exec(summary);
+    splatCount = match?.[1] ? Number.parseInt(match[1].replaceAll(',', ''), 10) : 0;
+  }
+  if (!Number.isFinite(splatCount) || splatCount <= 0) {
+    throw new Error(`Could not determine exact splat count for ${filePath}`);
+  }
 
   return {
     format,
     fileSize: stats.size,
-    approximateSplatCount,
+    splatCount,
   };
 }
 
@@ -409,9 +433,9 @@ function resolveSplatTransformExecutable(): string {
   return found || 'splat-transform';
 }
 
-async function runSplatTransform(args: string[]): Promise<void> {
+async function runSplatTransform(args: string[]): Promise<string> {
   const executable = resolveSplatTransformExecutable();
-  await new Promise<void>((resolve, reject) => {
+  return new Promise<string>((resolve, reject) => {
     const child = spawn(executable, args, {
       windowsHide: true,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -423,7 +447,7 @@ async function runSplatTransform(args: string[]): Promise<void> {
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) {
-        resolve();
+        resolve(Buffer.concat([...stdout, ...stderr]).toString('utf8'));
         return;
       }
       const output = Buffer.concat([...stdout, ...stderr]).toString('utf8').slice(-4000);
@@ -455,14 +479,20 @@ async function uploadVariantFile(
 ): Promise<string> {
   const relativePath = path.relative(variantDir, localPath).split(path.sep).join('/');
   const key = `splats/${splatId}/versions/${versionId}/variants/${variantName}/${relativePath}`;
-  const body = await fs.promises.readFile(localPath);
-  await s3Client.send(new PutObjectCommand({
-    Bucket: S3_BUCKET,
-    Key: key,
-    Body: body,
-    ContentType: contentTypeForPath(localPath),
-  }));
-  console.log(`[worker] Uploaded ${key} (${(body.length / 1024 / 1024).toFixed(2)} MB)`);
+  const stats = await fs.promises.stat(localPath);
+  await new Upload({
+    client: s3Client,
+    queueSize: 2,
+    partSize: 8 * 1024 * 1024,
+    leavePartsOnError: false,
+    params: {
+      Bucket: S3_BUCKET,
+      Key: key,
+      Body: fs.createReadStream(localPath),
+      ContentType: contentTypeForPath(localPath),
+    },
+  }).done();
+  console.log(`[worker] Uploaded ${key} (${(stats.size / 1024 / 1024).toFixed(2)} MB)`);
   return key;
 }
 
@@ -480,6 +510,12 @@ async function generateSplatTransformVariants(
       const targets = computeVariantTargets(totalSplats, config);
       if (targets.length === 0) continue;
 
+      await updateVersionLog(
+        versionId,
+        `LOD ${config.name}: building ${targets.length} levels (${targets.map((count) => count.toLocaleString()).join(' / ')})`,
+      );
+
+      try {
       const variantDir = path.join(root, config.name);
       await fs.promises.mkdir(variantDir, { recursive: true });
       const lodFiles: string[] = [];
@@ -535,6 +571,12 @@ async function generateSplatTransformVariants(
         targetSplats: targets,
         generatedAt: new Date().toISOString(),
       };
+      await updateVersionLog(versionId, `LOD ${config.name}: manifest uploaded`);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        await updateVersionLog(versionId, `LOD ${config.name}: skipped after error: ${message}`);
+        console.warn(`[worker] LOD ${config.name} failed for ${splatId}/${versionId}: ${message}`);
+      }
     }
   } finally {
     await fs.promises.rm(root, { recursive: true, force: true }).catch(() => undefined);
@@ -612,7 +654,7 @@ async function generatePlayCanvasLod(
         splatId,
         versionId,
         tmpFile,
-        metadata.approximateSplatCount,
+        metadata.splatCount,
       );
       const desktopVariant = assetVariants.desktop ?? assetVariants.mobile ?? assetVariants.vr;
       if (!desktopVariant) {
@@ -624,14 +666,14 @@ async function generatePlayCanvasLod(
         convertedKey: desktopVariant.lodManifestKey,
         productionFormat: 'lod-meta',
         lodKey: desktopVariant.lodManifestKey,
-        splatCount: metadata.approximateSplatCount,
+        splatCount: metadata.splatCount,
         sizeBytes: metadata.fileSize,
         assetVariants,
       });
       await job.updateProgress(100);
       await updateVersionLog(versionId, `SplatTransform LOD ready: ${Object.keys(assetVariants).join(', ')}`);
       return {
-        splatCount: metadata.approximateSplatCount,
+        splatCount: metadata.splatCount,
         assetVariants,
         productionObjectKey: desktopVariant.lodManifestKey,
         productionFormat: 'lod-meta',
@@ -1074,12 +1116,24 @@ function crc32(buf: Buffer): number {
   return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
-async function markVersionFailed(versionId: string, splatId: string, errorMessage: string): Promise<void> {
+async function markVersionFailed(
+  versionId: string,
+  splatId: string,
+  stage: string,
+  errorMessage: string,
+): Promise<void> {
+  const version = await prisma.splatVersion.findUnique({
+    where: { id: versionId },
+    select: { processingLog: true },
+  });
+  const failureLine = `STAGE ${stage} FAILED: ${errorMessage}`;
   await prisma.splatVersion.update({
     where: { id: versionId },
     data: {
       processingStatus: 'FAILED',
-      processingLog: `FAILED: ${errorMessage}`,
+      processingLog: version?.processingLog
+        ? `${version.processingLog}\n${failureLine}`
+        : failureLine,
     },
   });
 
@@ -1087,10 +1141,10 @@ async function markVersionFailed(versionId: string, splatId: string, errorMessag
     where: { id: splatId },
     select: { status: true, servingVersionId: true },
   });
-  if (splat && splat.status !== 'PUBLISHED' && !splat.servingVersionId) {
+  if (splat && splat.status !== 'PUBLISHED') {
     await prisma.splat.update({
       where: { id: splatId },
-      data: { status: 'FAILED' },
+      data: { status: splat.servingVersionId ? 'READY' : 'FAILED' },
     });
   }
 }
@@ -1098,6 +1152,7 @@ async function markVersionFailed(versionId: string, splatId: string, errorMessag
 // Process a single job
 async function processJob(job: Job<JobData>): Promise<unknown> {
   const { splatId, versionId, sourceObjectKey, jobType } = job.data;
+  let activeStage = jobType.replace('splat.', '');
   console.log(`[worker] Processing job ${job.id}: type=${jobType}, splat=${splatId}, version=${versionId}`);
 
   await job.updateProgress(5);
@@ -1106,6 +1161,7 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
   try {
     switch (jobType) {
       case 'splat.validate': {
+        activeStage = 'validation';
         if (!sourceObjectKey) throw new Error('sourceObjectKey is required for validation');
         const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
         await job.updateProgress(30);
@@ -1118,6 +1174,7 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
       }
 
       case 'splat.extractMetadata': {
+        activeStage = 'metadata';
         if (!sourceObjectKey) throw new Error('sourceObjectKey is required for metadata extraction');
         const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
         await job.updateProgress(30);
@@ -1125,15 +1182,35 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         const metadata = await extractMetadata(tmpFile);
         await fs.promises.unlink(tmpFile).catch(() => {});
         await job.updateProgress(100);
-        await updateVersionLog(versionId, `Metadata extracted: ~${metadata.approximateSplatCount.toLocaleString()} splats`);
+        await updateVersionLog(versionId, `Metadata extracted: ${metadata.splatCount.toLocaleString()} splats (exact)`);
         return metadata;
       }
 
       case 'splat.convert': {
         if (!sourceObjectKey) throw new Error('sourceObjectKey is required for conversion');
+        activeStage = 'validation';
+        await updateVersionLog(versionId, 'STAGE validation STARTED');
         const tmpFile = await downloadOriginal(splatId, versionId, sourceObjectKey);
+        try {
+        await job.updateProgress(12);
+        const validation = await validateFile(tmpFile);
+        await updateVersionLog(
+          versionId,
+          `STAGE validation COMPLETED: ${validation.format}, ${validation.fileSize.toLocaleString()} bytes`,
+        );
+
+        activeStage = 'metadata';
+        await job.updateProgress(20);
+        await updateVersionLog(versionId, 'STAGE metadata STARTED');
+        const metadata = await extractMetadata(tmpFile);
+        await updateVersionLog(
+          versionId,
+          `STAGE metadata COMPLETED: ${metadata.splatCount.toLocaleString()} splats`,
+        );
+
+        activeStage = 'conversion';
         await job.updateProgress(30);
-        await updateVersionLog(versionId, 'Converting to production format...');
+        await updateVersionLog(versionId, 'STAGE conversion STARTED');
 
         const ext = getSplatExtension(sourceObjectKey);
         const productionFormat = formatFromExtension(ext);
@@ -1148,37 +1225,42 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
 
         const stats = await fs.promises.stat(tmpFile);
 
-        // Estimate splat count
-        let bytesPerSplat = 100;
-        if (productionFormat === 'sog' || productionFormat === 'sog-meta' || productionFormat === 'lod-meta') bytesPerSplat = 40;
-        if (productionFormat === 'spz') bytesPerSplat = 60;
-        const splatCount = Math.round(stats.size / bytesPerSplat);
+        const splatCount = metadata.splatCount;
         let assetVariants: AssetVariantMap | undefined;
 
         if (['ply', 'compressed-ply', 'sog', 'spz'].includes(productionFormat)) {
+          activeStage = 'lod';
           try {
-            await job.updateProgress(60);
-            await updateVersionLog(versionId, 'Generating SOG/LOD asset variants with splat-transform...');
+            await job.updateProgress(45);
+            await updateVersionLog(versionId, 'STAGE lod STARTED');
             assetVariants = await generateSplatTransformVariants(splatId, versionId, tmpFile, splatCount);
-            await updateVersionLog(versionId, `Generated variants: ${Object.keys(assetVariants).join(', ') || 'none'}`);
+            const generatedVariants = Object.keys(assetVariants);
+            if (generatedVariants.length > 0) {
+              await updateVersionLog(versionId, `STAGE lod COMPLETED: ${generatedVariants.join(', ')}`);
+            } else {
+              await updateVersionLog(versionId, 'STAGE lod SKIPPED: no usable variants were produced');
+            }
           } catch (variantError) {
             const message = variantError instanceof Error ? variantError.message : String(variantError);
             console.warn(`[worker] Variant generation failed for ${splatId}/${versionId}: ${message}`);
-            await updateVersionLog(versionId, `Variant generation skipped: ${message}`);
+            await updateVersionLog(versionId, `STAGE lod SKIPPED: ${message}`);
           }
         } else {
-          await updateVersionLog(versionId, `Variant generation skipped for ${productionFormat} input.`);
+          await updateVersionLog(versionId, `STAGE lod SKIPPED: ${productionFormat} input already supplies its production representation`);
         }
 
-        await fs.promises.unlink(tmpFile).catch(() => {});
-
+        activeStage = 'conversion';
         await job.updateProgress(90);
-        await updateVersionLog(versionId, 'Updating database with results...');
         const desktopVariant = assetVariants?.desktop;
         const readyKey = desktopVariant?.lodManifestKey || fullKey;
         const readyFormat = desktopVariant ? 'lod-meta' : productionFormat;
 
-        // Mark version as ready with all collected info
+        await updateVersionLog(
+          versionId,
+          `STAGE conversion COMPLETED: ${readyFormat}, ${splatCount.toLocaleString()} splats`,
+        );
+
+        // READY is written last so clients always receive the complete stage log.
         await markVersionReady(splatId, versionId, {
           convertedKey: readyKey,
           productionFormat: readyFormat,
@@ -1190,23 +1272,6 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
         });
 
         await job.updateProgress(100);
-        await updateVersionLog(versionId, `Conversion complete: ${productionFormat}, ~${splatCount.toLocaleString()} splats`);
-
-        // Auto-enqueue preview generation after successful conversion
-        try {
-          await splatQueue.add('splat.generatePreview', {
-            splatId,
-            versionId,
-            sourceObjectKey: fullKey,
-            jobType: 'splat.generatePreview',
-          }, {
-            attempts: 3,
-            backoff: { type: 'exponential', delay: 5000 },
-          });
-          await updateVersionLog(versionId, 'Enqueued preview generation...');
-        } catch (enqueueErr) {
-          console.warn(`[worker] Failed to enqueue preview for splat ${splatId}: ${enqueueErr}`);
-        }
 
         return {
           productionObjectKey: readyKey,
@@ -1215,14 +1280,19 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
           fileSize: stats.size,
           assetVariants,
         };
+        } finally {
+          await fs.promises.unlink(tmpFile).catch(() => undefined);
+        }
       }
 
       case 'splat.generateLod': {
+        activeStage = 'lod';
         if (!sourceObjectKey) throw new Error('sourceObjectKey required for LOD generation');
         return generatePlayCanvasLod(job, splatId, versionId, sourceObjectKey);
       }
 
       case 'splat.generatePreview': {
+        activeStage = 'preview';
         await job.updateProgress(10);
         await updateVersionLog(versionId, 'Generating poster image...');
 
@@ -1431,13 +1501,41 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
     }
   } catch (error: any) {
     console.error(`[worker] Job ${job.id} failed:`, error.message);
-    await markVersionFailed(versionId, splatId, error.message);
+    if (jobType === 'splat.generateLod' || jobType === 'splat.generatePreview') {
+      const usableVersion = await prisma.splatVersion.findUnique({
+        where: { id: versionId },
+        select: { processingStatus: true, convertedKey: true },
+      });
+      if (usableVersion?.processingStatus === 'READY' || usableVersion?.convertedKey) {
+        await updateVersionLog(versionId, `STAGE ${activeStage} SKIPPED: ${error.message}`);
+        if (usableVersion.processingStatus !== 'READY') {
+          await markVersionReady(splatId, versionId, {});
+        }
+        return { skipped: true, reason: error.message };
+      }
+    }
+    await markVersionFailed(versionId, splatId, activeStage, error.message);
     throw error;
   }
 }
 
 async function start() {
   console.log('[worker] Starting GSplat worker...');
+
+  const staleBefore = Date.now() - 24 * 60 * 60 * 1000;
+  for (const entry of await fs.promises.readdir(os.tmpdir(), { withFileTypes: true })) {
+    if (!entry.name.startsWith('gsplat-worker-') && !entry.name.startsWith('splat-variants-')) continue;
+    const candidate = path.resolve(os.tmpdir(), entry.name);
+    if (path.dirname(candidate) !== path.resolve(os.tmpdir())) continue;
+    try {
+      const stats = await fs.promises.stat(candidate);
+      if (stats.mtimeMs < staleBefore) {
+        await fs.promises.rm(candidate, { recursive: entry.isDirectory(), force: true });
+      }
+    } catch (error) {
+      console.warn(`[worker] Could not clean stale temp path ${candidate}:`, error);
+    }
+  }
 
   // Connect to database
   await prisma.$connect();
@@ -1449,17 +1547,31 @@ async function start() {
 
   await ensureBucket();
 
+  const configuredConcurrency = Number.parseInt(process.env.WORKER_CONCURRENCY || '1', 10);
   const worker = new Worker<JobData>('splat-processing', processJob, {
     connection: redisConnection,
-    concurrency: 2,
+    concurrency: Number.isFinite(configuredConcurrency) ? Math.max(1, Math.min(configuredConcurrency, 4)) : 1,
   });
 
   worker.on('completed', (job) => {
     console.log(`[worker] Job ${job.id} completed successfully`);
   });
 
-  worker.on('failed', (job, error) => {
+  worker.on('failed', async (job, error) => {
     console.error(`[worker] Job ${job?.id} failed:`, error.message);
+    if (!job) return;
+    const current = await prisma.splatVersion.findUnique({
+      where: { id: job.data.versionId },
+      select: { processingStatus: true },
+    }).catch(() => null);
+    if (current?.processingStatus === 'RUNNING') {
+      const stage = job.data.jobType === 'splat.convert'
+        ? 'worker'
+        : job.data.jobType.replace('splat.', '');
+      await markVersionFailed(job.data.versionId, job.data.splatId, stage, error.message).catch((markError) => {
+        console.error(`[worker] Could not persist terminal job failure for ${job?.id}:`, markError);
+      });
+    }
   });
 
   console.log('[worker] Worker started, listening on "splat-processing" queue');

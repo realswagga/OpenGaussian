@@ -18,9 +18,10 @@ import {
   PREVIEW_MAX_BYTES,
   readImageDimensions,
 } from '../../lib/previewImages.js';
+import { enqueueSplatProcessing } from '../../lib/processingQueue.js';
 
 // Accepted source formats
-const ACCEPTED_EXTENSIONS = ['.ply', '.spz', '.sog', '.meta.json', '.lod-meta.json', '.compressed.ply', '.splat', '.ksplat'];
+const ACCEPTED_EXTENSIONS = ['.ply', '.spz', '.sog', '.meta.json', '.lod-meta.json', '.compressed.ply'];
 
 function getExtension(filename: string): string {
   const parts = filename.toLowerCase().split('.');
@@ -194,57 +195,37 @@ export async function adminUploadRoutes(app: FastifyInstance) {
 
     // After successful upload, auto-enqueue processing
     try {
-      const queue = (app as any).processingQueue;
-      if (queue) {
-        // Mark as processing
-        await prisma.splatVersion.update({
-          where: { id: version.id },
-          data: { processingStatus: 'RUNNING' },
-        });
-
-        await prisma.splat.update({
-          where: { id },
-          data: { status: splat.status === 'PUBLISHED' ? 'PUBLISHED' : 'PROCESSING' },
-        });
-
-        // Enqueue jobs
-        await queue.add('splat.validate', {
-          splatId: id,
-          versionId: version.id,
-          sourceObjectKey: originalKey,
-          jobType: 'splat.validate',
-        });
-
-        await queue.add('splat.extractMetadata', {
-          splatId: id,
-          versionId: version.id,
-          sourceObjectKey: originalKey,
-          jobType: 'splat.extractMetadata',
-        });
-
-        await queue.add('splat.convert', {
-          splatId: id,
-          versionId: version.id,
-          sourceObjectKey: originalKey,
-          jobType: 'splat.convert',
-        });
-
-        app.log.info(`Enqueued processing jobs for splat ${id} version ${nextVersion}`);
+      const queued = await enqueueSplatProcessing(app, prisma, {
+        splatId: id,
+        versionId: version.id,
+        sourceObjectKey: originalKey,
+      });
+      if (queued.status === 'RUNNING') {
+        app.log.info(`Enqueued processing for splat ${id} version ${nextVersion}`);
       }
+      return {
+        version: {
+          id: version.id,
+          version: version.version,
+          sourceKey: version.sourceKey,
+          status: queued.status,
+          processingError: queued.status === 'FAILED' ? queued.error : undefined,
+          fileSize: buffer.length,
+        },
+      };
     } catch (err) {
-      app.log.warn(`Failed to enqueue jobs for splat ${id}: ${err}`);
-      // Don't fail the upload — admin can manually trigger processing
+      app.log.error(`Failed to initialize processing for splat ${id}: ${err}`);
+      return {
+        version: {
+          id: version.id,
+          version: version.version,
+          sourceKey: version.sourceKey,
+          status: 'FAILED',
+          processingError: err instanceof Error ? err.message : String(err),
+          fileSize: buffer.length,
+        },
+      };
     }
-
-    return {
-      version: {
-        id: version.id,
-        version: version.version,
-        sourceKey: version.sourceKey,
-        status: 'RUNNING',
-        fileSize: buffer.length,
-      },
-    };
   });
 
   async function resolvePreviewTarget(request: any, reply: any, action: 'upload' | 'view', explicitVersionId?: string) {

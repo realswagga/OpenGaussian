@@ -16,11 +16,9 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "playcanvas": "^2.18.1",
-    "three": "^0.170.0"
+    "playcanvas": "2.19.7"
   },
   "devDependencies": {
-    "@types/three": "^0.170.0",
     "typescript": "^5.5.0",
     "vitest": "^2.1.0"
   }

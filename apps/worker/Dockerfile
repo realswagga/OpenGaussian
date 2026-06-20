@@ -1,15 +1,15 @@
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY apps/worker/package.json apps/worker/tsconfig.json ./apps/worker/
 COPY apps/api/package.json apps/api/tsconfig.json ./apps/api/
 
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 COPY packages/shared/src ./packages/shared/src
 COPY apps/worker/src ./apps/worker/src
@@ -19,7 +19,7 @@ RUN pnpm run --filter @gsplat/api generate:types
 RUN pnpm run --filter @gsplat/shared build
 RUN pnpm run --filter @gsplat/worker build
 
-FROM node:20-slim AS runner
+FROM node:22-slim AS runner
 
 RUN apt-get update -y && apt-get install -y openssl libssl-dev && rm -rf /var/lib/apt/lists/*
 

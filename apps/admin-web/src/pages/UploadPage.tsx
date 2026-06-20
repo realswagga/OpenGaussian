@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type DragEvent, type FormEvent } from 'react';
+import { useEffect, useState, useRef, type CSSProperties, type DragEvent } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { Card, Badge, Spinner, ProgressBar, Button } from '@gsplat/ui';
 import { useI18n } from '../i18n';
@@ -9,32 +9,39 @@ const MAX_MB = parseInt(import.meta.env.VITE_MAX_UPLOAD_MB || '2048', 10);
 type UploadState = 'idle' | 'uploading' | 'processing' | 'done' | 'error';
 
 interface ProcessingStep {
+  key: 'validation' | 'metadata' | 'conversion' | 'lod' | 'preview';
   status: 'pending' | 'running' | 'done' | 'failed';
   label: string;
   message?: string;
 }
 
 const steps: ProcessingStep[] = [
-  { status: 'pending', label: 'upload.steps.validating' },
-  { status: 'pending', label: 'upload.steps.metadata' },
-  { status: 'pending', label: 'upload.steps.converting' },
-  { status: 'pending', label: 'upload.steps.lod' },
-  { status: 'pending', label: 'upload.steps.preview' },
+  { key: 'validation', status: 'pending', label: 'upload.steps.validating' },
+  { key: 'metadata', status: 'pending', label: 'upload.steps.metadata' },
+  { key: 'conversion', status: 'pending', label: 'upload.steps.converting' },
+  { key: 'lod', status: 'pending', label: 'upload.steps.lod' },
+  { key: 'preview', status: 'pending', label: 'upload.steps.preview' },
 ];
 
-const stepLogLabels: Record<string, string> = {
-  'upload.steps.validating': 'Validating',
-  'upload.steps.metadata': 'Extracting metadata',
-  'upload.steps.converting': 'Converting',
-  'upload.steps.lod': 'Generating LOD',
-  'upload.steps.preview': 'Generating preview',
-};
+function RunningSplat() {
+  return (
+    <span className="admin-upload-splat" aria-hidden="true">
+      {Array.from({ length: 9 }).map((_, index) => (
+        <i key={index} style={{ '--dot': index } as CSSProperties} />
+      ))}
+    </span>
+  );
+}
 
 export default function UploadPage() {
   const { t } = useI18n();
   const { id } = useParams<{ id: string }>();
   const dropRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const finalizingRef = useRef(false);
+  const finalizingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pollingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const latestLogRef = useRef('');
 
   const [splat, setSplat] = useState<{ id: string; title: string; status: string } | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -54,6 +61,10 @@ export default function UploadPage() {
       .then((data) => setSplat(data.splat || data))
       .catch(() => setError(t('upload.loadFailed')));
   }, [id]);
+
+  useEffect(() => () => {
+    if (finalizingTimerRef.current) clearTimeout(finalizingTimerRef.current);
+  }, []);
 
   // Poll job status via SSE
   useEffect(() => {
@@ -85,15 +96,17 @@ export default function UploadPage() {
                 setJobStatus(data.status);
 
                 if (data.log) {
+                  latestLogRef.current = data.log;
                   setJobLog(data.log);
                   updateStepsFromLog(data.log);
                 }
 
                 if (data.type === 'done') {
-                  setState(data.status === 'READY' ? 'done' : 'error');
+                  if (data.status === 'READY') finishProcessing();
+                  else failProcessing(data.log || '');
                 }
-                if (data.type === 'timeout' || data.type === 'error') {
-                  setState('error');
+                if (data.type === 'error') {
+                  failProcessing(data.log || data.message || '');
                 }
               } catch { /* ignore parse errors */ }
             }
@@ -102,35 +115,66 @@ export default function UploadPage() {
       })
       .catch(() => {
         // Connection failed — fallback to polling
-        const interval = setInterval(async () => {
+        pollingTimerRef.current = setInterval(async () => {
           try {
             const r = await fetch(`${API_BASE}/admin/jobs/${jobId}`, { credentials: 'include' });
-            if (!r.ok) { clearInterval(interval); return; }
+            if (!r.ok) return;
             const data = await r.json();
             setJobStatus(data.job.status);
             if (data.job.log) {
+              latestLogRef.current = data.job.log;
               setJobLog(data.job.log);
               updateStepsFromLog(data.job.log);
             }
-            if (data.job.status === 'READY') { setState('done'); clearInterval(interval); }
-            if (data.job.status === 'FAILED') { setState('error'); clearInterval(interval); }
-          } catch { clearInterval(interval); }
+            if (data.job.status === 'READY' && pollingTimerRef.current) { finishProcessing(); clearInterval(pollingTimerRef.current); }
+            if (data.job.status === 'FAILED' && pollingTimerRef.current) { failProcessing(data.job.log || ''); clearInterval(pollingTimerRef.current); }
+          } catch { /* keep polling through transient network failures */ }
         }, 3000);
-        return () => clearInterval(interval);
       });
 
-    return () => abort.abort();
+    return () => {
+      abort.abort();
+      if (pollingTimerRef.current) clearInterval(pollingTimerRef.current);
+      pollingTimerRef.current = null;
+    };
   }, [jobId, state]);
 
   function updateStepsFromLog(log: string) {
-    setProcessSteps((prev) =>
-      prev.map((s) => {
-        if (log.includes(stepLogLabels[s.label] || s.label)) {
-          return { ...s, status: log.includes('FAILED') ? 'failed' : log.includes('complete') ? 'done' : 'running', message: log };
-        }
-        return s;
-      }),
-    );
+    const lines = log.split('\n');
+    setProcessSteps((previous) => previous.map((step) => {
+      if (step.key === 'preview') return step;
+      const stageLines = lines.filter((line) => line.includes(`STAGE ${step.key} `));
+      if (stageLines.some((line) => line.includes(' FAILED:'))) return { ...step, status: 'failed', message: stageLines.at(-1) };
+      if (stageLines.some((line) => line.includes(' COMPLETED:') || line.includes(' SKIPPED:'))) {
+        return { ...step, status: 'done', message: stageLines.at(-1) };
+      }
+      if (stageLines.some((line) => line.includes(' STARTED'))) return { ...step, status: 'running', message: stageLines.at(-1) };
+      return step;
+    }));
+  }
+
+  function finishProcessing() {
+    if (finalizingRef.current) return;
+    finalizingRef.current = true;
+    setProcessSteps((previous) => previous.map((step) => ({
+      ...step,
+      status: step.key === 'preview' ? 'running' : 'done',
+    })));
+    finalizingTimerRef.current = setTimeout(() => {
+      setProcessSteps((previous) => previous.map((step) => (
+        step.key === 'preview' ? { ...step, status: 'done', message: 'Preview handoff prepared' } : step
+      )));
+      setState('done');
+      finalizingRef.current = false;
+      finalizingTimerRef.current = null;
+    }, 1400);
+  }
+
+  function failProcessing(log: string) {
+    const resolvedLog = log || latestLogRef.current;
+    const failure = resolvedLog.split('\n').reverse().find((line) => line.includes(' FAILED:'));
+    setError(failure?.replace(/^STAGE\s+\w+\s+FAILED:\s*/, '') || t('upload.processingFailed'));
+    setState('error');
   }
 
   const handleDragOver = (e: DragEvent) => { e.preventDefault(); setDragOver(true); };
@@ -148,10 +192,10 @@ export default function UploadPage() {
   };
 
   const validateAndSetFile = (f: File) => {
-    const ext = '.' + f.name.split('.').pop()?.toLowerCase();
-    const accepted = ['.ply', '.spz', '.sog', '.json', '.compressed.ply'];
-    const isCompressedPly = f.name.toLowerCase().endsWith('.compressed.ply');
-    const extOk = accepted.includes(ext) || isCompressedPly;
+    const lowerName = f.name.toLowerCase();
+    const accepted = ['.ply', '.spz', '.sog', '.compressed.ply', '.meta.json', '.lod-meta.json'];
+    const ext = accepted.find((suffix) => lowerName.endsWith(suffix)) || `.${lowerName.split('.').pop()}`;
+    const extOk = accepted.some((suffix) => lowerName.endsWith(suffix));
     if (!extOk) {
       setError(t('upload.unsupported', { ext, formats: accepted.join(', ') }));
       return;
@@ -183,10 +227,20 @@ export default function UploadPage() {
 
     xhr.addEventListener('load', async () => {
       if (xhr.status >= 200 && xhr.status < 300) {
-        const data = JSON.parse(xhr.responseText);
-        setJobId(data.version?.id);
-        setState('processing');
-        setJobStatus('RUNNING');
+        try {
+          const data = JSON.parse(xhr.responseText);
+          setJobId(data.version?.id);
+          setJobStatus(data.version?.status || 'RUNNING');
+          if (data.version?.status === 'FAILED') {
+            setError(data.version.processingError || t('upload.processingFailed'));
+            setState('error');
+          } else {
+            setState('processing');
+          }
+        } catch {
+          setError(t('upload.processingFailed'));
+          setState('error');
+        }
       } else {
         try {
           const data = JSON.parse(xhr.responseText);
@@ -204,6 +258,21 @@ export default function UploadPage() {
     xhr.send(formData);
   };
 
+  const resetUpload = () => {
+    if (finalizingTimerRef.current) clearTimeout(finalizingTimerRef.current);
+    finalizingTimerRef.current = null;
+    finalizingRef.current = false;
+    setState('idle');
+    setFile(null);
+    setJobId(null);
+    setJobStatus('');
+    setJobLog('');
+    latestLogRef.current = '';
+    setError('');
+    setUploadProgress(0);
+    setProcessSteps(steps.map((step) => ({ ...step, status: 'pending' as const, message: undefined })));
+  };
+
   if (!id) {
     return <div style={{ padding: '2rem', color: 'var(--admin-danger, var(--color-error))' }}>{t('upload.noSplatId')}</div>;
   }
@@ -211,17 +280,8 @@ export default function UploadPage() {
   const stepIcon = (status: string) => {
     switch (status) {
       case 'done': return '✓';
-      case 'running': return '⏳';
-      case 'failed': return '✗';
-      default: return '○';
-    }
-  };
-  const stepColor = (status: string) => {
-    switch (status) {
-      case 'done': return '#22c55e';
-      case 'running': return '#eab308';
-      case 'failed': return 'var(--admin-danger, var(--color-error))';
-      default: return 'var(--color-rule)';
+      case 'failed': return '×';
+      default: return '·';
     }
   };
 
@@ -232,9 +292,7 @@ export default function UploadPage() {
       </h1>
 
       {error && (
-        <Card style={{ borderColor: 'var(--admin-danger, var(--color-error))', background: 'oklch(70% 0.14 25 / 0.14)', padding: '0.75rem 1rem', marginBottom: '1rem' }}>
-          <p style={{ color: 'var(--admin-danger, var(--color-error))', fontSize: '0.8125rem', margin: 0 }}>{error}</p>
-        </Card>
+        <div className="admin-error" style={{ marginBottom: '1rem' }} role="alert">{error}</div>
       )}
 
       {state === 'idle' && (
@@ -294,7 +352,7 @@ export default function UploadPage() {
           <input
             ref={fileInputRef}
             type="file"
-            accept=".ply,.spz,.sog,.compressed.ply,.json"
+            accept=".ply,.spz,.sog,.compressed.ply,.meta.json,.lod-meta.json"
             style={{ display: 'none' }}
             onChange={handleFileSelect}
           />
@@ -313,13 +371,13 @@ export default function UploadPage() {
       )}
 
       {/* Processing state */}
-      {(state === 'processing' || state === 'done') && (
-        <Card style={{ padding: '1.5rem' }}>
+      {(state === 'processing' || state === 'done' || (state === 'error' && jobId)) && (
+        <Card className="admin-upload-process" style={{ padding: '1.5rem' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1.25rem' }}>
-            {state === 'processing' ? <Spinner size="sm" /> : <span style={{ fontSize: '1.25rem' }}>✓</span>}
+            {state === 'processing' ? <Spinner size="sm" /> : <span className={`admin-upload-result admin-upload-result--${state}`} aria-hidden="true">{state === 'done' ? '✓' : '×'}</span>}
             <div>
               <p style={{ color: 'var(--admin-ink, var(--color-ink))', fontSize: '0.875rem', fontWeight: 600, margin: 0 }}>
-                {state === 'done' ? t('upload.complete') : t('upload.processing')}
+                {state === 'done' ? t('upload.complete') : state === 'error' ? t('upload.processingFailed') : t('upload.processing')}
               </p>
               <p style={{ color: 'var(--admin-muted, var(--color-muted))', fontSize: '0.75rem', margin: '0.125rem 0 0' }}>
                 {jobStatus && <Badge variant={jobStatus === 'READY' ? 'success' : jobStatus === 'FAILED' ? 'danger' : 'warning'}>{jobStatus}</Badge>}
@@ -330,9 +388,9 @@ export default function UploadPage() {
           {/* Step progress */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
             {processSteps.map((s) => (
-              <div key={s.label} style={{ display: 'flex', alignItems: 'center', gap: '0.625rem', fontSize: '0.8125rem' }}>
-                <span style={{ color: stepColor(s.status), width: 16, textAlign: 'center' }}>{stepIcon(s.status)}</span>
-                <span style={{ color: s.status === 'pending' ? 'var(--admin-muted, var(--color-muted))' : 'var(--admin-ink, var(--color-ink))' }}>{t(s.label)}</span>
+              <div key={s.label} className={`admin-upload-step is-${s.status}`}>
+                <span className="admin-upload-step__mark">{s.status === 'running' ? <RunningSplat /> : stepIcon(s.status)}</span>
+                <span>{t(s.label)}</span>
               </div>
             ))}
           </div>
@@ -350,18 +408,25 @@ export default function UploadPage() {
               <Link to={`/splats/${id}`} style={{ textDecoration: 'none' }}>
                 <Button variant="primary">{t('upload.back')}</Button>
               </Link>
-              <Button variant="secondary" onClick={() => {
-                setState('idle');
-                setFile(null);
-                setJobId(null);
-                setJobLog('');
-                setProcessSteps(steps.map((s) => ({ ...s, status: 'pending' as const })));
-              }}>
+              <Button variant="secondary" onClick={resetUpload}>
                 {t('upload.another')}
               </Button>
             </div>
           )}
+
+          {state === 'error' && (
+            <div style={{ marginTop: '1.25rem', display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+              <Link to={`/splats/${id}`} style={{ textDecoration: 'none' }}>
+                <Button variant="secondary">{t('upload.back')}</Button>
+              </Link>
+              <Button variant="primary" onClick={resetUpload}>{t('upload.tryAgain')}</Button>
+            </div>
+          )}
         </Card>
+      )}
+
+      {state === 'error' && !jobId && (
+        <Button variant="primary" onClick={resetUpload}>{t('upload.tryAgain')}</Button>
       )}
     </div>
   );

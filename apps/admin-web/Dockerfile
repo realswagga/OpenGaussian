@@ -1,15 +1,15 @@
-FROM node:20-alpine AS builder
+FROM node:22-alpine AS builder
 RUN corepack enable && corepack prepare pnpm@9 --activate
 
 WORKDIR /app
 
-COPY pnpm-workspace.yaml package.json tsconfig.base.json ./
+COPY pnpm-workspace.yaml pnpm-lock.yaml package.json tsconfig.base.json ./
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 COPY packages/ui/package.json packages/ui/tsconfig.json ./packages/ui/
 COPY packages/viewer-core/package.json packages/viewer-core/tsconfig.json ./packages/viewer-core/
 COPY apps/admin-web/package.json apps/admin-web/tsconfig.json ./apps/admin-web/
 
-RUN pnpm install --no-frozen-lockfile
+RUN pnpm install --frozen-lockfile
 
 COPY packages/shared/src ./packages/shared/src
 COPY packages/ui/src ./packages/ui/src
