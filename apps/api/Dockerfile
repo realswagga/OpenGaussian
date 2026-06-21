@@ -18,9 +18,16 @@ RUN pnpm run --filter @gsplat/api generate:types
 RUN pnpm run --filter @gsplat/shared build
 RUN pnpm run --filter @gsplat/api build
 
-FROM node:22-slim AS runner
+FROM node:22-bookworm-slim AS runner
 
-RUN apt-get update -y && apt-get install -y openssl libssl-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update -y \
+    && apt-get install -y openssl libssl-dev ca-certificates curl gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.gpg] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update -y \
+    && apt-get install -y postgresql-client-16 \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -33,6 +40,8 @@ COPY --from=builder /app/apps/api/prisma ./apps/api/prisma
 COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
 COPY apps/api/entrypoint.sh ./apps/api/entrypoint.sh
+
+RUN mkdir -p /backups && chmod 700 /backups
 
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
 COPY --from=builder /app/packages/shared/src ./packages/shared/src

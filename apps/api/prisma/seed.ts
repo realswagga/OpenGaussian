@@ -39,6 +39,21 @@ async function main() {
   // Ensure bucket exists
   await ensureBucket(s3, bucket);
 
+  const [users, organizations, memberships, splats, versions, annotations, presets, settings] = await Promise.all([
+    prisma.user.count(),
+    prisma.organization.count(),
+    prisma.organizationMembership.count(),
+    prisma.splat.count(),
+    prisma.splatVersion.count(),
+    prisma.annotation.count(),
+    prisma.viewerPreset.count(),
+    prisma.appSetting.count(),
+  ]);
+  if (users + organizations + memberships + splats + versions + annotations + presets + settings > 0) {
+    console.log('[seed] Existing project data detected; bootstrap seed skipped without modifying records.');
+    return;
+  }
+
   // ── Admin user ──
   const adminEmail = process.env.ADMIN_SEED_EMAIL || 'admin@example.com';
   const adminPassword = process.env.ADMIN_SEED_PASSWORD || 'admin12345';
@@ -46,10 +61,7 @@ async function main() {
 
   const admin = await prisma.user.upsert({
     where: { email: adminEmail },
-    update: {
-      role: 'MASTER_ADMIN',
-      passwordHash,
-    },
+    update: {},
     create: {
       email: adminEmail,
       passwordHash,

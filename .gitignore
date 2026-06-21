@@ -9,6 +9,7 @@ hallmark/
 *.log
 .turbo/
 coverage/
+backups/
 .vite/
 *.tsbuildinfo
 minio-data/

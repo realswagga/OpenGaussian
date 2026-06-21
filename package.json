@@ -14,11 +14,15 @@
   },
   "pnpm": {
     "overrides": {
-      "ioredis": "5.10.1"
+      "ioredis": "5.10.1",
+      "expect-type": "1.2.2"
     }
   },
   "engines": {
     "node": ">=20.0.0",
     "pnpm": ">=9.0.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.52.0"
   }
 }

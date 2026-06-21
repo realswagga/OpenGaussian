@@ -1,15 +1,14 @@
 services:
   nginx:
     image: nginx:alpine
-    depends_on:
-      - public-web
-      - admin-web
-      - api
-      - minio
+    depends_on: [public-web, admin-web, api, minio]
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-gsplat-assets}
+    command: /bin/sh -c "sed 's/__S3_BUCKET__/'\"$${S3_BUCKET}\"'/g' /etc/nginx/nginx.conf.template > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
     ports:
-      - '8080:80'
+      - '${APP_PORT:-8080}:80'
     volumes:
-      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
     restart: unless-stopped
 
   public-web:
@@ -17,13 +16,11 @@ services:
       context: .
       dockerfile: apps/public-web/Dockerfile
     environment:
-      - VITE_API_BASE_URL=/api
-      - VITE_ASSET_BASE_URL=/assets
+      VITE_API_BASE_URL: /api
+      VITE_ASSET_BASE_URL: /assets
     depends_on:
-      api:
-        condition: service_started
-      minio:
-        condition: service_healthy
+      api: { condition: service_started }
+      minio: { condition: service_healthy }
     restart: unless-stopped
 
   admin-web:
@@ -31,77 +28,98 @@ services:
       context: .
       dockerfile: apps/admin-web/Dockerfile
     environment:
-      - VITE_API_BASE_URL=/api
+      VITE_API_BASE_URL: /api
     restart: unless-stopped
 
   api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/gsplat
-      - REDIS_URL=redis://redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_BUCKET=gsplat-assets
-      - S3_FORCE_PATH_STYLE=true
-      - JWT_SECRET=local-dev-secret-change-me
-      - ADMIN_SEED_EMAIL=admin@example.com
-      - ADMIN_SEED_PASSWORD=admin12345
-      - MAX_UPLOAD_MB=2048
-      - ASSET_PUBLIC_URL=/assets
-      - API_PUBLIC_URL=/api
-      - APP_PUBLIC_URL=http://localhost:8080
-      - S3_PUBLIC_ENDPOINT=http://localhost:8080/assets
-      - DEFAULT_LOD_BUDGET=1500000
-      - DEFAULT_MOBILE_LOD_BUDGET=500000
-      - DEFAULT_VR_LOD_BUDGET=60000
+    environment: &app-environment
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@postgres:5432/gsplat}
+      POSTGRES_DB: ${POSTGRES_DB:-gsplat}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      S3_PUBLIC_ENDPOINT: ${S3_PUBLIC_ENDPOINT:-http://localhost:8080/assets}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      S3_BUCKET: ${S3_BUCKET:-gsplat-assets}
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-true}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-me}
+      ADMIN_SEED_EMAIL: ${ADMIN_SEED_EMAIL:-admin@example.com}
+      ADMIN_SEED_PASSWORD: ${ADMIN_SEED_PASSWORD:-admin12345}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-2048}
+      MAX_PREVIEW_UPLOAD_MB: ${MAX_PREVIEW_UPLOAD_MB:-8}
+      ASSET_PUBLIC_URL: ${ASSET_PUBLIC_URL:-/assets}
+      API_PUBLIC_URL: ${API_PUBLIC_URL:-/api}
+      APP_PUBLIC_URL: ${APP_PUBLIC_URL:-http://localhost:8080}
+      DEFAULT_LOD_BUDGET: ${DEFAULT_LOD_BUDGET:-1500000}
+      DEFAULT_MOBILE_LOD_BUDGET: ${DEFAULT_MOBILE_LOD_BUDGET:-500000}
+      DEFAULT_VR_LOD_BUDGET: ${DEFAULT_VR_LOD_BUDGET:-60000}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-1}
+      TRANSFER_BACKUP_DIR: /backups
+      TRANSFER_DRAIN_TIMEOUT_MS: ${TRANSFER_DRAIN_TIMEOUT_MS:-300000}
+      APP_PORT: ${APP_PORT:-8080}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      MINIO_API_PORT: ${MINIO_API_PORT:-9000}
+      MINIO_CONSOLE_PORT: ${MINIO_CONSOLE_PORT:-9001}
+      BUILD_COMMIT: ${BUILD_COMMIT:-unknown}
+    volumes:
+      - ./backups:/backups
     depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_started
-      minio:
-        condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
+    healthcheck:
+      test: ['CMD', 'node', '-e', "fetch('http://localhost:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   worker:
     build:
       context: .
       dockerfile: apps/worker/Dockerfile
-    environment:
-      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/gsplat
-      - REDIS_URL=redis://redis:6379
-      - S3_ENDPOINT=http://minio:9000
-      - S3_ACCESS_KEY=minioadmin
-      - S3_SECRET_KEY=minioadmin
-      - S3_BUCKET=gsplat-assets
-      - S3_FORCE_PATH_STYLE=true
-      - WORKER_CONCURRENCY=1
-      - NODE_OPTIONS=--max-old-space-size=4096
-    depends_on:
-      - api
-      - postgres
-      - redis
-      - minio
+    environment: *app-environment
+    depends_on: [api, postgres, redis, minio]
     restart: unless-stopped
+
+  transfer:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    entrypoint: ['node', 'apps/api/dist/transfer/cli.js']
+    environment: *app-environment
+    volumes:
+      - ./backups:/backups
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_started }
+      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
 
   postgres:
     image: postgres:16-alpine
     environment:
-      - POSTGRES_DB=gsplat
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      POSTGRES_DB: ${POSTGRES_DB:-gsplat}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     ports:
-      - '5432:5432'
+      - '${POSTGRES_PORT:-5432}:5432'
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres -d gsplat']
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
       timeout: 5s
       retries: 5
@@ -110,20 +128,20 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - '6379:6379'
+      - '${REDIS_PORT:-6379}:6379'
     restart: unless-stopped
 
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:
-      - MINIO_ROOT_USER=minioadmin
-      - MINIO_ROOT_PASSWORD=minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     volumes:
       - minio-data:/data
     ports:
-      - '9000:9000'
-      - '9001:9001'
+      - '${MINIO_API_PORT:-9000}:9000'
+      - '${MINIO_CONSOLE_PORT:-9001}:9001'
     healthcheck:
       test: ['CMD', 'mc', 'ready', 'local']
       interval: 5s
@@ -131,18 +149,20 @@ services:
       retries: 5
     restart: unless-stopped
 
-  # MinIO bucket initialization - sets public-read policy for asset serving
   minio-init:
     image: minio/mc:latest
+    environment:
+      S3_BUCKET: ${S3_BUCKET:-gsplat-assets}
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
     depends_on:
-      minio:
-        condition: service_healthy
+      minio: { condition: service_healthy }
     entrypoint: |
       /bin/sh -c "
-      mc alias set local http://minio:9000 minioadmin minioadmin;
-      mc mb --ignore-existing local/gsplat-assets;
-      mc anonymous set public local/gsplat-assets;
-      echo 'Bucket gsplat-assets set to public-read';
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD};
+      mc mb --ignore-existing local/$${S3_BUCKET};
+      mc anonymous set public local/$${S3_BUCKET};
+      echo 'Bucket initialized';
       "
 
 volumes:

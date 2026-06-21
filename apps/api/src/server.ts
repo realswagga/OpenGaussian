@@ -17,7 +17,12 @@ import { adminUploadRoutes } from './routes/admin/upload.js';
 import { adminStatsRoutes } from './routes/admin/stats.js';
 import { adminOrganizationRoutes } from './routes/admin/organizations.js';
 import { adminSettingsRoutes } from './routes/admin/settings.js';
+import { adminTransferRoutes } from './routes/admin/transfer.js';
 import { errorHandler } from './middleware/error-handler.js';
+import { beginMutation, endMutation, isTransferLocked } from './transfer/barrier.js';
+import { enqueueSplatProcessing } from './lib/processingQueue.js';
+import { access, rm } from 'node:fs/promises';
+import path from 'node:path';
 
 const prisma = new PrismaClient();
 
@@ -54,6 +59,20 @@ async function start() {
       fileSize: (Number(process.env.MAX_UPLOAD_MB) || 2048) * 1024 * 1024,
     },
   });
+  app.addContentTypeParser('application/octet-stream', { parseAs: 'buffer' }, (_request, body, done) => done(null, body));
+
+  app.addHook('onRequest', async (request, reply) => {
+    const mutating = !['GET', 'HEAD', 'OPTIONS'].includes(request.method);
+    const transferRoute = request.url.startsWith('/api/admin/transfer/');
+    const safeAuthRoute = request.url.startsWith('/api/auth/login') || request.url.startsWith('/api/auth/logout');
+    if (mutating && !transferRoute && !safeAuthRoute && isTransferLocked()) {
+      return reply.status(423).send({ error: { code: 'TRANSFER_IN_PROGRESS', message: 'Project export is in progress' } });
+    }
+    if (mutating && !transferRoute) beginMutation();
+  });
+  app.addHook('onResponse', async (request) => {
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(request.method) && !request.url.startsWith('/api/admin/transfer/')) endMutation();
+  });
 
   // Decorate with prisma and queue
   app.decorate('prisma', prisma);
@@ -74,6 +93,7 @@ async function start() {
   await app.register(adminAnnotationRoutes, { prefix: '/api/admin' });
   await app.register(adminJobRoutes, { prefix: '/api/admin' });
   await app.register(adminUploadRoutes, { prefix: '/api/admin' });
+  await app.register(adminTransferRoutes, { prefix: '/api/admin' });
 
   // Start server
   const port = Number(process.env.PORT) || 4000;
@@ -82,6 +102,22 @@ async function start() {
   try {
     await app.listen({ port, host });
     console.log(`API server listening on ${host}:${port}`);
+    const reconcileMarker = path.join(process.env.TRANSFER_BACKUP_DIR || '/backups', '.reconcile-queue');
+    if (await access(reconcileMarker).then(() => true).catch(() => false)) {
+      const unfinished = await prisma.splatVersion.findMany({
+        where: { processingStatus: { in: ['PENDING', 'RUNNING'] } },
+        select: { id: true, splatId: true, sourceKey: true },
+      });
+      for (const version of unfinished) {
+        await enqueueSplatProcessing(app, prisma, {
+          splatId: version.splatId,
+          versionId: version.id,
+          sourceObjectKey: version.sourceKey,
+          jobId: `reconcile-${version.id}`,
+        }).catch((error) => app.log.error(error));
+      }
+      await rm(reconcileMarker, { force: true });
+    }
   } catch (err) {
     app.log.error(err);
     process.exit(1);

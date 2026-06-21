@@ -1396,3 +1396,12 @@ button {
   }
 }
 
+.transfer-controls .form-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:16px; margin-bottom:16px; }
+.transfer-controls label { display:grid; gap:6px; }
+.transfer-controls input { width:100%; }
+.transfer-list { display:grid; gap:12px; }
+.transfer-item { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px; border:1px solid var(--border, #d8dce2); border-radius:12px; }
+.transfer-item p { margin:4px 0 0; color:var(--text-muted, #667085); }
+.transfer-actions { display:flex; gap:8px; flex-wrap:wrap; }
+.transfer-command { overflow:auto; padding:14px; border-radius:10px; background:#111827; color:#f9fafb; white-space:pre-wrap; }
+@media (max-width: 760px) { .transfer-item { align-items:flex-start; flex-direction:column; } }

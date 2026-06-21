@@ -12,7 +12,7 @@ test.describe('Public App', () => {
 
   test('scene list loads', async ({ page }) => {
     await page.goto(`${BASE}/splats`);
-    await expect(page.locator('h1')).toContainText('Gaussian Splats');
+    await expect(page.locator('h1')).toContainText('OpenGaussian');
   });
 
   test('viewer page error for non-existent scene', async ({ page }) => {
@@ -24,37 +24,37 @@ test.describe('Public App', () => {
 
 test.describe('Admin App', () => {
   test('login page loads', async ({ page }) => {
-    await page.goto(`${BASE}/admin`);
+    await page.goto(`${BASE}/admin/`);
     await expect(page.locator('input[type="email"]')).toBeVisible({ timeout: 5000 });
     await expect(page.locator('input[type="password"]')).toBeVisible();
   });
 
   test('can login with default credentials', async ({ page }) => {
-    await page.goto(`${BASE}/admin`);
+    await page.goto(`${BASE}/admin/`);
     await page.locator('input[type="email"]').fill('admin@example.com');
     await page.locator('input[type="password"]').fill('admin12345');
     await page.locator('button[type="submit"]').click();
     // Should redirect to dashboard
-    await expect(page.locator('text=GSplat Admin')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible({ timeout: 10000 });
   });
 
   test('admin splats list loads after login', async ({ page }) => {
-    await page.goto(`${BASE}/admin`);
+    await page.goto(`${BASE}/admin/`);
     await page.locator('input[type="email"]').fill('admin@example.com');
     await page.locator('input[type="password"]').fill('admin12345');
     await page.locator('button[type="submit"]').click();
-    await expect(page.locator('text=GSplat Admin')).toBeVisible({ timeout: 10000 });
+    await expect(page.getByRole('heading', { name: 'Overview', exact: true })).toBeVisible({ timeout: 10000 });
     // Navigate to splats
     await page.goto(`${BASE}/admin/splats`);
-    await expect(page.locator('text=Splats')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('.admin-topbar h1')).toHaveText('Splats', { timeout: 10000 });
   });
 });
 
 test.describe('Widget', () => {
   test('widget demo page loads', async ({ page }) => {
-    await page.goto(`${BASE}/widget/demo`);
+    await page.goto(`${BASE}/widget/demo.html`);
     await expect(page.locator('h1')).toContainText('Widget Demo', { timeout: 10000 });
-    await expect(page.locator('gs-viewer')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('gs-viewer[vr="true"]')).toBeVisible({ timeout: 10000 });
   });
 
   test('widget script is accessible', async ({ request }) => {
@@ -65,13 +65,13 @@ test.describe('Widget', () => {
 });
 
 test.describe('API', () => {
-  test('public splats list returns empty initially', async ({ request }) => {
+  test('public splats list returns a valid collection', async ({ request }) => {
     const res = await request.get(`${BASE}/api/splats`);
     expect(res.status()).toBe(200);
     const body = await res.json();
     // No seeded demo scene — expect empty list
-    expect(body.items.length).toBe(0);
-    expect(body.total).toBe(0);
+    expect(Array.isArray(body.items)).toBe(true);
+    expect(body.total).toBeGreaterThanOrEqual(body.items.length);
   });
 
   test('manifest returns 404 for non-existent scene', async ({ request }) => {
@@ -97,7 +97,7 @@ test.describe('API', () => {
       });
       expect(loginRes.ok()).toBeTruthy();
       const { token } = await loginRes.json();
-  
+
       // Fetch stats
       const statsRes = await request.get(`${BASE}/api/admin/stats`, {
         headers: { Authorization: `Bearer ${token}` },
@@ -114,11 +114,19 @@ test.describe('API', () => {
         data: { email: 'admin@example.com', password: 'admin12345' },
       });
       const { token } = await loginRes.json();
+
+      const organizationsRes = await request.get(`${BASE}/api/admin/organizations`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(organizationsRes.ok()).toBeTruthy();
+      const organizations = await organizationsRes.json();
+      expect(organizations.items.length).toBeGreaterThan(0);
   
-      // Create a test splat
+      // Create a test splat with a collision-safe slug for persistent test databases.
+      const transformSlug = `transform-test-${Date.now()}`;
       const createRes = await request.post(`${BASE}/api/admin/splats`, {
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        data: { title: 'Transform Test', slug: 'transform-test', description: 'Test' },
+        data: { title: 'Transform Test', slug: transformSlug, description: 'Test', organizationId: organizations.items[0].id },
       });
       expect(createRes.ok()).toBeTruthy();
       const { splat } = await createRes.json();

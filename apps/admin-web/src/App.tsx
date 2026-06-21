@@ -10,12 +10,13 @@ import Annotation3DEditorPage from './pages/Annotation3DEditorPage';
 import OrganizationsPage from './pages/OrganizationsPage';
 import MembersPage from './pages/MembersPage';
 import WidgetPage from './pages/WidgetPage';
+import TransferPage from './pages/TransferPage';
 import { I18nProvider, LanguageSwitch, useI18n } from './i18n';
 import { ThemeSwitch, useTheme } from './theme';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 
-type IconName = 'overview' | 'splats' | 'organizations' | 'members' | 'widget' | 'plus' | 'external' | 'logout';
+type IconName = 'overview' | 'splats' | 'organizations' | 'members' | 'widget' | 'transfer' | 'plus' | 'external' | 'logout';
 
 function Icon({ name }: { name: IconName }) {
   const common = { stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round' as const, strokeLinejoin: 'round' as const };
@@ -53,6 +54,9 @@ function Icon({ name }: { name: IconName }) {
           <path {...common} d="M7 7h10v10H7z" />
           <path {...common} d="M4 4h4M16 4h4M4 20h4M16 20h4M4 8V4M20 8V4M4 16v4M20 16v4" />
         </>
+      )}
+      {name === 'transfer' && (
+        <><path {...common} d="M5 8h14v11H5zM8 5h8v3" /><path {...common} d="M9 13h6M12 10v6" /></>
       )}
       {name === 'plus' && <path {...common} d="M12 5v14M5 12h14" />}
       {name === 'external' && (
@@ -95,6 +99,7 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
     if (location.pathname.startsWith('/organizations')) return t('common.organizations');
     if (location.pathname.startsWith('/members')) return t('common.members');
     if (location.pathname.startsWith('/widget')) return t('common.widget');
+    if (location.pathname.startsWith('/transfer')) return t('transfer.title');
     return t('top.overview');
   }, [location.pathname, t]);
 
@@ -104,6 +109,7 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
     { to: '/organizations', label: t('nav.orgs'), icon: 'organizations', show: true },
     { to: '/members', label: t('common.members'), icon: 'members', show: canManageOrg },
     { to: '/widget', label: t('common.widget'), icon: 'widget', show: canUseWidget },
+    { to: '/transfer', label: t('transfer.nav'), icon: 'transfer', show: isMaster(user) },
   ];
 
   return (
@@ -155,6 +161,7 @@ function AppShell({ user, onLogout }: { user: AuthUser; onLogout: () => void }) 
             <Route path="/organizations" element={<OrganizationsPage user={user} />} />
             <Route path="/members" element={canManageOrg ? <MembersPage user={user} /> : <Navigate to="/" replace />} />
             <Route path="/widget" element={canUseWidget ? <WidgetPage /> : <Navigate to="/" replace />} />
+            <Route path="/transfer" element={isMaster(user) ? <TransferPage /> : <Navigate to="/" replace />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>

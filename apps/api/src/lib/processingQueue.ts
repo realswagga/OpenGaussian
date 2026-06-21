@@ -17,7 +17,7 @@ function appendLog(existing: string | null, message: string): string {
 export async function enqueueSplatProcessing(
   app: FastifyInstance,
   prisma: PrismaClient,
-  input: { splatId: string; versionId: string; sourceObjectKey: string },
+  input: { splatId: string; versionId: string; sourceObjectKey: string; jobId?: string },
 ): Promise<ProcessingQueueResult> {
   const [splat, version] = await Promise.all([
     prisma.splat.findUnique({
@@ -61,7 +61,7 @@ export async function enqueueSplatProcessing(
       sourceObjectKey: input.sourceObjectKey,
       jobType: 'splat.convert',
     }, {
-      jobId: `process-${input.versionId}-${Date.now()}`,
+      jobId: input.jobId ?? `process-${input.versionId}`,
       attempts: 1,
       removeOnComplete: { count: 200 },
       removeOnFail: { count: 200 },

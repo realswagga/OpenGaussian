@@ -10,5 +10,7 @@ export type {
   LandingFeaturedSettings,
   LandingFeaturedResponse,
   AdminLandingFeaturedResponse,
+  TransferArchiveSummary,
+  TransferJobProgress,
 } from './types.js';
 export { pretransformSchema, pretransformUpdateSchema, defaultCameraSchema } from './schemas.js';

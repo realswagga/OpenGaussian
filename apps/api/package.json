@@ -8,6 +8,7 @@
     "build": "tsc",
     "start": "node dist/server.js",
     "lint": "tsc --noEmit",
+    "test": "tsx --test src/transfer/__tests__/*.test.ts",
     "generate:types": "prisma generate",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",

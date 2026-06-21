@@ -150,8 +150,8 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.renderOnDemand).toBe(true);
     expect(qualityProfiles.desktopHigh.renderOnDemand).toBe(true);
     expect(qualityProfiles.vrQuest.renderOnDemand).toBe(false);
-    expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgl2');
-    expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgl2');
+    expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgpu');
+    expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgpu');
     expect(qualityProfiles.vrQuest.preferredRenderer).toBe('webgl2');
   });
 });

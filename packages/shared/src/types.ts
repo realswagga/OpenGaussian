@@ -95,6 +95,29 @@ export interface SplatListItem {
   publishedAt: string | null;
 }
 
+export interface TransferArchiveSummary {
+  id: string;
+  createdAt: string;
+  totalRows: number;
+  objectCount: number;
+  objectBytes: number;
+  schema: string;
+  path: string;
+}
+
+export interface TransferJobProgress {
+  id: string;
+  operation: 'export' | 'upload' | 'validate' | 'import';
+  status: 'pending' | 'running' | 'completed' | 'failed';
+  phase: string;
+  objectsDone: number;
+  objectsTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  message?: string;
+  error?: string;
+}
+
 export interface OrganizationSummary {
   id: string;
   slug: string;

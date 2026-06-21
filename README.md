@@ -242,6 +242,34 @@ See `.env.example` for all configuration options. Key variables:
 | `ADMIN_SEED_EMAIL` | `admin@example.com` | Default admin email |
 | `ADMIN_SEED_PASSWORD` | `admin12345` | Default admin password |
 
+## Complete project transfer
+
+Master administrators can create and stage complete project archives from **Admin → Project transfer**. A bundle contains a PostgreSQL dump, every object and historical preview in the configured S3/MinIO bucket, bucket configuration, and the effective runtime configuration. Database and runtime configuration files are encrypted; the manifest and object checksums are authenticated with the same passphrase.
+
+For multi-gigabyte installations, copy the directory under `backups/` with a resumable tool such as `rsync --partial --checksum` rather than downloading it as one browser file. The `backups/` directory is intentionally ignored by Git and Docker build contexts.
+
+PowerShell:
+
+```powershell
+.\scripts\project-transfer.ps1 export --name=full-project
+.\scripts\project-transfer.ps1 validate /backups/full-project
+.\scripts\project-transfer.ps1 import /backups/full-project --mode=fresh --apply-config
+```
+
+POSIX shell:
+
+```bash
+./scripts/project-transfer.sh export --name=full-project
+./scripts/project-transfer.sh validate /backups/full-project
+./scripts/project-transfer.sh import /backups/full-project --mode=fresh --apply-config
+```
+
+`fresh` refuses a destination containing splats, versions, annotations, presets, or objects. To replace an existing project, use `--mode=replace --confirm=REPLACE:<archive-name>`. Replace mode first creates and verifies a complete safety archive under `backups/safety/` and automatically restores it if import fails. Safety archives are never pruned automatically.
+
+Passphrases are read from a hidden prompt/stdin and must not be placed in shell history. Use repeatable `--set=KEY=value` arguments with `--apply-config` to change host-specific URLs or ports while applying archived settings. PostgreSQL and MinIO remain running during offline restoration; API, worker, and web services are stopped by the wrapper.
+
+Redis/BullMQ is treated as disposable execution state rather than project data. After a restart, database versions left in `PENDING` or `RUNNING` state are deterministically requeued.
+
 ## Troubleshooting
 
 ### Scene fails to load splats
