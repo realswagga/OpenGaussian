@@ -89,7 +89,7 @@ function readCatalogRestoreState(): CatalogRestoreState | null {
       includeSplats: typeof parsed.includeSplats === 'boolean' ? parsed.includeSplats : true,
       includeOrganizations: typeof parsed.includeOrganizations === 'boolean' ? parsed.includeOrganizations : true,
       sortField: isSortField(parsed.sortField) ? parsed.sortField : 'date',
-      sortDirection: isSortDirection(parsed.sortDirection) ? parsed.sortDirection : 'desc',
+      sortDirection: isSortDirection(parsed.sortDirection) ? parsed.sortDirection : 'asc',
       scrollY: typeof parsed.scrollY === 'number' ? parsed.scrollY : 0,
     };
   } catch {
@@ -384,7 +384,7 @@ export default function CatalogPage() {
   const [includeSplats, setIncludeSplats] = useState(initialRestore?.includeSplats ?? true);
   const [includeOrganizations, setIncludeOrganizations] = useState(initialRestore?.includeOrganizations ?? true);
   const [sortField, setSortField] = useState<SortField>(initialRestore?.sortField ?? 'date');
-  const [sortDirection, setSortDirection] = useState<SortDirection>(initialRestore?.sortDirection ?? 'desc');
+  const [sortDirection, setSortDirection] = useState<SortDirection>(initialRestore?.sortDirection ?? 'asc');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
   const consoleRef = useRef<HTMLElement>(null);
