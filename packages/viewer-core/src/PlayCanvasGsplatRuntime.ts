@@ -1214,6 +1214,11 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
     context.clearRect(0, 0, visual.canvas.width, visual.canvas.height);
     context.save();
+    // Flip Y (canvas→WebGL) and mirror X — rotate 180° around the centre
+    // so text reads correctly on the PlayCanvas plane billboard.
+    context.translate(visual.canvas.width / 2, visual.canvas.height / 2);
+    context.scale(-1, -1);
+    context.translate(-visual.canvas.width / 2, -visual.canvas.height / 2);
     context.shadowColor = visual.emphasized ? accent : 'rgba(0,0,0,0.68)';
     context.shadowBlur = visual.emphasized ? 24 : 16;
     context.shadowOffsetY = visual.emphasized ? 0 : 8;
