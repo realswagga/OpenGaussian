@@ -1519,6 +1519,25 @@ async function processJob(job: Job<JobData>): Promise<unknown> {
   }
 }
 
+async function waitForSchema(retries: number = 30, delayMs: number = 2000): Promise<void> {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await prisma.$connect();
+      // Run a lightweight query to verify the schema exists
+      await prisma.splat.count();
+      return; // success
+    } catch (err: any) {
+      if (attempt < retries && (err?.code === 'P2021' || err?.message?.includes("Can't reach database") || err?.message?.includes('does not exist'))) {
+        console.log(`[worker] Database schema not ready yet (attempt ${attempt}/${retries}), retrying in ${delayMs}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      } else {
+        throw err;
+      }
+    }
+  }
+  throw new Error(`Database schema did not become ready after ${retries} attempts`);
+}
+
 async function start() {
   console.log('[worker] Starting GSplat worker...');
 
@@ -1537,8 +1556,8 @@ async function start() {
     }
   }
 
-  // Connect to database
-  await prisma.$connect();
+  // Connect to database and wait for the schema to be ready
+  await waitForSchema();
   console.log('[worker] Connected to PostgreSQL');
 
   // Log all existing splats for debugging

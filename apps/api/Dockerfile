@@ -41,6 +41,9 @@ COPY --from=builder /app/apps/api/package.json ./apps/api/package.json
 COPY --from=builder /app/apps/api/node_modules ./apps/api/node_modules
 COPY apps/api/entrypoint.sh ./apps/api/entrypoint.sh
 
+# Strip any stray carriage returns introduced by Docker Desktop on Windows
+RUN sed -i 's/\r$//' /app/apps/api/entrypoint.sh && chmod +x /app/apps/api/entrypoint.sh
+
 RUN mkdir -p /backups && chmod 700 /backups
 
 COPY --from=builder /app/packages/shared/dist ./packages/shared/dist
