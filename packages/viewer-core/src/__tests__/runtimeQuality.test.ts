@@ -188,7 +188,7 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(runtime.adaptiveQualityScale).toBe(1);
   });
 
-  it('places the tracked VR head at the saved initial-camera position', () => {
+  it('places the tracked VR head at the saved initial-camera position with horizontal-only rotation', () => {
     const runtime = createRuntime() as unknown as {
       manifest: ViewerManifest;
       cameraRoot: Entity | null;
@@ -214,8 +214,9 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(position.x).toBeCloseTo(4);
     expect(position.y).toBeCloseTo(2);
     expect(position.z).toBeCloseTo(3);
-    expect(head.forward.x).toBeCloseTo(Math.SQRT1_2);
-    expect(head.forward.y).toBeCloseTo(Math.SQRT1_2);
+    // Pitch is flattened — forward should be horizontal (target x-pos = 1, z-pos = 0)
+    expect(head.forward.x).toBeCloseTo(1);
+    expect(head.forward.y).toBeCloseTo(0);
     expect(head.forward.z).toBeCloseTo(0);
     expect(runtime.pendingVrCameraAlignment).toBe(false);
   });

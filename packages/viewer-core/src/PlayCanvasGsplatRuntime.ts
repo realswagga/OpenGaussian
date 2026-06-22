@@ -1114,8 +1114,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const headLocalPosition = this.camera.getLocalPosition().clone();
     const headForward = this.camera.forward.clone().normalize();
     const desiredPosition = new Vec3(...initialCamera.position);
-    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition).normalize();
-    if (desiredForward.lengthSq() <= 1e-8 || headForward.lengthSq() <= 1e-8) {
+    // Flatten pitch so VR uses only the saved position + horizontal rotation;
+    // the headset provides vertical orientation through tracking.
+    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition);
+    desiredForward.y = 0;
+    const desiredForwardLen = desiredForward.length();
+    if (desiredForwardLen <= 1e-8) {
+      // Camera target is directly above/below the position — use a default horizontal forward.
+      desiredForward.set(0, 0, -1);
+    } else {
+      desiredForward.mulScalar(1 / desiredForwardLen);
+    }
+    if (headForward.lengthSq() <= 1e-8) {
       this.pendingVrCameraAlignment = false;
       this.vrCameraAlignmentFramesRemaining = 0;
       return;
@@ -1183,9 +1193,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
       const root = new Entity(`vr-marker-${point.id}`);
       const panel = this.createVrPrimitive(`vr-marker-panel-${point.id}`, 'plane', material);
-      // PlayCanvas planes lie on X/Z. Rotate their normal onto the entity's
-      // forward axis so root.lookAt() gives us a true camera-facing billboard.
-      panel.setLocalEulerAngles(-90, 0, 0);
+      // PlayCanvas planes lie on X/Z with a +Y front normal.  rotate so the
+      // normal becomes -Z (the entity's forward axis) so root.lookAt() yields
+      // a true camera-facing billboard.
+      panel.setLocalEulerAngles(90, 0, 0);
       root.addChild(panel);
       root.setPosition(point.position[0], point.position[1], point.position[2]);
       this.app.root.addChild(root);
