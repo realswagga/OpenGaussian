@@ -1,14 +1,20 @@
 services:
   nginx:
     image: nginx:alpine
-    depends_on: [public-web, admin-web, api, minio]
+    depends_on:
+      public-web: { condition: service_started }
+      admin-web: { condition: service_started }
+      api: { condition: service_started }
+      minio: { condition: service_healthy }
+      minio-init: { condition: service_completed_successfully }
     environment:
       S3_BUCKET: ${S3_BUCKET:-gsplat-assets}
-    command: /bin/sh -c "sed 's/__S3_BUCKET__/'\"$${S3_BUCKET}\"'/g' /etc/nginx/nginx.conf.template > /tmp/nginx.conf && exec nginx -c /tmp/nginx.conf -g 'daemon off;'"
+      NGINX_ENVSUBST_FILTER: S3_BUCKET
+      NGINX_ENVSUBST_OUTPUT_DIR: /etc/nginx
     ports:
       - '${APP_PORT:-8080}:80'
     volumes:
-      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf.template:ro
+      - ./infra/nginx/nginx.conf:/etc/nginx/templates/nginx.conf.template:ro
     restart: unless-stopped
 
   public-web:
