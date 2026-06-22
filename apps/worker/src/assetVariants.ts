@@ -38,8 +38,13 @@ export const SPLAT_VARIANT_CONFIGS: Record<AssetVariantName, SplatVariantConfig>
   },
   vr: {
     name: 'vr',
-    maxSplats: 60_000,
-    ratios: [1, 0.45, 0.2, 0.08],
+    // Keep enough detail in the streamed VR asset for the opt-in High
+    // profile. Conservative VR profiles still constrain their active budget
+    // and LOD range at runtime.
+    maxSplats: 600_000,
+    // Level 3 remains at the conservative 60k runtime budget, while High can
+    // refine through the denser levels up to 600k.
+    ratios: [1, 0.5, 0.25, 0.1],
     harmonics: 0,
     iterations: 4,
     lodChunkCountK: 128,

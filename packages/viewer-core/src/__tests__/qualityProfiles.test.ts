@@ -8,7 +8,7 @@ export function detectBestQuality(
   deviceMemory?: number,
 ): QualityProfileName {
   if (isVr) {
-    return 'vrQuest';
+    return preset === 'high' ? 'vrQuestHigh' : 'vrQuest';
   }
 
   if (preset !== 'auto') {
@@ -39,6 +39,7 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.splatBudget).toBe(900_000);
     expect(qualityProfiles.desktopHigh.splatBudget).toBe(3_000_000);
     expect(qualityProfiles.vrQuest.splatBudget).toBe(60_000);
+    expect(qualityProfiles.vrQuestHigh.splatBudget).toBe(600_000);
   });
 
   it('phone profiles have no post processing', () => {
@@ -118,6 +119,19 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.vrQuest.lodUpdateAngle).toBe(90);
   });
 
+  it('VR High substantially raises detail while retaining Quest rendering constraints', () => {
+    expect(qualityProfiles.vrQuestHigh.splatBudget).toBe(600_000);
+    expect(qualityProfiles.vrQuestHigh.minPixelSize).toBe(0.625);
+    expect(qualityProfiles.vrQuestHigh.minContribution).toBe(1);
+    expect(qualityProfiles.vrQuestHigh.alphaClip).toBeCloseTo(1 / 510);
+    expect(qualityProfiles.vrQuestHigh.lodBaseDistanceScale).toBe(1.2);
+    expect(qualityProfiles.vrQuestHigh.lodRange).toEqual([0, 3]);
+    expect(qualityProfiles.vrQuestHigh.xrFramebufferScale).toBe(0.9);
+    expect(qualityProfiles.vrQuestHigh.xrFixedFoveation).toBe(0.35);
+    expect(qualityProfiles.vrQuestHigh.lodUpdateAngle).toBe(15);
+    expect(qualityProfiles.vrQuestHigh.preferredRenderer).toBe('webgl2');
+  });
+
   it('high profiles allow full LOD range and high quality SH', () => {
     expect(qualityProfiles.phoneHigh.lodRange).toEqual([1, 3]);
     expect(qualityProfiles.desktopMedium.lodRange).toEqual([0, 3]);
@@ -126,13 +140,14 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopHigh.highQualitySH).toBe(true);
   });
 
-  it('adaptive quality is enabled across presets', () => {
+  it('keeps adaptive quality on except for fixed High VR', () => {
     expect(qualityProfiles.phoneUltraLow.adaptiveQualityEnabled).toBe(true);
     expect(qualityProfiles.phoneLow.adaptiveQualityEnabled).toBe(true);
     expect(qualityProfiles.phoneHigh.adaptiveQualityEnabled).toBe(true);
     expect(qualityProfiles.desktopMedium.adaptiveQualityEnabled).toBe(true);
     expect(qualityProfiles.desktopHigh.adaptiveQualityEnabled).toBe(true);
     expect(qualityProfiles.vrQuest.adaptiveQualityEnabled).toBe(true);
+    expect(qualityProfiles.vrQuestHigh.adaptiveQualityEnabled).toBe(false);
   });
 
   it('target FPS matches expected values', () => {
@@ -142,6 +157,7 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.targetFps).toBe(60);
     expect(qualityProfiles.desktopHigh.targetFps).toBe(60);
     expect(qualityProfiles.vrQuest.targetFps).toBe(72);
+    expect(qualityProfiles.vrQuestHigh.targetFps).toBe(72);
   });
 
   it('uses render-on-demand outside VR and prefers WebGPU on desktop', () => {
@@ -150,6 +166,7 @@ describe('qualityProfiles', () => {
     expect(qualityProfiles.desktopMedium.renderOnDemand).toBe(true);
     expect(qualityProfiles.desktopHigh.renderOnDemand).toBe(true);
     expect(qualityProfiles.vrQuest.renderOnDemand).toBe(false);
+    expect(qualityProfiles.vrQuestHigh.renderOnDemand).toBe(false);
     expect(qualityProfiles.desktopMedium.preferredRenderer).toBe('webgpu');
     expect(qualityProfiles.desktopHigh.preferredRenderer).toBe('webgpu');
     expect(qualityProfiles.vrQuest.preferredRenderer).toBe('webgl2');
@@ -157,10 +174,13 @@ describe('qualityProfiles', () => {
 });
 
 describe('detectBestQuality', () => {
-  it('returns vrQuest for VR regardless of other flags', () => {
+  it('returns the conservative Quest profile for automatic VR', () => {
     expect(detectBestQuality('auto', false, true, 8)).toBe('vrQuest');
-    expect(detectBestQuality('high', false, true, 8)).toBe('vrQuest');
     expect(detectBestQuality('auto', true, true, 2)).toBe('vrQuest');
+  });
+
+  it('returns the opt-in high-detail Quest profile for VR High', () => {
+    expect(detectBestQuality('high', false, true, 8)).toBe('vrQuestHigh');
   });
 
   it('returns phoneUltraLow for auto mobile with very low memory', () => {

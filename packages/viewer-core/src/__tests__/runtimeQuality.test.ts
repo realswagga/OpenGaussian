@@ -108,4 +108,83 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(gsplat.lodUpdateAngle).toBe(90);
     expect(component.highQualitySH).toBe(false);
   });
+
+  it('applies the opt-in high-detail VR profile without the conservative VR cap', () => {
+    const { gsplat, component } = applyQuality('high', { assetVariant: 'vr' });
+
+    expect(gsplat.splatBudget).toBe(600_000);
+    expect(gsplat.minPixelSize).toBe(0.625);
+    expect(gsplat.minContribution).toBe(1);
+    expect(gsplat.alphaClip).toBeCloseTo(1 / 510);
+    expect(gsplat.lodRangeMin).toBe(0);
+    expect(gsplat.lodRangeMax).toBe(3);
+    expect(gsplat.lodUpdateAngle).toBe(15);
+    expect(component.lodBaseDistance).toBe(12);
+    expect(component.lodMultiplier).toBe(3.25);
+    expect(component.highQualitySH).toBe(true);
+  });
+
+  it('does not report a first splat frame until GSplat readiness is rendered', () => {
+    const runtime = createRuntime() as unknown as {
+      splatEntity: object | null;
+      app: { stats: { frame: { gsplats: number } } } | null;
+      gsplatFrameReady: boolean;
+      firstFrameRendered: boolean;
+      firstRenderableResolve: (() => void) | null;
+      recordRenderedFrame: () => void;
+    };
+    let resolved = false;
+    runtime.splatEntity = {};
+    runtime.app = { stats: { frame: { gsplats: 0 } } };
+    runtime.firstRenderableResolve = () => {
+      resolved = true;
+    };
+
+    runtime.gsplatFrameReady = true;
+    runtime.recordRenderedFrame();
+    expect(runtime.firstFrameRendered).toBe(false);
+    expect(resolved).toBe(false);
+
+    runtime.app.stats.frame.gsplats = 1;
+    runtime.recordRenderedFrame();
+    expect(runtime.firstFrameRendered).toBe(true);
+    expect(resolved).toBe(true);
+  });
+
+  it('forces an initial GSplat population pass without camera input', () => {
+    const runtime = createRuntime() as unknown as {
+      splatEntity: object | null;
+      firstFrameRendered: boolean;
+      app: {
+        scene: { gsplat: { dirty?: boolean } };
+        autoRender: boolean;
+        renderNextFrame: boolean;
+      } | null;
+      forceInitialSplatPopulation: () => void;
+    };
+    runtime.splatEntity = {};
+    runtime.app = {
+      scene: { gsplat: {} },
+      autoRender: false,
+      renderNextFrame: false,
+    };
+
+    runtime.forceInitialSplatPopulation();
+
+    expect(runtime.app.scene.gsplat.dirty).toBe(true);
+    expect(runtime.app.autoRender).toBe(true);
+    expect(runtime.app.renderNextFrame).toBe(true);
+  });
+
+  it('keeps High VR at full scale instead of adaptively degrading it', () => {
+    const runtime = createRuntime({ quality: 'high', assetVariant: 'vr' }) as unknown as {
+      adaptiveQualityScale: number;
+      updateAdaptiveQuality: (now: number) => void;
+    };
+    runtime.adaptiveQualityScale = 0.35;
+
+    runtime.updateAdaptiveQuality(performance.now());
+
+    expect(runtime.adaptiveQualityScale).toBe(1);
+  });
 });

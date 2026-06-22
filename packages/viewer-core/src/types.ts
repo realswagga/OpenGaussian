@@ -2,7 +2,7 @@ export type RendererMode = 'auto' | 'webgl2' | 'webgpu';
 export type CameraMode = 'orbit' | 'fly' | 'locked';
 export type QualityPreset = 'auto' | 'low' | 'medium' | 'high';
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
-export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
+export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest' | 'vrQuestHigh';
 export type AssetVariantName = 'desktop' | 'mobile' | 'vr';
 export type AssetVariantSelection = 'auto' | AssetVariantName;
 export type XrQuality = 'performance' | 'balanced' | 'quality';
@@ -377,6 +377,31 @@ export const qualityProfiles: Record<QualityProfileName, QualityProfile> = {
     nearClip: 0.08,
     targetActiveSplats: 60_000,
     lodUpdateAngle: 90,
+  },
+  vrQuestHigh: {
+    splatBudget: 600_000,
+    maxDevicePixelRatio: 1.25,
+    maxPixelDim: 1800,
+    enablePostFx: true,
+    markerDistanceLimit: 60,
+    antialias: true,
+    targetFps: 72,
+    adaptiveQualityEnabled: false,
+    minPixelSize: 0.625,
+    minContribution: 1,
+    alphaClip: 1 / 510,
+    lodBaseDistanceScale: 1.2,
+    lodMultiplier: 3.25,
+    lodRange: [0, 3],
+    highQualitySH: true,
+    renderOnDemand: false,
+    preferredRenderer: 'webgl2',
+    xrFramebufferScale: 0.9,
+    xrFixedFoveation: 0.35,
+    radialSorting: true,
+    nearClip: 0.04,
+    targetActiveSplats: 600_000,
+    lodUpdateAngle: 15,
   },
 };
 

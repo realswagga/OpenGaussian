@@ -391,6 +391,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private firstRenderableReject: ((reason?: unknown) => void) | null = null;
   private activeLoadReject: ((reason?: unknown) => void) | null = null;
   private firstFrameRendered = false;
+  private gsplatFrameReady = false;
   private coarseStartup = false;
   private continuousRenderUntil = 0;
   private lastRenderedFrameTime = 0;
@@ -465,6 +466,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.resolvedAsset = resolveViewerAsset(this.manifest, this.options.assetVariant, false);
     this.coarseStartup = this.resolvedAsset.isLod;
     this.firstFrameRendered = false;
+    this.gsplatFrameReady = false;
     this.loadAbortController = new AbortController();
     const profile = this.getCurrentQualityProfile();
     const webgpu = webGpuGate(this.manifest.viewer.enableWebGpu !== false);
@@ -810,7 +812,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // can await the XR session and catch errors (required by WebXR user-gesture flow).
     return new Promise<void>((resolve, reject) => {
       try {
-        const profile = qualityProfiles.vrQuest;
+        const profile = this.getVrQualityProfile();
         const framebufferScaleFactor = this.getXrFramebufferScale(profile);
         const fixedFoveation = this.getXrFixedFoveation(profile);
         this.app!.xr!.start(this.camera!.camera!, XRTYPE_VR, XRSPACE_LOCALFLOOR, {
@@ -1033,7 +1035,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
     this.lastRenderedFrameTime = now;
 
-    if (!this.firstFrameRendered && this.splatEntity) {
+    // frame:ready can describe an empty initial LOD world state. Do not let
+    // that blank frame complete loading and shut down render-on-demand.
+    const actualRenderedSplats = this.readActualRenderedSplatCount();
+    if (!this.firstFrameRendered && this.gsplatFrameReady && actualRenderedSplats > 0 && this.splatEntity) {
       this.firstFrameRendered = true;
       this.emitProgress('renderable', 'First rendered splat frame is available', undefined, undefined, this.resolvedAsset.url);
       this.firstRenderableResolve?.();
@@ -1049,6 +1054,19 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         });
       }
     }
+  }
+
+  private readActualRenderedSplatCount(): number {
+    const frame = (this.app?.stats as { frame?: { gsplats?: number } } | undefined)?.frame;
+    return typeof frame?.gsplats === 'number' && Number.isFinite(frame.gsplats) ? frame.gsplats : 0;
+  }
+
+  private forceInitialSplatPopulation(): void {
+    if (!this.app || !this.splatEntity || this.firstFrameRendered) return;
+    // GSplatParams.dirty forces PlayCanvas to rebuild LOD selection, its world
+    // state, and the initial sort even when the camera has not changed.
+    this.app.scene.gsplat.dirty = true;
+    this.requestRender();
   }
 
   private resolveGpuTimer(): void {
@@ -1183,7 +1201,10 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
         this.applyGsplatSettings();
         this.loadedSplats = readPossibleCount(asset.resource) || readPossibleCount(asset) || this.manifestHasCount();
-        this.requestRender(false);
+        // Unified GSplat placement and the initial sort settle after the asset
+        // callback. Keep rendering until frame:ready confirms usable splat data;
+        // otherwise render-on-demand can go idle on a blank frame.
+        this.forceInitialSplatPopulation();
         resolve();
         });
         asset.on('progress', (received: number, length: number) => {
@@ -1220,9 +1241,13 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private getCurrentQualityProfile(): QualityProfile {
     if (this.vrActive || this.options.assetVariant === 'vr') {
-      return qualityProfiles.vrQuest;
+      return this.getVrQualityProfile();
     }
     return this.currentQuality === 'auto' ? qualityProfiles[this.deviceProfile] : qualityForPreset(this.currentQuality);
+  }
+
+  private getVrQualityProfile(): QualityProfile {
+    return this.currentQuality === 'high' ? qualityProfiles.vrQuestHigh : qualityProfiles.vrQuest;
   }
 
   private getXrFramebufferScale(profile = qualityProfiles.vrQuest): number {
@@ -1254,8 +1279,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const degradation = 1 / Math.max(0.35, scale);
     const budgetScale = this.resolvedAsset.isLod ? scale : 1;
     const requestedBudget = this.questPerfOverrides.splatBudget ?? this.options.budgetOverride ?? Math.max(1, Math.round(profile.splatBudget * budgetScale));
-    const manifestBudget = this.vrActive || this.options.assetVariant === 'vr'
-      ? this.manifest.viewer.budgets.vr
+    const vrQualityActive = this.vrActive || this.options.assetVariant === 'vr';
+    // The manifest VR budget is the conservative cap used by Auto/Low/Medium.
+    // High is an explicit quality opt-in and uses the desktop ceiling so its
+    // larger VR profile is not silently clamped back to the default 60k.
+    const manifestBudget = vrQualityActive
+      ? this.currentQuality === 'high'
+        ? this.manifest.viewer.budgets.desktop
+        : this.manifest.viewer.budgets.vr
       : this.deviceProfile.startsWith('phone')
         ? this.manifest.viewer.budgets.mobile
         : this.manifest.viewer.budgets.desktop;
@@ -1453,6 +1484,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     // Pointer lock change handler for fly mode
     document.addEventListener('pointerlockchange', this.onPointerLockChange);
     document.addEventListener('visibilitychange', this.onVisibilityChange);
+    window.addEventListener('focus', this.onWindowFocus);
   }
 
   private removeInput(): void {
@@ -1465,14 +1497,22 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.canvas.removeEventListener('dblclick', this.onDoubleClick);
     document.removeEventListener('pointerlockchange', this.onPointerLockChange);
     document.removeEventListener('visibilitychange', this.onVisibilityChange);
+    window.removeEventListener('focus', this.onWindowFocus);
     document.exitPointerLock();
   }
 
   private onVisibilityChange = (): void => {
     this.lastRenderedFrameTime = 0;
     if (document.visibilityState === 'visible') {
+      this.forceInitialSplatPopulation();
       this.requestRender();
     }
+  };
+
+  private onWindowFocus = (): void => {
+    this.lastRenderedFrameTime = 0;
+    this.forceInitialSplatPopulation();
+    this.requestRender();
   };
 
   private onContextMenu = (event: MouseEvent): void => {
@@ -2282,12 +2322,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private updateAdaptiveQuality(now: number): void {
     const profile = this.getCurrentQualityProfile();
-    if (document.visibilityState === 'hidden') return;
-    if (this.lastRenderedFrameTime <= 0 || now - this.lastRenderedFrameTime > 500) return;
     if (!profile.adaptiveQualityEnabled) {
-      this.adaptiveQualityScale = 1;
+      if (this.adaptiveQualityScale !== 1) {
+        this.adaptiveQualityScale = 1;
+        this.applyQualitySettings();
+      }
       return;
     }
+    if (document.visibilityState === 'hidden') return;
+    if (this.lastRenderedFrameTime <= 0 || now - this.lastRenderedFrameTime > 500) return;
     if (this.loadPhase === 'loading-metadata' || this.loadPhase === 'loading-asset') return;
     if (this.resolvedAsset.isLod && this.lodLoadingCount > 0) return;
     if (now - this.lastAdaptiveAdjustTime < 2000) return;
@@ -2661,6 +2704,12 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private onGsplatFrameReady(_camera: unknown, _layer: unknown, ready: boolean, loadingCount: number): void {
     this.lodLoadingCount = Math.max(0, loadingCount || 0);
     this.updateRenderPolicy();
+    if (!this.firstFrameRendered && this.splatEntity && ready) {
+      // The next post-render is the first frame that can contain sorted splats.
+      // Explicitly wake render-on-demand in case loading just became idle.
+      this.gsplatFrameReady = true;
+      this.requestRender();
+    }
     if (!this.resolvedAsset.isLod || this.loadPhase === 'idle' || this.loadPhase === 'loading-metadata' || this.loadPhase === 'loading-asset') {
       return;
     }
@@ -2766,7 +2815,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       lodBaseDistance: settings.lodBaseDistance,
       lodMultiplier: settings.lodMultiplier,
       lodRange: settings.lodRange,
-      adaptiveQualityScale: this.adaptiveQualityScale,
+      adaptiveQualityScale: profile.adaptiveQualityEnabled ? this.adaptiveQualityScale : 1,
       renderOnDemand: settings.renderOnDemand,
       renderIdle: Boolean(settings.renderOnDemand && this.app && !this.app.autoRender),
       loadPhase: this.loadPhase,

@@ -20,7 +20,7 @@ export type QualityPreset = 'auto' | 'low' | 'medium' | 'high';
 
 export type SplatAssetFormat = 'ply' | 'compressed-ply' | 'sog' | 'sog-meta' | 'lod-meta' | 'spz';
 
-export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest';
+export type QualityProfileName = 'phoneUltraLow' | 'phoneLow' | 'phoneHigh' | 'desktopMedium' | 'desktopHigh' | 'vrQuest' | 'vrQuestHigh';
 
 export type AssetVariantName = 'desktop' | 'mobile' | 'vr';
 

@@ -406,8 +406,6 @@ export default function ViewerPage() {
       rendererMode: rendererPref,
       assetVariant,
       xrQuality: 'balanced',
-      xrFramebufferScale: 0.6,
-      xrFixedFoveation: 1,
       webgpuPipeline: 'auto',
       showMarkers: true,
       questPerfEnabled: questPerfAllowed && (showQuestPerf || questPerfCapturing),

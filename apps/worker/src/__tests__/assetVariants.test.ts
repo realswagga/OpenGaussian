@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { SPLAT_VARIANT_CONFIGS, computeVariantTargets } from '../assetVariants.js';
 
 describe('computeVariantTargets', () => {
-  it('caps Quest VR variants at the production VR budget', () => {
+  it('retains enough Quest VR detail for the opt-in High profile', () => {
     const targets = computeVariantTargets(2_000_000, SPLAT_VARIANT_CONFIGS.vr);
 
-    expect(targets[0]).toBe(60_000);
+    expect(targets[0]).toBe(600_000);
+    expect(targets).toEqual([600_000, 300_000, 150_000, 60_000]);
     expect(targets).toEqual([...targets].sort((a, b) => b - a));
     expect(new Set(targets).size).toBe(targets.length);
   });
