@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GSPLAT_RENDERER_RASTER_CPU_SORT, GSPLAT_RENDERER_RASTER_GPU_SORT } from 'playcanvas';
+import { Entity, GraphNode, GSPLAT_RENDERER_RASTER_CPU_SORT, GSPLAT_RENDERER_RASTER_GPU_SORT } from 'playcanvas';
 import { PlayCanvasGsplatRuntime } from '../PlayCanvasGsplatRuntime.js';
 import type { ViewerManifest, ViewerOptions } from '../types.js';
 
@@ -186,5 +186,78 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     runtime.updateAdaptiveQuality(performance.now());
 
     expect(runtime.adaptiveQualityScale).toBe(1);
+  });
+
+  it('places the tracked VR head at the saved initial-camera position', () => {
+    const runtime = createRuntime() as unknown as {
+      manifest: ViewerManifest;
+      cameraRoot: Entity | null;
+      camera: Entity | null;
+      pendingVrCameraAlignment: boolean;
+      alignVrCameraToInitialPose: () => void;
+    };
+    runtime.manifest.viewer.defaultCamera = {
+      position: [4, 2, 3],
+      target: [5, 2, 3],
+    };
+    const root = new GraphNode('camera-root');
+    const head = new GraphNode('camera');
+    root.addChild(head);
+    head.setLocalPosition(0.15, 1.65, -0.1);
+    runtime.cameraRoot = root as unknown as Entity;
+    runtime.camera = head as unknown as Entity;
+    runtime.pendingVrCameraAlignment = true;
+
+    runtime.alignVrCameraToInitialPose();
+
+    const position = head.getPosition();
+    expect(position.x).toBeCloseTo(4);
+    expect(position.y).toBeCloseTo(2);
+    expect(position.z).toBeCloseTo(3);
+    expect(head.forward.x).toBeCloseTo(1);
+    expect(head.forward.z).toBeCloseTo(0);
+    expect(runtime.pendingVrCameraAlignment).toBe(false);
+  });
+
+  it('binds and unbinds XR input lifecycle events explicitly', () => {
+    const bound: string[] = [];
+    const unbound: string[] = [];
+    const input = {
+      inputSources: [],
+      on: (event: string) => bound.push(event),
+      off: (event: string) => unbound.push(event),
+    };
+    const runtime = createRuntime() as unknown as {
+      app: { xr: { input: typeof input } } | null;
+      vrInputBound: boolean;
+      bindVrInput: () => void;
+      unbindVrInput: () => void;
+    };
+    runtime.app = { xr: { input } };
+
+    runtime.bindVrInput();
+    expect(bound).toEqual(['add', 'remove', 'selectstart']);
+    expect(runtime.vrInputBound).toBe(true);
+
+    runtime.unbindVrInput();
+    expect(unbound).toEqual(['add', 'remove', 'selectstart']);
+    expect(runtime.vrInputBound).toBe(false);
+  });
+
+  it('retains Quest input sources until XR explicitly removes them', () => {
+    const source = { id: 7 };
+    const runtime = createRuntime() as unknown as {
+      app: { autoRender?: boolean; renderNextFrame?: boolean } | null;
+      vrInputSources: Map<number, typeof source>;
+      onVrInputSourceAdd: (inputSource: typeof source) => void;
+      onVrInputSourceRemove: (inputSource: typeof source) => void;
+    };
+    runtime.app = {};
+
+    runtime.onVrInputSourceAdd(source);
+    expect(runtime.vrInputSources.get(7)).toBe(source);
+
+    runtime.onVrInputSourceRemove(source);
+    expect(runtime.vrInputSources.has(7)).toBe(false);
   });
 });

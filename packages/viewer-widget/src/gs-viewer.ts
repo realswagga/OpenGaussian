@@ -291,6 +291,11 @@ class GsViewerElement extends HTMLElement {
       showMarkers,
       budgetOverride: this.getAttribute('budget') ? Number(this.getAttribute('budget')) : undefined,
       disablePostFx: this.getAttribute('nofx') === 'true',
+      onMarkerSelect: (marker: MarkerPoint) => {
+        this.selectedMarker = marker;
+        this.showMarkerInfo(marker);
+        this.dispatchEvent(new CustomEvent('marker-select', { detail: { marker } }));
+      },
       onProgress: (progress: ViewerRuntimeProgress) => {
         if (this.loadingEl && progress.phase !== 'complete') {
           const pct = progress.totalBytes && progress.loadedBytes !== undefined

@@ -20,6 +20,7 @@ import {
   Picker,
   RenderComponentSystem,
   ScriptComponentSystem,
+  StandardMaterial,
   TextureHandler,
   TouchDevice,
   Vec3,
@@ -60,6 +61,7 @@ import {
   normalizeWheelDeltaY,
   readGamepadStick,
 } from './navigationControls.js';
+import { horizontalYawDeltaDegrees, pickVrMarkerByRay } from './vrInteraction.js';
 
 type RendererBackend = 'webgl2' | 'webgpu';
 type PointerGestureMode = 'none' | 'orbit' | 'pan';
@@ -87,7 +89,9 @@ interface VirtualJoystickState {
 }
 
 interface RuntimeXrSessionLike {
-  addEventListener(type: 'end', listener: () => void, options?: AddEventListenerOptions): void;
+  visibilityState?: string;
+  addEventListener(type: 'end' | 'visibilitychange', listener: () => void, options?: AddEventListenerOptions): void;
+  removeEventListener(type: 'visibilitychange', listener: () => void): void;
 }
 
 type RuntimeXrManagerLike = XrManager & {
@@ -97,13 +101,34 @@ type RuntimeXrManagerLike = XrManager & {
 };
 
 interface RuntimeXrInputSource {
-  id?: number;
+  id: number;
   handedness?: string;
   gamepad?: Gamepad | null;
   selecting?: boolean;
   getPosition?: () => Vec3 | null;
+  getRotation?: () => { x: number; y: number; z: number; w: number } | null;
   getOrigin?: () => Vec3;
   getDirection?: () => Vec3;
+}
+
+interface RuntimeXrInputLike {
+  inputSources: RuntimeXrInputSource[];
+  on(event: 'add' | 'remove' | 'selectstart', callback: (source: RuntimeXrInputSource) => void, scope?: unknown): unknown;
+  off(event: 'add' | 'remove' | 'selectstart', callback: (source: RuntimeXrInputSource) => void, scope?: unknown): void;
+}
+
+interface VrMarkerVisual {
+  entity: Entity;
+  material: StandardMaterial;
+  baseScale: number;
+}
+
+interface VrControllerVisual {
+  body: Entity;
+  rayRoot: Entity;
+  rayBeam: Entity;
+  reticle: Entity;
+  hoveredMarkerId: string | null;
 }
 
 interface VrScaleGestureState {
@@ -380,6 +405,15 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private markerLayer: HTMLDivElement | null = null;
   private markerButtons = new Map<string, HTMLButtonElement>();
   private selectedMarkerId: string | null = null;
+  private vrMarkerVisuals = new Map<string, VrMarkerVisual>();
+  private vrControllerVisuals = new Map<number, VrControllerVisual>();
+  private vrInputSources = new Map<number, RuntimeXrInputSource>();
+  private vrControllerMaterial: StandardMaterial | null = null;
+  private vrRayMaterial: StandardMaterial | null = null;
+  private vrReticleMaterial: StandardMaterial | null = null;
+  private vrHoverMaterial: StandardMaterial | null = null;
+  private vrInputBound = false;
+  private pendingVrCameraAlignment = false;
   private statsIntervalId: ReturnType<typeof setInterval> | null = null;
   private lastSortTimeMs: number | undefined;
   private lodLoadingCount = 0;
@@ -428,6 +462,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private vrActive = false;
   private activeXrFramebufferScale: number | undefined;
   private activeXrFixedFoveation: number | null = null;
+  private activeXrSession: RuntimeXrSessionLike | null = null;
   private readonly vrMoveSpeed = 2.4;
   private readonly vrVerticalSpeed = 1.5;
   private vrScaleGesture: VrScaleGestureState | null = null;
@@ -532,6 +567,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.orbitAnchorGizmo = null;
     this.markerButtons.clear();
     this.selectedMarkerId = null;
+    this.destroyVrPresentation();
     this.removeFlyJoysticks();
     this.depthPicker?.destroy();
     this.depthPicker = null;
@@ -653,6 +689,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (this.selectedMarkerId && !points.some((point) => point.id === this.selectedMarkerId)) {
       this.selectedMarkerId = null;
     }
+    if (this.vrActive) {
+      this.createVrMarkers();
+    }
     if (!this.markerLayer || this.options.showMarkers === false) return;
 
     for (const point of this.markers) {
@@ -700,6 +739,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
     this.applyQualitySettings();
     this.updateMarkerLayerVisibility();
+    if (this.vrActive) this.createVrMarkers();
     this.requestRender();
   }
 
@@ -823,6 +863,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
             } else {
               // Capture the session for gamepad polling and bind end event
               this.vrActive = true;
+              this.pendingVrCameraAlignment = true;
               this.activeXrFramebufferScale = framebufferScaleFactor;
               this.activeXrFixedFoveation = fixedFoveation;
               this.setOverlayHiddenForVr(true);
@@ -838,7 +879,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
               this.options.onVrSessionChange?.(true);
               const session = (this.app!.xr as unknown as { _session?: RuntimeXrSessionLike })._session;
               if (session) {
+                this.activeXrSession = session;
                 session.addEventListener('end', this.onVrSessionEnd, { once: true });
+                session.addEventListener('visibilitychange', this.onVrVisibilityChange);
               }
               resolve();
             }
@@ -866,16 +909,312 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private finishVrSession(): void {
     const wasActive = this.vrActive;
+    this.activeXrSession?.removeEventListener('visibilitychange', this.onVrVisibilityChange);
+    this.activeXrSession = null;
     this.vrActive = false;
+    this.pendingVrCameraAlignment = false;
     this.vrScaleGesture = null;
     this.activeXrFramebufferScale = undefined;
     this.activeXrFixedFoveation = null;
+    this.unbindVrInput();
+    this.destroyVrPresentation();
     this.setOverlayHiddenForVr(false);
     this.applyQualitySettings();
     this.updateRenderPolicy();
     if (wasActive) {
       this.options.onVrSessionChange?.(false);
     }
+  }
+
+  private onXrSessionStarted = (): void => {
+    if (!this.vrActive) return;
+    this.pendingVrCameraAlignment = true;
+    this.createVrMarkers();
+    this.bindVrInput();
+    this.synchronizeVrInputSources();
+    this.requestRender();
+  };
+
+  private onXrFrameUpdate = (): void => {
+    if (!this.vrActive) return;
+    const aligningCamera = this.pendingVrCameraAlignment;
+    if (this.pendingVrCameraAlignment) {
+      this.alignVrCameraToInitialPose();
+    }
+    this.bindVrInput();
+    this.synchronizeVrInputSources();
+    // Input-source world poses for this frame were computed before the root
+    // alignment. Keep visuals hidden until the next frame supplies poses in
+    // the aligned world space.
+    if (!aligningCamera) this.updateVrPresentation();
+  };
+
+  private onVrVisibilityChange = (): void => {
+    if (!this.vrActive) return;
+    // Quest can recreate or republish input sources when returning from the
+    // system menu. Resynchronize immediately instead of relying on a later
+    // inputsourceschange event or user action.
+    this.bindVrInput();
+    this.synchronizeVrInputSources();
+    this.requestRender();
+  };
+
+  private getVrInput(): RuntimeXrInputLike | null {
+    return (this.app?.xr?.input as unknown as RuntimeXrInputLike | undefined) ?? null;
+  }
+
+  private bindVrInput(): void {
+    if (this.vrInputBound) return;
+    const input = this.getVrInput();
+    if (!input) return;
+    input.on('add', this.onVrInputSourceAdd, this);
+    input.on('remove', this.onVrInputSourceRemove, this);
+    input.on('selectstart', this.onVrInputSelect, this);
+    this.vrInputBound = true;
+  }
+
+  private unbindVrInput(): void {
+    if (!this.vrInputBound) return;
+    const input = this.getVrInput();
+    input?.off('add', this.onVrInputSourceAdd, this);
+    input?.off('remove', this.onVrInputSourceRemove, this);
+    input?.off('selectstart', this.onVrInputSelect, this);
+    this.vrInputBound = false;
+  }
+
+  private onVrInputSourceAdd = (source: RuntimeXrInputSource): void => {
+    this.vrInputSources.set(source.id, source);
+    this.ensureVrControllerVisual(source);
+    this.requestRender();
+  };
+
+  private onVrInputSourceRemove = (source: RuntimeXrInputSource): void => {
+    this.vrInputSources.delete(source.id);
+    this.destroyVrControllerVisual(source.id);
+  };
+
+  private onVrInputSelect = (source: RuntimeXrInputSource): void => {
+    const hit = this.pickVrMarker(source);
+    const markerId = hit?.id ?? this.vrControllerVisuals.get(source.id)?.hoveredMarkerId;
+    if (!markerId) return;
+    const marker = this.markers.find((point) => point.id === markerId);
+    if (!marker) return;
+    this.selectedMarkerId = markerId;
+    this.refreshMarkerExpansion();
+    this.updateVrMarkerHighlights(new Set([markerId]));
+    this.options.onMarkerSelect?.(marker);
+    this.requestRender();
+  };
+
+  private synchronizeVrInputSources(): void {
+    const sources = this.getVrInput()?.inputSources ?? [];
+    for (const source of sources) {
+      this.vrInputSources.set(source.id, source);
+      this.ensureVrControllerVisual(source);
+    }
+  }
+
+  private alignVrCameraToInitialPose(): void {
+    if (!this.cameraRoot || !this.camera) return;
+    const initialCamera = this.manifest.viewer.defaultCamera;
+    if (!initialCamera?.position || !initialCamera.target) {
+      this.pendingVrCameraAlignment = false;
+      return;
+    }
+
+    // XR writes the physical headset pose into the camera's local transform.
+    // Reset the origin, align horizontal heading to the saved target, then
+    // offset the root so the tracked headset lands exactly at saved position.
+    this.cameraRoot.setPosition(0, 0, 0);
+    this.cameraRoot.setEulerAngles(0, 0, 0);
+    const headLocalPosition = this.camera.getLocalPosition().clone();
+    const headForward = this.camera.forward.clone();
+    const desiredPosition = new Vec3(...initialCamera.position);
+    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition);
+    const yawDegrees = horizontalYawDeltaDegrees(headForward, desiredForward);
+    this.cameraRoot.setEulerAngles(0, yawDegrees, 0);
+    const rotatedHeadOffset = this.cameraRoot.getRotation().transformVector(headLocalPosition, new Vec3());
+    this.cameraRoot.setPosition(desiredPosition.clone().sub(rotatedHeadOffset));
+    this.pendingVrCameraAlignment = false;
+    this.requestRender();
+  }
+
+  private createVrMaterial(color: Color): StandardMaterial {
+    const material = new StandardMaterial();
+    material.diffuse = color.clone();
+    material.emissive = color.clone();
+    material.emissiveIntensity = 0.8;
+    material.useLighting = false;
+    material.update();
+    return material;
+  }
+
+  private createVrPrimitive(
+    name: string,
+    type: 'box' | 'capsule' | 'cone' | 'cylinder' | 'sphere' | 'torus',
+    material: StandardMaterial,
+  ): Entity {
+    const entity = new Entity(name);
+    entity.addComponent('render', { type, castShadows: false, receiveShadows: false });
+    if (entity.render) entity.render.material = material;
+    return entity;
+  }
+
+  private createVrMarkers(): void {
+    this.destroyVrMarkers();
+    if (!this.app || !this.vrActive || this.options.showMarkers === false || this.questPerfOverrides.markersVisible === false) return;
+    this.vrHoverMaterial ??= this.createVrMaterial(new Color(1, 0.82, 0.2));
+
+    for (const point of this.markers) {
+      const color = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(point.color || '')
+        ? new Color().fromString(point.color!)
+        : new Color(0.18, 0.75, 1);
+      const material = this.createVrMaterial(color);
+      const entity = this.createVrPrimitive(`vr-marker-${point.id}`, 'sphere', material);
+      const baseScale = Math.max(0.25, point.scale || 1);
+      entity.setPosition(point.position[0], point.position[1], point.position[2]);
+      if (point.rotation) entity.setEulerAngles(point.rotation[0], point.rotation[1], point.rotation[2]);
+      entity.setLocalScale(0.16 * baseScale, 0.16 * baseScale, 0.16 * baseScale);
+      this.app.root.addChild(entity);
+      this.vrMarkerVisuals.set(point.id, { entity, material, baseScale });
+    }
+  }
+
+  private destroyVrMarkers(): void {
+    for (const visual of this.vrMarkerVisuals.values()) {
+      visual.entity.destroy();
+      visual.material.destroy();
+    }
+    this.vrMarkerVisuals.clear();
+  }
+
+  private ensureVrControllerVisual(source: RuntimeXrInputSource): VrControllerVisual | null {
+    const existing = this.vrControllerVisuals.get(source.id);
+    if (existing) return existing;
+    if (!this.app || !this.vrActive) return null;
+
+    this.vrControllerMaterial ??= this.createVrMaterial(new Color(0.7, 0.74, 0.8));
+    this.vrRayMaterial ??= this.createVrMaterial(new Color(0.2, 0.85, 1));
+    this.vrReticleMaterial ??= this.createVrMaterial(new Color(1, 0.82, 0.2));
+
+    const hand = source.handedness || 'controller';
+    const body = this.createVrPrimitive(`vr-controller-${hand}-${source.id}`, 'capsule', this.vrControllerMaterial);
+    body.setLocalScale(0.055, 0.1, 0.055);
+    body.enabled = false;
+    this.app.root.addChild(body);
+
+    const rayRoot = new Entity(`vr-ray-${hand}-${source.id}`);
+    const rayBeam = this.createVrPrimitive(`vr-ray-beam-${hand}-${source.id}`, 'cylinder', this.vrRayMaterial);
+    rayBeam.setLocalEulerAngles(-90, 0, 0);
+    rayRoot.addChild(rayBeam);
+    rayRoot.enabled = false;
+    this.app.root.addChild(rayRoot);
+
+    const reticle = this.createVrPrimitive(`vr-reticle-${hand}-${source.id}`, 'sphere', this.vrReticleMaterial);
+    reticle.setLocalScale(0.025, 0.025, 0.025);
+    reticle.enabled = false;
+    this.app.root.addChild(reticle);
+
+    const visual = { body, rayRoot, rayBeam, reticle, hoveredMarkerId: null };
+    this.vrControllerVisuals.set(source.id, visual);
+    return visual;
+  }
+
+  private destroyVrControllerVisual(id: number): void {
+    const visual = this.vrControllerVisuals.get(id);
+    if (!visual) return;
+    visual.body.destroy();
+    visual.rayRoot.destroy();
+    visual.reticle.destroy();
+    this.vrControllerVisuals.delete(id);
+  }
+
+  private pickVrMarker(source: RuntimeXrInputSource): { id: string; distance: number } | null {
+    const origin = source.getOrigin?.();
+    const direction = source.getDirection?.();
+    if (!origin || !direction || this.vrMarkerVisuals.size === 0) return null;
+    return pickVrMarkerByRay(
+      origin,
+      direction,
+      this.markers
+        .filter((point) => this.vrMarkerVisuals.has(point.id))
+        .map((point) => ({
+          id: point.id,
+          center: { x: point.position[0], y: point.position[1], z: point.position[2] },
+          radius: 0.12 * Math.max(0.25, point.scale || 1),
+        })),
+      this.getCurrentQualityProfile().markerDistanceLimit,
+    );
+  }
+
+  private updateVrPresentation(): void {
+    const sources = [...this.vrInputSources.values()];
+    const hoveredMarkerIds = new Set<string>();
+    for (const source of sources) {
+      const visual = this.ensureVrControllerVisual(source);
+      if (!visual) continue;
+
+      const position = source.getPosition?.();
+      const rotation = source.getRotation?.();
+      visual.body.enabled = Boolean(position && rotation);
+      if (position && rotation) {
+        visual.body.setPosition(position);
+        visual.body.setRotation(rotation.x, rotation.y, rotation.z, rotation.w);
+      }
+
+      const origin = source.getOrigin?.();
+      const direction = source.getDirection?.();
+      if (!origin || !direction || direction.lengthSq() <= 1e-8) {
+        visual.rayRoot.enabled = false;
+        visual.reticle.enabled = false;
+        visual.hoveredMarkerId = null;
+        continue;
+      }
+
+      const hit = this.pickVrMarker(source);
+      const rayLength = hit?.distance ?? 10;
+      const endpoint = origin.clone().add(direction.clone().normalize().mulScalar(rayLength));
+      visual.rayRoot.enabled = true;
+      visual.rayRoot.setPosition(origin);
+      visual.rayRoot.lookAt(endpoint);
+      visual.rayBeam.setLocalPosition(0, 0, -rayLength * 0.5);
+      visual.rayBeam.setLocalScale(0.004, rayLength * 0.5, 0.004);
+      visual.reticle.enabled = Boolean(hit);
+      if (hit) {
+        visual.reticle.setPosition(endpoint);
+        visual.hoveredMarkerId = hit.id;
+        hoveredMarkerIds.add(hit.id);
+      } else {
+        visual.hoveredMarkerId = null;
+      }
+    }
+    this.updateVrMarkerHighlights(hoveredMarkerIds);
+  }
+
+  private updateVrMarkerHighlights(hoveredMarkerIds: Set<string>): void {
+    for (const [id, visual] of this.vrMarkerVisuals) {
+      const highlighted = hoveredMarkerIds.has(id) || this.selectedMarkerId === id;
+      const scale = 0.16 * visual.baseScale * (highlighted ? 1.35 : 1);
+      visual.entity.setLocalScale(scale, scale, scale);
+      if (visual.entity.render) {
+        visual.entity.render.material = highlighted && this.vrHoverMaterial ? this.vrHoverMaterial : visual.material;
+      }
+    }
+  }
+
+  private destroyVrPresentation(): void {
+    this.unbindVrInput();
+    this.destroyVrMarkers();
+    for (const id of [...this.vrControllerVisuals.keys()]) this.destroyVrControllerVisual(id);
+    this.vrInputSources.clear();
+    this.vrControllerMaterial?.destroy();
+    this.vrRayMaterial?.destroy();
+    this.vrReticleMaterial?.destroy();
+    this.vrHoverMaterial?.destroy();
+    this.vrControllerMaterial = null;
+    this.vrRayMaterial = null;
+    this.vrReticleMaterial = null;
+    this.vrHoverMaterial = null;
   }
 
   private async createApp(rendererMode: RendererBackend): Promise<void> {
@@ -943,6 +1282,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     (this.app.scene as typeof this.app.scene & { gsplatCentersEnabled?: boolean }).gsplatCentersEnabled = this.rendererMode !== 'webgpu';
     this.app.scene.on('gsplat:sorted', this.onGsplatSorted, this);
     this.app.systems.gsplat?.on('frame:ready', this.onGsplatFrameReady, this);
+    this.app.xr?.on('start', this.onXrSessionStarted, this);
+    this.app.xr?.on('update', this.onXrFrameUpdate, this);
     this.app.on('prerender', this.onPreRender, this);
     this.app.on('postrender', this.onPostRender, this);
     this.applyGsplatSettings();
@@ -2122,9 +2463,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateVrLocomotion(dt: number): void {
     if (!this.vrActive || !this.app?.xr?.active || !this.camera) return;
 
-    const inputSources = ((this.app.xr as unknown as {
-      input?: { inputSources?: RuntimeXrInputSource[] };
-    }).input?.inputSources) ?? [];
+    const inputSources = [...this.vrInputSources.values()];
     if (inputSources.length === 0) return;
 
     const speed = this.vrMoveSpeed * dt;
@@ -2781,7 +3120,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       highQualitySH: settings.highQualitySH,
       radialSorting: settings.radialSorting,
       renderOnDemand: settings.renderOnDemand,
-      markersVisible: this.options.showMarkers !== false && this.questPerfOverrides.markersVisible !== false && !this.vrActive,
+      markersVisible: this.options.showMarkers !== false && this.questPerfOverrides.markersVisible !== false && (!this.vrActive || this.vrMarkerVisuals.size > 0),
     };
     const stats: ViewerStats = {
       fps: Math.round(avgFps),

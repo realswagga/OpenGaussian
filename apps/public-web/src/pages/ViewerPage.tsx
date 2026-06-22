@@ -408,6 +408,9 @@ export default function ViewerPage() {
       xrQuality: 'balanced',
       webgpuPipeline: 'auto',
       showMarkers: true,
+      onMarkerSelect: (marker: MarkerPoint) => {
+        setSelectedMarker(marker);
+      },
       questPerfEnabled: questPerfAllowed && (showQuestPerf || questPerfCapturing),
       backgroundColor: VIEWER_BACKGROUND_COLORS[theme],
       onProgress: (progress: ViewerRuntimeProgress) => {

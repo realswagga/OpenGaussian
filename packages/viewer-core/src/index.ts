@@ -79,6 +79,12 @@ export {
   normalizeWheelDeltaY,
   readGamepadStick,
 } from './navigationControls.js';
+export {
+  horizontalYawDeltaDegrees,
+  intersectRaySphereDistance,
+  pickVrMarkerByRay,
+} from './vrInteraction.js';
+export type { VrMarkerHitTarget, VrMarkerRayHit, VrVector3 } from './vrInteraction.js';
 export type {
   DepthAwareDollyInput,
   DepthConsensus,
