@@ -2,12 +2,16 @@ import {
   AppBase,
   AppOptions,
   Asset,
+  ADDRESS_CLAMP_TO_EDGE,
   BinaryHandler,
+  BLEND_NORMAL,
   CameraComponentSystem,
   Color,
   ContainerHandler,
+  CULLFACE_NONE,
   createGraphicsDevice,
   Entity,
+  FILTER_LINEAR,
   GSplatComponentSystem,
   GSplatHandler,
   GSPLAT_DEBUG_NONE,
@@ -18,9 +22,12 @@ import {
   LightComponentSystem,
   Mouse,
   Picker,
+  PIXELFORMAT_RGBA8,
+  Quat,
   RenderComponentSystem,
   ScriptComponentSystem,
   StandardMaterial,
+  Texture,
   TextureHandler,
   TouchDevice,
   Vec3,
@@ -61,7 +68,7 @@ import {
   normalizeWheelDeltaY,
   readGamepadStick,
 } from './navigationControls.js';
-import { horizontalYawDeltaDegrees, pickVrMarkerByRay } from './vrInteraction.js';
+import { pickVrMarkerByRay } from './vrInteraction.js';
 
 type RendererBackend = 'webgl2' | 'webgpu';
 type PointerGestureMode = 'none' | 'orbit' | 'pan';
@@ -118,9 +125,18 @@ interface RuntimeXrInputLike {
 }
 
 interface VrMarkerVisual {
-  entity: Entity;
+  point: MarkerPoint;
+  root: Entity;
+  panel: Entity;
   material: StandardMaterial;
+  texture: Texture;
+  canvas: HTMLCanvasElement;
   baseScale: number;
+  expansion: number;
+  targetExpansion: number;
+  lastDrawnExpansion: number;
+  emphasized: boolean;
+  hitRadius: number;
 }
 
 interface VrControllerVisual {
@@ -216,6 +232,62 @@ const DEPTH_RAY_OFFSETS: readonly (readonly [number, number])[] = [
   [4, -4],
   [-4, -4],
 ];
+
+const VR_CAMERA_ALIGNMENT_FRAMES = 4;
+const VR_MARKER_TEXTURE_WIDTH = 512;
+const VR_MARKER_TEXTURE_HEIGHT = 256;
+
+function roundedCanvasRect(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  radius: number,
+): void {
+  const r = Math.max(0, Math.min(radius, width * 0.5, height * 0.5));
+  context.beginPath();
+  context.moveTo(x + r, y);
+  context.lineTo(x + width - r, y);
+  context.quadraticCurveTo(x + width, y, x + width, y + r);
+  context.lineTo(x + width, y + height - r);
+  context.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+  context.lineTo(x + r, y + height);
+  context.quadraticCurveTo(x, y + height, x, y + height - r);
+  context.lineTo(x, y + r);
+  context.quadraticCurveTo(x, y, x + r, y);
+  context.closePath();
+}
+
+function ellipsizeCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number): string {
+  if (context.measureText(value).width <= maxWidth) return value;
+  let result = value;
+  while (result.length > 1 && context.measureText(`${result}…`).width > maxWidth) {
+    result = result.slice(0, -1);
+  }
+  return `${result}…`;
+}
+
+function wrapCanvasText(context: CanvasRenderingContext2D, value: string, maxWidth: number, maxLines: number): string[] {
+  const words = value.trim().split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let current = '';
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (current && context.measureText(candidate).width > maxWidth) {
+      lines.push(current);
+      current = word;
+      if (lines.length === maxLines) break;
+    } else {
+      current = candidate;
+    }
+  }
+  if (lines.length < maxLines && current) lines.push(current);
+  if (lines.length === maxLines && words.length > 0) {
+    lines[maxLines - 1] = ellipsizeCanvasText(context, lines[maxLines - 1]!, maxWidth);
+  }
+  return lines;
+}
 
 class GsplatApp extends AppBase {
   constructor(canvas: HTMLCanvasElement, options: RuntimeAppOptions) {
@@ -411,9 +483,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private vrControllerMaterial: StandardMaterial | null = null;
   private vrRayMaterial: StandardMaterial | null = null;
   private vrReticleMaterial: StandardMaterial | null = null;
-  private vrHoverMaterial: StandardMaterial | null = null;
   private vrInputBound = false;
   private pendingVrCameraAlignment = false;
+  private vrCameraAlignmentFramesRemaining = 0;
   private statsIntervalId: ReturnType<typeof setInterval> | null = null;
   private lastSortTimeMs: number | undefined;
   private lodLoadingCount = 0;
@@ -863,7 +935,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
             } else {
               // Capture the session for gamepad polling and bind end event
               this.vrActive = true;
-              this.pendingVrCameraAlignment = true;
+              this.scheduleVrCameraAlignment();
               this.activeXrFramebufferScale = framebufferScaleFactor;
               this.activeXrFixedFoveation = fixedFoveation;
               this.setOverlayHiddenForVr(true);
@@ -913,6 +985,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.activeXrSession = null;
     this.vrActive = false;
     this.pendingVrCameraAlignment = false;
+    this.vrCameraAlignmentFramesRemaining = 0;
     this.vrScaleGesture = null;
     this.activeXrFramebufferScale = undefined;
     this.activeXrFixedFoveation = null;
@@ -928,7 +1001,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private onXrSessionStarted = (): void => {
     if (!this.vrActive) return;
-    this.pendingVrCameraAlignment = true;
+    this.scheduleVrCameraAlignment();
     this.createVrMarkers();
     this.bindVrInput();
     this.synchronizeVrInputSources();
@@ -940,6 +1013,8 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     const aligningCamera = this.pendingVrCameraAlignment;
     if (this.pendingVrCameraAlignment) {
       this.alignVrCameraToInitialPose();
+      this.vrCameraAlignmentFramesRemaining = Math.max(0, this.vrCameraAlignmentFramesRemaining - 1);
+      this.pendingVrCameraAlignment = this.vrCameraAlignmentFramesRemaining > 0;
     }
     this.bindVrInput();
     this.synchronizeVrInputSources();
@@ -999,9 +1074,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     if (!markerId) return;
     const marker = this.markers.find((point) => point.id === markerId);
     if (!marker) return;
-    this.selectedMarkerId = markerId;
+    this.selectedMarkerId = this.selectedMarkerId === markerId ? null : markerId;
     this.refreshMarkerExpansion();
-    this.updateVrMarkerHighlights(new Set([markerId]));
+    this.updateVrMarkerHighlights(new Set(this.selectedMarkerId ? [markerId] : []));
     this.options.onMarkerSelect?.(marker);
     this.requestRender();
   };
@@ -1014,25 +1089,39 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     }
   }
 
+  private scheduleVrCameraAlignment(): void {
+    this.pendingVrCameraAlignment = true;
+    this.vrCameraAlignmentFramesRemaining = VR_CAMERA_ALIGNMENT_FRAMES;
+  }
+
   private alignVrCameraToInitialPose(): void {
     if (!this.cameraRoot || !this.camera) return;
     const initialCamera = this.manifest.viewer.defaultCamera;
     if (!initialCamera?.position || !initialCamera.target) {
       this.pendingVrCameraAlignment = false;
+      this.vrCameraAlignmentFramesRemaining = 0;
       return;
     }
 
-    // XR writes the physical headset pose into the camera's local transform.
-    // Reset the origin, align horizontal heading to the saved target, then
-    // offset the root so the tracked headset lands exactly at saved position.
+    // XR writes the tracked headset pose into the camera's local transform.
+    // Align the complete saved view direction (including pitch), then offset
+    // the XR origin so the center eye lands exactly at the editor camera point.
+    // This is repeated for the first few XR frames because Quest reference-space
+    // poses can settle after the session-start callback.
     this.cameraRoot.setPosition(0, 0, 0);
-    this.cameraRoot.setEulerAngles(0, 0, 0);
+    this.cameraRoot.setRotation(Quat.IDENTITY);
+    this.cameraRoot.setLocalScale(1, 1, 1);
     const headLocalPosition = this.camera.getLocalPosition().clone();
-    const headForward = this.camera.forward.clone();
+    const headForward = this.camera.forward.clone().normalize();
     const desiredPosition = new Vec3(...initialCamera.position);
-    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition);
-    const yawDegrees = horizontalYawDeltaDegrees(headForward, desiredForward);
-    this.cameraRoot.setEulerAngles(0, yawDegrees, 0);
+    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition).normalize();
+    if (desiredForward.lengthSq() <= 1e-8 || headForward.lengthSq() <= 1e-8) {
+      this.pendingVrCameraAlignment = false;
+      this.vrCameraAlignmentFramesRemaining = 0;
+      return;
+    }
+    const alignmentRotation = new Quat().setFromDirections(headForward, desiredForward);
+    this.cameraRoot.setRotation(alignmentRotation);
     const rotatedHeadOffset = this.cameraRoot.getRotation().transformVector(headLocalPosition, new Vec3());
     this.cameraRoot.setPosition(desiredPosition.clone().sub(rotatedHeadOffset));
     this.pendingVrCameraAlignment = false;
@@ -1051,7 +1140,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private createVrPrimitive(
     name: string,
-    type: 'box' | 'capsule' | 'cone' | 'cylinder' | 'sphere' | 'torus',
+    type: 'box' | 'capsule' | 'cone' | 'cylinder' | 'plane' | 'sphere' | 'torus',
     material: StandardMaterial,
   ): Entity {
     const entity = new Entity(name);
@@ -1063,27 +1152,125 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private createVrMarkers(): void {
     this.destroyVrMarkers();
     if (!this.app || !this.vrActive || this.options.showMarkers === false || this.questPerfOverrides.markersVisible === false) return;
-    this.vrHoverMaterial ??= this.createVrMaterial(new Color(1, 0.82, 0.2));
 
     for (const point of this.markers) {
-      const color = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(point.color || '')
-        ? new Color().fromString(point.color!)
-        : new Color(0.18, 0.75, 1);
-      const material = this.createVrMaterial(color);
-      const entity = this.createVrPrimitive(`vr-marker-${point.id}`, 'sphere', material);
-      const baseScale = Math.max(0.25, point.scale || 1);
-      entity.setPosition(point.position[0], point.position[1], point.position[2]);
-      if (point.rotation) entity.setEulerAngles(point.rotation[0], point.rotation[1], point.rotation[2]);
-      entity.setLocalScale(0.16 * baseScale, 0.16 * baseScale, 0.16 * baseScale);
-      this.app.root.addChild(entity);
-      this.vrMarkerVisuals.set(point.id, { entity, material, baseScale });
+      const canvas = document.createElement('canvas');
+      canvas.width = VR_MARKER_TEXTURE_WIDTH;
+      canvas.height = VR_MARKER_TEXTURE_HEIGHT;
+      const texture = new Texture(this.app.graphicsDevice, {
+        name: `vr-marker-texture-${point.id}`,
+        width: canvas.width,
+        height: canvas.height,
+        format: PIXELFORMAT_RGBA8,
+        mipmaps: false,
+        minFilter: FILTER_LINEAR,
+        magFilter: FILTER_LINEAR,
+        addressU: ADDRESS_CLAMP_TO_EDGE,
+        addressV: ADDRESS_CLAMP_TO_EDGE,
+      });
+      const material = new StandardMaterial();
+      material.diffuse = Color.BLACK;
+      material.emissive = Color.WHITE;
+      material.emissiveMap = texture;
+      material.opacityMap = texture;
+      material.opacityMapChannel = 'a';
+      material.blendType = BLEND_NORMAL;
+      material.depthTest = false;
+      material.depthWrite = false;
+      material.cull = CULLFACE_NONE;
+      material.useLighting = false;
+      material.update();
+
+      const root = new Entity(`vr-marker-${point.id}`);
+      const panel = this.createVrPrimitive(`vr-marker-panel-${point.id}`, 'plane', material);
+      // PlayCanvas planes lie on X/Z. Rotate their normal onto the entity's
+      // forward axis so root.lookAt() gives us a true camera-facing billboard.
+      panel.setLocalEulerAngles(-90, 0, 0);
+      root.addChild(panel);
+      root.setPosition(point.position[0], point.position[1], point.position[2]);
+      this.app.root.addChild(root);
+
+      const visual: VrMarkerVisual = {
+        point,
+        root,
+        panel,
+        material,
+        texture,
+        canvas,
+        baseScale: clamp(point.scale || 1, 0.5, 3),
+        expansion: 0,
+        targetExpansion: 0,
+        lastDrawnExpansion: -1,
+        emphasized: false,
+        hitRadius: 0.32,
+      };
+      this.drawVrMarkerTexture(visual, true);
+      this.vrMarkerVisuals.set(point.id, visual);
     }
+  }
+
+  private drawVrMarkerTexture(visual: VrMarkerVisual, force = false): void {
+    const expansion = clamp(visual.expansion, 0, 1);
+    if (!force && Math.abs(expansion - visual.lastDrawnExpansion) < 0.025) return;
+    const context = visual.canvas.getContext('2d');
+    if (!context) return;
+
+    const eased = expansion * expansion * (3 - 2 * expansion);
+    const accent = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(visual.point.color || '') ? visual.point.color! : '#2fd5ff';
+    const cardWidth = 430 + 42 * eased;
+    const cardHeight = 82 + 142 * eased;
+    const cardX = (VR_MARKER_TEXTURE_WIDTH - cardWidth) * 0.5;
+    const cardY = (VR_MARKER_TEXTURE_HEIGHT - cardHeight) * 0.5;
+    const radius = 38 - 22 * eased;
+
+    context.clearRect(0, 0, visual.canvas.width, visual.canvas.height);
+    context.save();
+    context.shadowColor = visual.emphasized ? accent : 'rgba(0,0,0,0.68)';
+    context.shadowBlur = visual.emphasized ? 24 : 16;
+    context.shadowOffsetY = visual.emphasized ? 0 : 8;
+    roundedCanvasRect(context, cardX, cardY, cardWidth, cardHeight, radius);
+    context.fillStyle = visual.emphasized ? 'rgba(11, 17, 23, 0.98)' : 'rgba(10, 12, 16, 0.94)';
+    context.fill();
+    context.shadowColor = 'transparent';
+    context.lineWidth = visual.emphasized ? 4 : 2;
+    context.strokeStyle = visual.emphasized ? accent : 'rgba(255,255,255,0.38)';
+    context.stroke();
+
+    const titleY = cardY + 41;
+    context.beginPath();
+    context.arc(cardX + 34, titleY, visual.emphasized ? 11 : 9, 0, Math.PI * 2);
+    context.fillStyle = accent;
+    context.shadowColor = accent;
+    context.shadowBlur = visual.emphasized ? 22 : 12;
+    context.fill();
+    context.shadowColor = 'transparent';
+
+    context.fillStyle = '#f7f9fb';
+    context.font = '600 28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    context.textBaseline = 'middle';
+    const title = ellipsizeCanvasText(context, visual.point.title || 'Marker', cardWidth - 92);
+    context.fillText(title, cardX + 58, titleY, cardWidth - 92);
+
+    if (visual.point.body && eased > 0.01) {
+      context.globalAlpha = eased;
+      context.fillStyle = 'rgba(222, 230, 238, 0.9)';
+      context.font = '400 21px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      context.textBaseline = 'top';
+      const lines = wrapCanvasText(context, visual.point.body, cardWidth - 64, 4);
+      lines.forEach((line, index) => {
+        context.fillText(line, cardX + 32, cardY + 78 + index * 27, cardWidth - 64);
+      });
+    }
+    context.restore();
+    visual.texture.setSource(visual.canvas);
+    visual.lastDrawnExpansion = expansion;
   }
 
   private destroyVrMarkers(): void {
     for (const visual of this.vrMarkerVisuals.values()) {
-      visual.entity.destroy();
+      visual.root.destroy();
       visual.material.destroy();
+      visual.texture.destroy();
     }
     this.vrMarkerVisuals.clear();
   }
@@ -1141,13 +1328,14 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
         .map((point) => ({
           id: point.id,
           center: { x: point.position[0], y: point.position[1], z: point.position[2] },
-          radius: 0.12 * Math.max(0.25, point.scale || 1),
+          radius: this.vrMarkerVisuals.get(point.id)?.hitRadius ?? 0.32,
         })),
       this.getCurrentQualityProfile().markerDistanceLimit,
     );
   }
 
   private updateVrPresentation(): void {
+    this.updateVrMarkerBillboards();
     const sources = [...this.vrInputSources.values()];
     const hoveredMarkerIds = new Set<string>();
     for (const source of sources) {
@@ -1194,11 +1382,30 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private updateVrMarkerHighlights(hoveredMarkerIds: Set<string>): void {
     for (const [id, visual] of this.vrMarkerVisuals) {
       const highlighted = hoveredMarkerIds.has(id) || this.selectedMarkerId === id;
-      const scale = 0.16 * visual.baseScale * (highlighted ? 1.35 : 1);
-      visual.entity.setLocalScale(scale, scale, scale);
-      if (visual.entity.render) {
-        visual.entity.render.material = highlighted && this.vrHoverMaterial ? this.vrHoverMaterial : visual.material;
+      visual.targetExpansion = highlighted ? 1 : 0;
+      if (visual.emphasized !== highlighted) {
+        visual.emphasized = highlighted;
+        visual.lastDrawnExpansion = -1;
       }
+    }
+  }
+
+  private updateVrMarkerBillboards(): void {
+    if (!this.camera) return;
+    const headPosition = this.camera.getPosition().clone();
+    for (const visual of this.vrMarkerVisuals.values()) {
+      const delta = visual.targetExpansion - visual.expansion;
+      visual.expansion = Math.abs(delta) < 0.01 ? visual.targetExpansion : visual.expansion + delta * 0.22;
+      this.drawVrMarkerTexture(visual);
+
+      const markerPosition = visual.root.getPosition().clone();
+      const distance = Math.max(0.01, markerPosition.distance(headPosition));
+      visual.root.lookAt(headPosition);
+      const angularWidth = clamp(distance * 0.16, 0.38, 1.35) * visual.baseScale;
+      const panelWidth = angularWidth * (1 + visual.expansion * 0.18);
+      const panelHeight = panelWidth * 0.5;
+      visual.panel.setLocalScale(panelWidth, 1, panelHeight);
+      visual.hitRadius = Math.max(0.24, Math.hypot(panelWidth * 0.5, panelHeight * 0.5));
     }
   }
 
@@ -1210,11 +1417,9 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
     this.vrControllerMaterial?.destroy();
     this.vrRayMaterial?.destroy();
     this.vrReticleMaterial?.destroy();
-    this.vrHoverMaterial?.destroy();
     this.vrControllerMaterial = null;
     this.vrRayMaterial = null;
     this.vrReticleMaterial = null;
-    this.vrHoverMaterial = null;
   }
 
   private async createApp(rendererMode: RendererBackend): Promise<void> {

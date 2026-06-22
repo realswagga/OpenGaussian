@@ -198,7 +198,7 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     };
     runtime.manifest.viewer.defaultCamera = {
       position: [4, 2, 3],
-      target: [5, 2, 3],
+      target: [5, 3, 3],
     };
     const root = new GraphNode('camera-root');
     const head = new GraphNode('camera');
@@ -214,7 +214,8 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     expect(position.x).toBeCloseTo(4);
     expect(position.y).toBeCloseTo(2);
     expect(position.z).toBeCloseTo(3);
-    expect(head.forward.x).toBeCloseTo(1);
+    expect(head.forward.x).toBeCloseTo(Math.SQRT1_2);
+    expect(head.forward.y).toBeCloseTo(Math.SQRT1_2);
     expect(head.forward.z).toBeCloseTo(0);
     expect(runtime.pendingVrCameraAlignment).toBe(false);
   });
@@ -242,6 +243,29 @@ describe('PlayCanvasGsplatRuntime quality application', () => {
     runtime.unbindVrInput();
     expect(unbound).toEqual(['add', 'remove', 'selectstart']);
     expect(runtime.vrInputBound).toBe(false);
+  });
+
+  it('expands a VR marker while a controller ray is aiming at it', () => {
+    const markerVisual = {
+      targetExpansion: 0,
+      emphasized: false,
+      lastDrawnExpansion: 0,
+    };
+    const runtime = createRuntime() as unknown as {
+      selectedMarkerId: string | null;
+      vrMarkerVisuals: Map<string, typeof markerVisual>;
+      updateVrMarkerHighlights: (hoveredMarkerIds: Set<string>) => void;
+    };
+    runtime.selectedMarkerId = null;
+    runtime.vrMarkerVisuals = new Map([['marker-1', markerVisual]]);
+
+    runtime.updateVrMarkerHighlights(new Set(['marker-1']));
+    expect(markerVisual.targetExpansion).toBe(1);
+    expect(markerVisual.emphasized).toBe(true);
+
+    runtime.updateVrMarkerHighlights(new Set());
+    expect(markerVisual.targetExpansion).toBe(0);
+    expect(markerVisual.emphasized).toBe(false);
   });
 
   it('retains Quest input sources until XR explicitly removes them', () => {
