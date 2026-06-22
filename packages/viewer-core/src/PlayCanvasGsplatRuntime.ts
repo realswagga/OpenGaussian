@@ -1097,43 +1097,21 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
   private alignVrCameraToInitialPose(): void {
     if (!this.cameraRoot || !this.camera) return;
     const initialCamera = this.manifest.viewer.defaultCamera;
-    if (!initialCamera?.position || !initialCamera.target) {
+    if (!initialCamera?.position) {
       this.pendingVrCameraAlignment = false;
       this.vrCameraAlignmentFramesRemaining = 0;
       return;
     }
 
-    // XR writes the tracked headset pose into the camera's local transform.
-    // Align the complete saved view direction (including pitch), then offset
-    // the XR origin so the center eye lands exactly at the editor camera point.
-    // This is repeated for the first few XR frames because Quest reference-space
+    // Place the XR origin so the head lands at the saved camera position
+    // with identity rotation — the headset provides all orientation.
+    // Repeated for the first few XR frames because Quest reference-space
     // poses can settle after the session-start callback.
-    this.cameraRoot.setPosition(0, 0, 0);
     this.cameraRoot.setRotation(Quat.IDENTITY);
     this.cameraRoot.setLocalScale(1, 1, 1);
     const headLocalPosition = this.camera.getLocalPosition().clone();
-    const headForward = this.camera.forward.clone().normalize();
     const desiredPosition = new Vec3(...initialCamera.position);
-    // Flatten pitch so VR uses only the saved position + horizontal rotation;
-    // the headset provides vertical orientation through tracking.
-    const desiredForward = new Vec3(...initialCamera.target).sub(desiredPosition);
-    desiredForward.y = 0;
-    const desiredForwardLen = desiredForward.length();
-    if (desiredForwardLen <= 1e-8) {
-      // Camera target is directly above/below the position — use a default horizontal forward.
-      desiredForward.set(0, 0, -1);
-    } else {
-      desiredForward.mulScalar(1 / desiredForwardLen);
-    }
-    if (headForward.lengthSq() <= 1e-8) {
-      this.pendingVrCameraAlignment = false;
-      this.vrCameraAlignmentFramesRemaining = 0;
-      return;
-    }
-    const alignmentRotation = new Quat().setFromDirections(headForward, desiredForward);
-    this.cameraRoot.setRotation(alignmentRotation);
-    const rotatedHeadOffset = this.cameraRoot.getRotation().transformVector(headLocalPosition, new Vec3());
-    this.cameraRoot.setPosition(desiredPosition.clone().sub(rotatedHeadOffset));
+    this.cameraRoot.setPosition(desiredPosition.clone().sub(headLocalPosition));
     this.pendingVrCameraAlignment = false;
     this.requestRender();
   }
@@ -1196,7 +1174,7 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
       // PlayCanvas planes lie on X/Z with a +Y front normal.  rotate so the
       // normal becomes -Z (the entity's forward axis) so root.lookAt() yields
       // a true camera-facing billboard.
-      panel.setLocalEulerAngles(90, 0, 0);
+      panel.setLocalEulerAngles(-90, 0, 0);
       root.addChild(panel);
       root.setPosition(point.position[0], point.position[1], point.position[2]);
       this.app.root.addChild(root);
@@ -1403,15 +1381,18 @@ export class PlayCanvasGsplatRuntime implements ViewerRuntime {
 
   private updateVrMarkerBillboards(): void {
     if (!this.camera) return;
-    const headPosition = this.camera.getPosition().clone();
+    // getPosition() returns local coordinates — in VR the cameraRoot moves
+    // for locomotion, so derive the world position from the world matrix.
+    const headWorld = new Vec3();
+    this.camera.getWorldTransform().getTranslation(headWorld);
     for (const visual of this.vrMarkerVisuals.values()) {
       const delta = visual.targetExpansion - visual.expansion;
       visual.expansion = Math.abs(delta) < 0.01 ? visual.targetExpansion : visual.expansion + delta * 0.22;
       this.drawVrMarkerTexture(visual);
 
       const markerPosition = visual.root.getPosition().clone();
-      const distance = Math.max(0.01, markerPosition.distance(headPosition));
-      visual.root.lookAt(headPosition);
+      const distance = Math.max(0.01, markerPosition.distance(headWorld));
+      visual.root.lookAt(headWorld);
       const angularWidth = clamp(distance * 0.16, 0.38, 1.35) * visual.baseScale;
       const panelWidth = angularWidth * (1 + visual.expansion * 0.18);
       const panelHeight = panelWidth * 0.5;
